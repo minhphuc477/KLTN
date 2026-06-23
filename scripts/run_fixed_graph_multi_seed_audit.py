@@ -644,6 +644,12 @@ def parse_args() -> argparse.Namespace:
         help="Seeds to audit",
     )
     parser.add_argument(
+        "--lcm-checkpoint",
+        type=Path,
+        default=None,
+        help="Optional explicit fast-sampler/LCM checkpoint to use for fast-sampling variants.",
+    )
+    parser.add_argument(
         "--reuse-existing-seed-summaries",
         action="store_true",
         help=(
@@ -873,6 +879,7 @@ def run_from_args(args: argparse.Namespace) -> Dict[str, str]:
                     out_dir=seed_dir,
                     seed=int(seed),
                     generation_overrides=variant_generation_overrides,
+                    fast_sampling_checkpoint=args.lcm_checkpoint,
                     **export_kwargs,
                 )
             variant_name = str(variant["variant_name"])

@@ -9,6 +9,8 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 import networkx as nx
 import numpy as np
 
+from src.core.definitions import DOOR_POSITIONS
+
 RoomPos = Tuple[int, int]
 Offset = Tuple[int, int]
 
@@ -371,23 +373,27 @@ def find_boundary_doors(
     door_positions = []
 
     if to_r == from_r - 1:
+        north = DOOR_POSITIONS["N"]
         boundary_r = from_off_r
-        for c in range(from_off_c + 3, from_off_c + 8):
+        for c in range(from_off_c + int(north["col_start"]), from_off_c + int(north["col_end"])):
             if 0 <= c < grid.shape[1]:
                 door_positions.append((boundary_r, c))
     elif to_r == from_r + 1:
+        south = DOOR_POSITIONS["S"]
         boundary_r = from_off_r + room_height - 1
-        for c in range(from_off_c + 3, from_off_c + 8):
+        for c in range(from_off_c + int(south["col_start"]), from_off_c + int(south["col_end"])):
             if 0 <= c < grid.shape[1]:
                 door_positions.append((boundary_r, c))
     elif to_c == from_c - 1:
+        west = DOOR_POSITIONS["W"]
         boundary_c = from_off_c
-        for r in range(from_off_r + 5, from_off_r + 11):
+        for r in range(from_off_r + int(west["row_start"]), from_off_r + int(west["row_end"])):
             if 0 <= r < grid.shape[0]:
                 door_positions.append((r, boundary_c))
     elif to_c == from_c + 1:
+        east = DOOR_POSITIONS["E"]
         boundary_c = from_off_c + room_width - 1
-        for r in range(from_off_r + 5, from_off_r + 11):
+        for r in range(from_off_r + int(east["row_start"]), from_off_r + int(east["row_end"])):
             if 0 <= r < grid.shape[0]:
                 door_positions.append((r, boundary_c))
 

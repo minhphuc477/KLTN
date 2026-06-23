@@ -166,30 +166,34 @@ class VGLCParser:
 
     def _detect_doors(self, char_grid: np.ndarray) -> Dict[str, bool]:
         doors = {}
+        open_door_glyphs = {"D", "d", "F", "f", "."}
+
+        def _has_open_door(cells: Any) -> bool:
+            return any(str(cell) in open_door_glyphs for cell in np.asarray(cells).ravel())
 
         north = DOOR_POSITIONS["N"]
         n_row = int(north["row"])
         n_c0, n_c1 = int(north["col_start"]), int(north["col_end"])
         north_cells = char_grid[n_row, n_c0:n_c1] if char_grid.shape[0] > n_row else []
-        doors["N"] = "D" in north_cells
+        doors["N"] = _has_open_door(north_cells)
 
         south = DOOR_POSITIONS["S"]
         s_row = int(south["row"])
         s_c0, s_c1 = int(south["col_start"]), int(south["col_end"])
         south_cells = char_grid[s_row, s_c0:s_c1] if char_grid.shape[0] > s_row else []
-        doors["S"] = "D" in south_cells
+        doors["S"] = _has_open_door(south_cells)
 
         west = DOOR_POSITIONS["W"]
         w_col = int(west["col"])
         w_r0, w_r1 = int(west["row_start"]), int(west["row_end"])
         west_cells = char_grid[w_r0:w_r1, w_col] if char_grid.shape[1] > w_col else []
-        doors["W"] = "D" in west_cells
+        doors["W"] = _has_open_door(west_cells)
 
         east = DOOR_POSITIONS["E"]
         e_col = int(east["col"])
         e_r0, e_r1 = int(east["row_start"]), int(east["row_end"])
         east_cells = char_grid[e_r0:e_r1, e_col] if char_grid.shape[1] > e_col else []
-        doors["E"] = "D" in east_cells
+        doors["E"] = _has_open_door(east_cells)
 
         return doors
 

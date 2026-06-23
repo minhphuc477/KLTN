@@ -67,7 +67,7 @@ def run_single_seed_benchmark(
     logger.info(f"Running {config_name} with seed {seed}...")
     
     cmd = [
-        ".venv-1/Scripts/python.exe",
+        sys.executable,
         "scripts/run_matched_budget_topology_benchmark.py",
         "--output", str(output_dir),
         "--methods", "MAP_ELITES",

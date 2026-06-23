@@ -550,8 +550,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\scripts\\paired_seed_ablation.py": {
-    "mtime": 1779683057.4892175,
-    "ast_hash": "8b8916cdb1aa2183eb859f1fdfc87dfb",
+    "mtime": 1782194075.6014855,
+    "ast_hash": "72ac1373c3ca981fa7564d408e7602a0",
     "semantic_hash": ""
   },
   "F:\\KLTN\\scripts\\parallel_worker.py": {
@@ -755,8 +755,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\scripts\\statistical_validation_and_analysis.py": {
-    "mtime": 1779686008.8033926,
-    "ast_hash": "810165801610dcf49de8f5663521d78b",
+    "mtime": 1782193984.9748428,
+    "ast_hash": "47e9d4626ef201ad2e81f9896db348ce",
     "semantic_hash": ""
   },
   "F:\\KLTN\\scripts\\sweep_block_i_realism_tuning.py": {
@@ -915,8 +915,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\core\\discrete_masked_model.py": {
-    "mtime": 1782184761.6590514,
-    "ast_hash": "314129da14e64d74b9c86173ad46002c",
+    "mtime": 1782193910.5128262,
+    "ast_hash": "e60d6ed60c21c2d58e2c7a32c4927a8a",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\core\\gaussian_vae.py": {
@@ -3600,8 +3600,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_statistical_validation_analysis.py": {
-    "mtime": 1779686020.075223,
-    "ast_hash": "5c20f5d026627a38a32b4213c9b79c52",
+    "mtime": 1782194090.4412572,
+    "ast_hash": "ab7fd46620a0ece2c95cbd63720aa99f",
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_strict_original_mode.py": {
@@ -4075,8 +4075,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\docs\\architecture_audit_research_notes.md": {
-    "mtime": 1782185391.3979075,
-    "ast_hash": "ca81b4a7f6d9f73b1fb5c95c7c792d50",
+    "mtime": 1782194056.6311502,
+    "ast_hash": "9cab9cad0cc6c601c45ae5e8adb56efa",
     "semantic_hash": ""
   },
   "F:\\KLTN\\docs\\archive\\2026-q1\\ARCHITECTURE_RESEARCH_JUDGMENT_2026_02_24.md": {
@@ -5445,8 +5445,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_round5_audit_fixes.py": {
-    "mtime": 1782185330.6323411,
-    "ast_hash": "40239a443664fc0dae164b95189e01fb",
+    "mtime": 1782194012.235588,
+    "ast_hash": "8d4c38ea0b291ea9702f8718bd875113",
     "semantic_hash": ""
   }
 }

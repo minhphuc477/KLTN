@@ -57,6 +57,8 @@ def _base_fast_sampler_args(args: argparse.Namespace, seed: int, output_dir: Pat
     ]
     if args.mission_graph_json:
         command.extend(["--mission-graph", str(args.mission_graph_json)])
+    if args.lcm_checkpoint:
+        command.extend(["--lcm-checkpoint", str(args.lcm_checkpoint)])
     return command
 
 

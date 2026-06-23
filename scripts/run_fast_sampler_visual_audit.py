@@ -1668,6 +1668,7 @@ def build_pipeline(
     *,
     generation_overrides: Optional[Mapping[str, Any]] = None,
     device_override: Optional[str] = None,
+    fast_sampling_checkpoint: Optional[Path | str] = None,
 ) -> NeuralSymbolicDungeonPipeline:
     resolved = _load_resolved_config(run_dir)
     resolved = _apply_generation_overrides(resolved, generation_overrides)
@@ -1675,14 +1676,19 @@ def build_pipeline(
     pipeline_kwargs = pipeline_kwargs_from_resolved_config(resolved)
     vqvae_checkpoint = _resolve_vqvae_checkpoint(run_dir)
 
-    fast_reselected = run_dir / "checkpoints" / "fast_sampler" / "fast_sampler_best_reselected.pth"
-    fast_best = run_dir / "checkpoints" / "fast_sampler" / "fast_sampler_best.pth"
-    fast_final = run_dir / "checkpoints" / "fast_sampler" / "fast_sampler_final.pth"
-    fast_checkpoint = (
-        fast_reselected
-        if fast_reselected.exists()
-        else (fast_best if fast_best.exists() else fast_final)
-    )
+    if fast_sampling_checkpoint is not None:
+        fast_checkpoint = Path(fast_sampling_checkpoint)
+        if not fast_checkpoint.exists():
+            raise FileNotFoundError(f"Explicit fast-sampler checkpoint does not exist: {fast_checkpoint}")
+    else:
+        fast_reselected = run_dir / "checkpoints" / "fast_sampler" / "fast_sampler_best_reselected.pth"
+        fast_best = run_dir / "checkpoints" / "fast_sampler" / "fast_sampler_best.pth"
+        fast_final = run_dir / "checkpoints" / "fast_sampler" / "fast_sampler_final.pth"
+        fast_checkpoint = (
+            fast_reselected
+            if fast_reselected.exists()
+            else (fast_best if fast_best.exists() else fast_final)
+        )
 
     pipeline_kwargs.update(
         {
@@ -1791,6 +1797,7 @@ def export_variant(
     use_fast_sampling: bool,
     seed: int,
     generation_overrides: Optional[Mapping[str, Any]] = None,
+    fast_sampling_checkpoint: Optional[Path | str] = None,
 ) -> Dict[str, Any]:
     variant_dir = out_dir / variant_name
     variant_dir.mkdir(parents=True, exist_ok=True)
@@ -1810,9 +1817,22 @@ def export_variant(
         payload.update({str(k): v for k, v in extra.items()})
         status_path.write_text(json.dumps(_json_sanitize(payload), indent=2), encoding="utf-8")
 
+    def _build_pipeline_with_checkpoint(
+        current_run_dir: Path,
+        *,
+        generation_overrides: Optional[Mapping[str, Any]] = None,
+        device_override: Optional[str] = None,
+    ) -> NeuralSymbolicDungeonPipeline:
+        return build_pipeline(
+            current_run_dir,
+            generation_overrides=generation_overrides,
+            device_override=device_override,
+            fast_sampling_checkpoint=fast_sampling_checkpoint,
+        )
+
     execution_kwargs = _resolve_export_execution_kwargs()
     pipeline, result, generation_execution = _generate_dungeon_with_oom_backoff(
-        pipeline_builder=build_pipeline,
+        pipeline_builder=_build_pipeline_with_checkpoint,
         run_dir=run_dir,
         mission_graph=mission_graph,
         generation_overrides=generation_overrides,
@@ -2026,6 +2046,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-rooms", type=int, default=8)
     parser.add_argument("--topology-population", type=int, default=50)
     parser.add_argument("--topology-generations", type=int, default=100)
+    parser.add_argument(
+        "--lcm-checkpoint",
+        type=Path,
+        default=None,
+        help="Optional explicit fast-sampler/LCM checkpoint for fast-sampling variants.",
+    )
     add_generation_override_args(parser)
     return parser.parse_args()
 
@@ -2033,7 +2059,11 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     generation_overrides = generation_overrides_from_namespace(args)
-    pipeline = build_pipeline(args.run_dir, generation_overrides=generation_overrides)
+    pipeline = build_pipeline(
+        args.run_dir,
+        generation_overrides=generation_overrides,
+        fast_sampling_checkpoint=args.lcm_checkpoint,
+    )
 
     prepared = pipeline.prepare_dungeon_generation(
         mission_graph=None,
@@ -2096,6 +2126,7 @@ def main() -> None:
                 use_fast_sampling=bool(variant["use_fast_sampling"]),
                 seed=int(args.seed),
                 generation_overrides=generation_overrides,
+                fast_sampling_checkpoint=args.lcm_checkpoint,
             )
         )
 

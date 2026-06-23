@@ -363,8 +363,23 @@ class DiscreteMaskedRoomModel(nn.Module):
         _wall_class_mask = torch.zeros(self.num_classes, dtype=torch.bool)
         if _wall_id < self.num_classes:
             _wall_class_mask[_wall_id] = True
+        _semantic_door_masks = {}
+        for _name, _tile in {
+            "open": int(TileID.DOOR_OPEN),
+            "key": int(TileID.DOOR_LOCKED),
+            "bomb": int(TileID.DOOR_BOMB),
+            "puzzle": int(TileID.DOOR_PUZZLE),
+            "boss": int(TileID.DOOR_BOSS),
+            "soft": int(TileID.DOOR_SOFT),
+        }.items():
+            _mask = torch.zeros(self.num_classes, dtype=torch.bool)
+            if _tile < self.num_classes:
+                _mask[_tile] = True
+            _semantic_door_masks[_name] = _mask
         self.register_buffer('_door_class_mask', _door_class_mask)
         self.register_buffer('_wall_class_mask', _wall_class_mask)
+        for _name, _mask in _semantic_door_masks.items():
+            self.register_buffer(f'_door_{_name}_class_mask', _mask)
 
         # Topology channel indices for the four cardinal door channels.
         self._topo_door_ch = {
@@ -372,6 +387,32 @@ class DiscreteMaskedRoomModel(nn.Module):
             'S': int(ROOM_TOPOLOGY_CHANNELS.get('door_s', -1)),
             'W': int(ROOM_TOPOLOGY_CHANNELS.get('door_w', -1)),
             'E': int(ROOM_TOPOLOGY_CHANNELS.get('door_e', -1)),
+        }
+        self._topo_gate_family_ch = {
+            family: {
+                direction: int(ROOM_TOPOLOGY_CHANNELS.get(f'{family}_{direction.lower()}', -1))
+                for direction in ('N', 'S', 'E', 'W')
+            }
+            for family in (
+                'gate_key',
+                'gate_boss',
+                'gate_bomb',
+                'gate_soft',
+                'gate_switch',
+                'gate_item',
+                'gate_secret',
+                'gate_hazard',
+            )
+        }
+        self._topo_gate_family_to_door_mask = {
+            'gate_key': '_door_key_class_mask',
+            'gate_boss': '_door_boss_class_mask',
+            'gate_bomb': '_door_bomb_class_mask',
+            'gate_soft': '_door_soft_class_mask',
+            'gate_switch': '_door_puzzle_class_mask',
+            'gate_item': '_door_puzzle_class_mask',
+            'gate_secret': '_door_soft_class_mask',
+            'gate_hazard': '_door_soft_class_mask',
         }
 
     def attention_complexity_metrics(self, context_tokens: int) -> Dict[str, float]:
@@ -512,6 +553,33 @@ class DiscreteMaskedRoomModel(nn.Module):
                     ),
                 ),
             )
+            for family, direction_channels in self._topo_gate_family_ch.items():
+                semantic_ch_idx = int(direction_channels.get(direction, -1))
+                if semantic_ch_idx < 0 or semantic_ch_idx >= int(topo.shape[1]):
+                    continue
+                semantic_act = topo[:, semantic_ch_idx, row_sl, col_sl] >= door_threshold
+                if not bool(semantic_act.any()):
+                    continue
+                target_mask_name = self._topo_gate_family_to_door_mask.get(family)
+                target_mask = getattr(self, str(target_mask_name), None)
+                if not isinstance(target_mask, torch.Tensor):
+                    continue
+                target_mask = target_mask.to(device=logits.device, dtype=torch.bool).view(1, -1, 1, 1)
+                semantic_present_4d = semantic_act.unsqueeze(1)
+                semantic_delta = torch.where(
+                    semantic_present_4d,
+                    torch.where(
+                        target_mask,
+                        torch.full_like(bias_slice, bias_strength),
+                        torch.where(
+                            door_mask.view(1, -1, 1, 1),
+                            torch.full_like(bias_slice, -0.5 * bias_strength),
+                            torch.zeros_like(bias_slice),
+                        ),
+                    ),
+                    torch.zeros_like(bias_slice),
+                )
+                delta = delta + semantic_delta
             bias[:, :, row_sl, col_sl] = bias_slice + delta
 
         return logits + bias
@@ -525,18 +593,13 @@ class DiscreteMaskedRoomModel(nn.Module):
     ) -> Tensor:
         if not bool(fixed_mask.any()):
             return logits
-        constrained = logits.clone()
-        constrained = constrained.masked_fill(fixed_mask.unsqueeze(1), -1e4)
-        constrained.scatter_(
+        forced = torch.full_like(logits, -1e4)
+        forced.scatter_(
             1,
             fixed_tokens.unsqueeze(1).clamp(min=0, max=self.num_classes - 1),
-            torch.where(
-                fixed_mask.unsqueeze(1),
-                torch.full_like(fixed_tokens.unsqueeze(1), 1e4, dtype=constrained.dtype),
-                torch.zeros_like(fixed_tokens.unsqueeze(1), dtype=constrained.dtype),
-            ),
+            torch.full_like(fixed_tokens.unsqueeze(1), 1e4, dtype=logits.dtype),
         )
-        return constrained
+        return torch.where(fixed_mask.unsqueeze(1), forced, logits)
 
     def _sample_predictions(
         self,

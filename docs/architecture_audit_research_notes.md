@@ -564,11 +564,14 @@ Confirmed implementation fixes:
   The undirected `graphormer_learned` mode remains the checkpoint-compatible
   learned Graphormer-style baseline.
 
-Open ablation gap, not a solved claim:
+Closed implementation gap, still requiring ablation evidence:
 
-- MaskGIT topology helpers still do not make edge attributes affect logits in
-  the default model. This is acceptable only if described as a room-topology
-  map conditioning baseline; edge-aware MaskGIT should be a named ablation.
+- MaskGIT topology helpers now route directional gate-family channels
+  (`gate_key_*`, `gate_boss_*`, `gate_bomb_*`, and related families) into the
+  edge-aware boundary logit bias. This makes edge semantics change the
+  preferred door class without changing checkpoint parameter shapes. It remains
+  an ablation hypothesis until compared against the room-topology-only
+  baseline.
 
 Focused verification:
 
@@ -643,6 +646,10 @@ Confirmed fixes:
 - `scripts/generate_round5_scientific_gap_manifest.py` creates a reproducible
   manifest for SPADE-vs-additive topology conditioning, fixed-graph fast
   sampler latency-quality, and weighted-vs-flat WFC prior experiments.
+- `scripts/statistical_validation_and_analysis.py` now emits coverage curves
+  from measured per-seed histories when present and marks older aggregate-only
+  artifacts as `curve_source="aggregate_final_only"` instead of treating final
+  coverage as a measured convergence curve.
 
 Research boundary:
 
@@ -658,3 +665,47 @@ Focused verification:
 - `python scripts/generate_round5_scientific_gap_manifest.py --seeds 1 --epochs 1 --output-dir temp_round5_manifest_check`
   wrote JSON/CSV successfully; the temporary output was removed after the
   smoke test.
+- `python -m pytest tests/test_round5_audit_fixes.py tests/test_statistical_validation_analysis.py -q`
+  passed with 20 tests after the MaskGIT edge-semantics and coverage-curve
+  fixes.
+
+Round 5 re-verification closure:
+
+- Output node capping now also protects generic `ITEM` providers when a legacy
+  edge encodes only `edge_type="ITEM_GATE"` without an explicit
+  `item_required` field.
+- Connectivity repair no longer inserts an ordinary raw `PATH` edge into a
+  protected goal/boss-only component when no boss anchor exists. Such emergency
+  links are marked as progression-gate repairs and use a boss-locked edge type
+  so downstream validation cannot mistake them for a free bypass.
+- MAP-Elites leniency now keeps ordinary key locks, `MULTI_LOCK` edges, boss
+  locks, small keys, and Big Keys in separate economies. Surplus Big Keys no
+  longer hide missing small keys.
+- The legacy `src.ml.logic_net.SoftBellmanFord` path now uses a grid-area
+  sentinel, matching the already repaired inventory-aware pathfinder family.
+- MaskGIT fixed-token logit forcing now builds a forced-logit tensor only for
+  fixed cells. Editable cells, including valid class-0/VOID logits, are left
+  unchanged.
+- Zelda parser/adapter consistency is restored: core parser open-boundary door
+  detection accepts `D`, `d`, `F`, `f`, and `.`, and the adapter applies the
+  same doored-room interior void-fill rule as the core parser.
+- `src/zelda_data/stitching/graph_placement.py` now derives boundary door
+  coordinates from canonical `DOOR_POSITIONS`, rather than returning hardcoded
+  5- or 6-tile ranges.
+- `scripts/run_ablation_study.py` now has explicit
+  `DIFFUSION_TOPO_ADDITIVE` and `DIFFUSION_TOPO_SPADE` extended ablation rows,
+  plan metadata, runtime fallback-config wiring, and a cache key that prevents
+  reusing one loaded diffusion variant for another topology-conditioning mode.
+- The Round-5 scientific-gap manifest now forwards `--lcm-checkpoint` into the
+  fixed-graph fast-sampler benchmark. `run_fixed_graph_multi_seed_audit.py` and
+  `run_fast_sampler_visual_audit.py` accept and pass the explicit checkpoint to
+  pipeline construction, raising `FileNotFoundError` when the user supplies a
+  missing path.
+
+Focused verification after re-verification:
+
+- `python -m pytest tests/test_round5_audit_fixes.py -q` passed with 22 tests.
+- `python -m pytest tests/test_round5_audit_fixes.py tests/test_protocol_reporting.py::test_ablation_extended_plan_documents_logic_guidance_timing_sweep tests/test_protocol_reporting.py::test_round5_manifest_passes_lcm_checkpoint_to_fast_sampler_command -q`
+  passed with 24 tests.
+- `python -m compileall src/generation/evolutionary_director/generator.py src/evaluation/map_elites.py src/ml/logic_net.py src/core/discrete_masked_model.py src/zelda_data/stitching/graph_placement.py src/zelda_data/parsers/core_parsers.py src/data_processing/data_adapter.py scripts/run_ablation_study.py scripts/generate_round5_scientific_gap_manifest.py scripts/run_fixed_graph_multi_seed_audit.py scripts/run_fast_sampler_visual_audit.py tests/test_round5_audit_fixes.py tests/test_protocol_reporting.py`
+  completed successfully.

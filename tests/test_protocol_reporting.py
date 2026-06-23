@@ -64,6 +64,34 @@ def test_ablation_extended_plan_documents_logic_guidance_timing_sweep():
 
     assert experiments["LOGIC_ACTIVE_0.25"]["component"] == "LogicNet guidance timing"
     assert experiments["LOGIC_ACTIVE_0.25"]["config"]["logic_guidance_active_fraction"] == pytest.approx(0.25)
+    assert experiments["DIFFUSION_TOPO_ADDITIVE"]["component"] == "diffusion topology conditioning"
+    assert experiments["DIFFUSION_TOPO_ADDITIVE"]["config"]["diffusion_topology_conditioning_mode"] == "additive"
+    assert experiments["DIFFUSION_TOPO_SPADE"]["config"]["diffusion_topology_conditioning_mode"] == "spade"
+
+
+def test_round5_manifest_passes_lcm_checkpoint_to_fast_sampler_command(tmp_path):
+    from scripts.generate_round5_scientific_gap_manifest import build_manifest, parse_args
+
+    checkpoint = tmp_path / "custom_lcm.pth"
+    args = parse_args(
+        [
+            "--output-dir",
+            str(tmp_path / "out"),
+            "--run-dir",
+            str(tmp_path / "run"),
+            "--seeds",
+            "7",
+            "--lcm-checkpoint",
+            str(checkpoint),
+        ]
+    )
+
+    manifest = build_manifest(args)
+    fast_runs = [run for run in manifest["runs"] if run["family"] == "fast_sampler_latency_quality"]
+
+    assert fast_runs
+    assert "--lcm-checkpoint" in fast_runs[0]["command"]
+    assert str(checkpoint) in fast_runs[0]["command"]
 
 
 def test_ablation_json_sanitize_outputs_strict_json_values():

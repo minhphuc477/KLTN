@@ -67,6 +67,8 @@ class PerSeedResult:
     evaluations_used: int
     elite_fitnesses: List[float] = None  # Individual elite fitness values
     elite_features: List[Tuple[float, ...]] = None  # Individual elite feature vectors
+    coverage_history: List[float] = None  # Per-generation or per-budget coverage checkpoints
+    evaluations_history: List[int] = None  # Evaluation counts aligned with coverage_history
     
     def to_dict(self):
         d = asdict(self)
@@ -75,6 +77,33 @@ class PerSeedResult:
         if self.elite_features:
             d['elite_features'] = self.elite_features
         return d
+
+
+def _numeric_history(payload: Dict[str, Any], *keys: str) -> List[float]:
+    """Extract a finite numeric list from the first matching payload key."""
+    for key in keys:
+        raw = payload.get(key)
+        if raw is None:
+            continue
+        if not isinstance(raw, list):
+            raw = [raw]
+        out: List[float] = []
+        for value in raw:
+            try:
+                numeric = float(value)
+            except (TypeError, ValueError):
+                continue
+            if np.isfinite(numeric):
+                out.append(float(numeric))
+        if out:
+            return out
+    return []
+
+
+def _int_history(payload: Dict[str, Any], *keys: str) -> List[int]:
+    """Extract a nonnegative integer history from the first matching payload key."""
+    values = _numeric_history(payload, *keys)
+    return [max(0, int(round(value))) for value in values]
 
 
 def run_single_map_elites_config(
@@ -153,6 +182,18 @@ def _run_or_load_single_seed(
                 feature_diversity=float(summary.get("map_elites_feature_diversity", 0.0)),
                 generation_time_sec=float(summary.get("generation_time_sec", 0.0)),
                 evaluations_used=int(summary.get("evaluations_used", eval_budget)),
+                coverage_history=_numeric_history(
+                    summary,
+                    "qd_coverage_history",
+                    "coverage_history",
+                    "map_elites_coverage_history",
+                ),
+                evaluations_history=_int_history(
+                    summary,
+                    "evaluations_history",
+                    "evaluation_history",
+                    "budget_history",
+                ),
             )
         except (KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError) as exc:
             logger.warning("Failed to load cached seed report %s: %s", cached_path, exc)
@@ -258,10 +299,22 @@ def load_existing_benchmark_results(
                     qd_score=summary.get("map_elites_qd_score", 0),
                     num_elites=int(summary.get("map_elites_num_elites", 0)),
                     mean_elite_fitness=summary.get("map_elites_mean_fitness", 0),
-                    feature_diversity=summary.get("map_elites_feature_diversity", 0),
-                    generation_time_sec=summary["generation_time_sec"],
-                    evaluations_used=summary["evaluations_used"],
-                )
+                feature_diversity=summary.get("map_elites_feature_diversity", 0),
+                generation_time_sec=summary["generation_time_sec"],
+                evaluations_used=summary["evaluations_used"],
+                coverage_history=_numeric_history(
+                    summary,
+                    "qd_coverage_history",
+                    "coverage_history",
+                    "map_elites_coverage_history",
+                ),
+                evaluations_history=_int_history(
+                    summary,
+                    "evaluations_history",
+                    "evaluation_history",
+                    "budget_history",
+                ),
+            )
     
     # Load n96 run
     n96_report = benchmark_dir / "map_elites_large_20260509" / "matched_budget_report.json"
@@ -278,10 +331,22 @@ def load_existing_benchmark_results(
                     qd_score=summary.get("map_elites_qd_score", 0),
                     num_elites=int(summary.get("map_elites_num_elites", 0)),
                     mean_elite_fitness=summary.get("map_elites_mean_fitness", 0),
-                    feature_diversity=summary.get("map_elites_feature_diversity", 0),
-                    generation_time_sec=summary["generation_time_sec"],
-                    evaluations_used=summary["evaluations_used"],
-                )
+                feature_diversity=summary.get("map_elites_feature_diversity", 0),
+                generation_time_sec=summary["generation_time_sec"],
+                evaluations_used=summary["evaluations_used"],
+                coverage_history=_numeric_history(
+                    summary,
+                    "qd_coverage_history",
+                    "coverage_history",
+                    "map_elites_coverage_history",
+                ),
+                evaluations_history=_int_history(
+                    summary,
+                    "evaluations_history",
+                    "evaluation_history",
+                    "budget_history",
+                ),
+            )
     
     logger.info(f"Loaded {len(results_n64)} seeds from n64 baseline")
     logger.info(f"Loaded {len(results_n96)} seeds from n96 run")
@@ -426,27 +491,106 @@ def compute_coverage_curves(
 ) -> Dict[str, Any]:
     """
     Generate coverage vs. evaluation budget curves.
-    
-    For now, this is a stub since we need to track coverage during optimization.
-    Returns aggregate curves based on available data.
+
+    Prefer measured per-seed coverage histories when available. Older result
+    artifacts only store final coverage and final evaluation count; for those
+    runs we expose a conservative two-point fallback curve and mark
+    ``curve_source='aggregate_final_only'`` so reports do not mistake it for a
+    measured convergence trajectory.
     """
-    
-    curves = {}
-    
+
+    curves: Dict[str, Any] = {}
+
+    def _finite_float(value: Any, default: float = 0.0) -> float:
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            return float(default)
+        return numeric if np.isfinite(numeric) else float(default)
+
+    def _finite_int(value: Any, default: int = 0) -> int:
+        try:
+            numeric = int(round(float(value)))
+        except (TypeError, ValueError):
+            return int(default)
+        return max(0, numeric)
+
     for config_name, results in results_by_config.items():
-        coverages = [r.coverage for r in results.values() if r]
-        evals_used = [r.evaluations_used for r in results.values() if r]
-        
-        if coverages and evals_used:
-            curves[config_name] = {
-                "mean_coverage": float(np.mean(coverages)),
-                "std_coverage": float(np.std(coverages)),
-                "min_coverage": float(np.min(coverages)),
-                "max_coverage": float(np.max(coverages)),
-                "mean_evals_used": float(np.mean(evals_used)),
-                "coverage_per_eval": float(np.mean(coverages)) / np.mean(evals_used) if np.mean(evals_used) > 0 else 0,
-            }
-    
+        valid_results = [r for r in results.values() if r]
+        coverages = [_finite_float(r.coverage) for r in valid_results]
+        evals_used = [_finite_int(r.evaluations_used) for r in valid_results]
+        if not coverages or not evals_used:
+            continue
+
+        measured_runs: List[Tuple[np.ndarray, np.ndarray]] = []
+        for result in valid_results:
+            raw_cov = list(result.coverage_history or [])
+            if not raw_cov:
+                continue
+            cov = np.asarray([_finite_float(v) for v in raw_cov], dtype=float)
+            raw_eval = list(result.evaluations_history or [])
+            if len(raw_eval) == len(raw_cov):
+                eval_axis = np.asarray([_finite_int(v) for v in raw_eval], dtype=float)
+            else:
+                final_eval = max(1, _finite_int(result.evaluations_used, len(raw_cov)))
+                eval_axis = np.linspace(1.0, float(final_eval), num=len(raw_cov), dtype=float)
+            if cov.size == 0 or eval_axis.size != cov.size:
+                continue
+            order = np.argsort(eval_axis)
+            measured_runs.append((eval_axis[order], cov[order]))
+
+        if measured_runs:
+            max_eval = int(max(float(axis[-1]) for axis, _cov in measured_runs))
+            budget_points = sorted(
+                {
+                    0,
+                    *(
+                        int(round(x))
+                        for axis, _cov in measured_runs
+                        for x in axis.tolist()
+                        if np.isfinite(float(x))
+                    ),
+                    max_eval,
+                }
+            )
+            mean_curve: List[float] = []
+            std_curve: List[float] = []
+            for budget in budget_points:
+                values = []
+                for axis, cov in measured_runs:
+                    if budget <= 0:
+                        values.append(0.0)
+                    else:
+                        idx = int(np.searchsorted(axis, float(budget), side="right") - 1)
+                        if idx < 0:
+                            values.append(0.0)
+                        else:
+                            values.append(float(cov[min(idx, cov.size - 1)]))
+                mean_curve.append(float(np.mean(values)))
+                std_curve.append(float(np.std(values, ddof=1)) if len(values) > 1 else 0.0)
+            curve_source = "measured_history"
+        else:
+            mean_evals = int(round(float(np.mean(evals_used))))
+            budget_points = [0, max(1, mean_evals)]
+            mean_curve = [0.0, float(np.mean(coverages))]
+            std_curve = [0.0, float(np.std(coverages, ddof=1)) if len(coverages) > 1 else 0.0]
+            curve_source = "aggregate_final_only"
+
+        mean_evals_used = float(np.mean(evals_used))
+        curves[config_name] = {
+            "curve_source": curve_source,
+            "num_runs": int(len(valid_results)),
+            "budget_points": [int(v) for v in budget_points],
+            "mean_coverage_curve": [float(v) for v in mean_curve],
+            "std_coverage_curve": [float(v) for v in std_curve],
+            "mean_coverage": float(np.mean(coverages)),
+            "std_coverage": float(np.std(coverages, ddof=1)) if len(coverages) > 1 else 0.0,
+            "min_coverage": float(np.min(coverages)),
+            "max_coverage": float(np.max(coverages)),
+            "mean_evals_used": mean_evals_used,
+            "coverage_per_eval": float(np.mean(coverages)) / mean_evals_used if mean_evals_used > 0 else 0.0,
+        }
+
     return curves
 
 

@@ -641,11 +641,20 @@ class EvolutionaryTopologyGenerator:
             "SWITCH",
             "MULTI_LOCK",
         }
-        required_items = {
-            str(data.get("item_required"))
-            for _src, _dst, data in repaired.edges(data=True)
-            if data.get("item_required") not in {None, ""}
-        }
+        def _edge_type_name(data: Dict[str, Any]) -> str:
+            edge_type = data.get("edge_type", data.get("label", ""))
+            return str(getattr(edge_type, "name", edge_type) or "").strip().upper()
+
+        required_items = set()
+        for _src, _dst, data in repaired.edges(data=True):
+            item_required = data.get("item_required")
+            if item_required not in {None, ""}:
+                required_items.add(str(item_required))
+            elif _edge_type_name(data) == "ITEM_GATE":
+                # Some imported/legacy graph edges encode the gate only by
+                # edge_type. Keep a generic traversal item provider rather than
+                # pruning every ITEM node under the final hard cap.
+                required_items.add("ITEM")
         required_item_provider_nodes = {
             node_id
             for node_id, attrs in repaired.nodes(data=True)
@@ -1149,6 +1158,18 @@ class EvolutionaryTopologyGenerator:
             preferred = [node_id for node_id in component if node_id not in protected_goal_nodes]
             return preferred if preferred else list(component)
 
+        def _source_candidates(main_component_nodes: set[Any], other_component_nodes: set[Any]) -> List[Any]:
+            other_types = {_node_type(node_id) for node_id in other_component_nodes}
+            if other_types and other_types.issubset(protected_goal_types):
+                progression_anchors = [
+                    node_id
+                    for node_id in main_component_nodes
+                    if _node_type(node_id) in {"BOSS", "BOSS_DOOR"}
+                ]
+                if progression_anchors:
+                    return progression_anchors
+            return _candidate_nodes(main_component_nodes)
+
         def _distance(node_a: Any, node_b: Any) -> float:
             ax, ay, az = _position(node_a)
             bx, by, bz = _position(node_b)
@@ -1168,7 +1189,7 @@ class EvolutionaryTopologyGenerator:
             other_component = components.pop(0)
             best_pair: Optional[Tuple[Any, Any]] = None
             best_distance: Optional[float] = None
-            for left in _candidate_nodes(main_component):
+            for left in _source_candidates(main_component, other_component):
                 for right in _candidate_nodes(other_component):
                     dist = _distance(left, right)
                     if best_distance is None or dist < best_distance:
@@ -1184,13 +1205,20 @@ class EvolutionaryTopologyGenerator:
                 continue
 
             source, target = best_pair
+            source_type = _node_type(source)
+            target_type = _node_type(target)
+            protected_progression_link = target_type in protected_goal_types and source_type not in {"BOSS", "BOSS_DOOR"}
+            repair_edge_type = EdgeType.BOSS_LOCKED if protected_progression_link else EdgeType.PATH
             edge_attrs = {
-                "label": EdgeType.PATH.name.lower(),
-                "edge_type": EdgeType.PATH.name,
+                "label": repair_edge_type.name.lower(),
+                "edge_type": repair_edge_type.name,
                 "key_required": None,
                 "item_required": None,
                 "switch_id": None,
-                "metadata": {"connectivity_repair": True},
+                "metadata": {
+                    "connectivity_repair": True,
+                    "progression_gate_repair": bool(protected_progression_link),
+                },
                 "requires_key_count": 0,
                 "token_count": 0,
                 "token_id": None,

@@ -174,7 +174,7 @@ class SoftBellmanFord(nn.Module):
             raise ValueError(f"Expected {B} start coordinates, got {len(start_coords)}.")
 
         probability_map = probability_map.clamp(0.0, 1.0)
-        inf = float(self.wall_penalty * max(1, H + W + self.num_iterations))
+        inf = float(self.wall_penalty * max(1, H * W + 2, H + W + self.num_iterations + 2))
         source = self._start_mask(B, H, W, start_coords, device=probability_map.device, dtype=probability_map.dtype)
         distances = torch.full_like(probability_map, inf)
         distances = distances * (1.0 - source)

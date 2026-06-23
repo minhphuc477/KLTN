@@ -133,6 +133,8 @@ class ExperimentConfig:
     room_generator_mode: str = "latent_diffusion"  # latent_diffusion | discrete_masked
     use_reference_room_maps: Optional[bool] = None
     wfc_prior_mode: str = "weighted"  # weighted | flat
+    diffusion_topology_conditioning_mode: Optional[str] = None  # additive | spade | None
+    diffusion_checkpoint_override: Optional[str] = None
 
 
 PRIMARY_ABLATION_METRICS: Tuple[str, ...] = (
@@ -700,6 +702,14 @@ def _design_notes_for_config(cfg: ExperimentConfig) -> Dict[str, Any]:
                 "isolates": "fraction of reverse diffusion timesteps receiving logic guidance",
                 "interpretation": "Tests whether late-timestep guidance stabilizes samples better than full-trajectory guidance.",
             }
+        elif cfg.name.startswith("DIFFUSION_TOPO_"):
+            notes = {
+                "tier": "block_iii",
+                "component": "diffusion topology conditioning",
+                "comparison": "DIFFUSION_TOPO_ADDITIVE and DIFFUSION_TOPO_SPADE",
+                "isolates": "conditioning injection style while keeping topology, sampler, and repair stack matched",
+                "interpretation": "Tests whether SPADE-style affine topology modulation carries more useful structural signal than additive maps.",
+            }
         else:
             notes = {
                 "tier": "unspecified",
@@ -872,12 +882,25 @@ class AblationStudy:
 
     def _get_pipeline(self, cfg: ExperimentConfig) -> NeuralSymbolicDungeonPipeline:
         room_generator_mode = str(getattr(cfg, "room_generator_mode", "latent_diffusion")).strip().lower()
-        if room_generator_mode not in self._pipeline_cache:
+        diffusion_checkpoint = str(
+            getattr(cfg, "diffusion_checkpoint_override", None) or self.diffusion_checkpoint
+        )
+        topology_conditioning_mode = getattr(cfg, "diffusion_topology_conditioning_mode", None)
+        if topology_conditioning_mode is not None:
+            topology_conditioning_mode = str(topology_conditioning_mode).strip().lower()
+        cache_key = "|".join(
+            [
+                room_generator_mode,
+                str(diffusion_checkpoint),
+                str(topology_conditioning_mode or ""),
+            ]
+        )
+        if cache_key not in self._pipeline_cache:
             pipeline_kwargs = dict(self.pipeline_runtime_kwargs)
             pipeline_kwargs.update(
                 {
                     "vqvae_checkpoint": self.vqvae_checkpoint,
-                    "diffusion_checkpoint": self.diffusion_checkpoint,
+                    "diffusion_checkpoint": diffusion_checkpoint,
                     "masked_room_checkpoint": self.masked_room_checkpoint,
                     "logic_net_checkpoint": self.logic_net_checkpoint,
                     "condition_encoder_checkpoint": self.condition_encoder_checkpoint,
@@ -888,10 +911,14 @@ class AblationStudy:
                     "enable_logging": False,
                 }
             )
-            self._pipeline_cache[room_generator_mode] = NeuralSymbolicDungeonPipeline(
+            if topology_conditioning_mode:
+                fallback_config = dict(pipeline_kwargs.get("diffusion_fallback_config") or {})
+                fallback_config["topology_conditioning_mode"] = topology_conditioning_mode
+                pipeline_kwargs["diffusion_fallback_config"] = fallback_config
+            self._pipeline_cache[cache_key] = NeuralSymbolicDungeonPipeline(
                 **pipeline_kwargs,
             )
-        return self._pipeline_cache[room_generator_mode]
+        return self._pipeline_cache[cache_key]
 
     def _build_non_evolution_graph(self, seed: int) -> nx.Graph:
         grammar = MissionGrammar(seed=seed)
@@ -1618,6 +1645,14 @@ def build_experiment_set(include_extended: bool = True) -> List[ExperimentConfig
         ExperimentConfig(name="LOGIC_ACTIVE_0.25", logic_guidance_active_fraction=0.25),
         ExperimentConfig(name="LOGIC_ACTIVE_0.50", logic_guidance_active_fraction=0.50),
         ExperimentConfig(name="LOGIC_ACTIVE_0.75", logic_guidance_active_fraction=0.75),
+        ExperimentConfig(
+            name="DIFFUSION_TOPO_ADDITIVE",
+            diffusion_topology_conditioning_mode="additive",
+        ),
+        ExperimentConfig(
+            name="DIFFUSION_TOPO_SPADE",
+            diffusion_topology_conditioning_mode="spade",
+        ),
     ]
     return core + extended
 

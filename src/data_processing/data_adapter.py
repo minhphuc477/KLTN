@@ -353,12 +353,10 @@ class VGLCParser:
                     ])
                 
                 if self.is_room_slot(slot_grid):
-                    # Convert to semantic grid
-                    semantic_grid = self._chars_to_semantic(slot_grid)
-                    
                     # Extract room features
                     contents = self._extract_contents(slot_grid)
                     doors = self._detect_doors(slot_grid)
+                    semantic_grid = self._chars_to_semantic(slot_grid, doors=doors)
                     
                     room = RoomTensor(
                         room_id=row_slot * 100 + col_slot,
@@ -373,7 +371,7 @@ class VGLCParser:
         logger.info(f"Extracted {len(rooms)} rooms from {filepath}")
         return rooms
     
-    def _chars_to_semantic(self, char_grid: np.ndarray) -> np.ndarray:
+    def _chars_to_semantic(self, char_grid: np.ndarray, doors: Optional[Dict[str, str]] = None) -> np.ndarray:
         """Convert character grid to semantic IDs."""
         semantic = np.zeros(char_grid.shape, dtype=np.int32)
         
@@ -387,6 +385,13 @@ class VGLCParser:
                 if tile_id is None:
                     tile_id = CHAR_TO_SEMANTIC.get(str(char).lower())
                 semantic[i, j] = int(tile_id if tile_id is not None else TileID.VOID)
+
+        has_any_door = bool(doors) and any(bool(value) for value in doors.values())
+        interior = semantic[2:14, 2:9]
+        if has_any_door and interior.size > 0:
+            void_count = int(np.sum(interior == int(TileID.VOID)))
+            if void_count > interior.size * 0.5:
+                interior[interior == int(TileID.VOID)] = int(TileID.FLOOR)
         
         return semantic
     

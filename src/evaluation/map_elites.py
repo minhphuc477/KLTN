@@ -234,39 +234,52 @@ class LinearityLeniencyExtractor(FeatureExtractor):
     
     def _compute_leniency(self, graph: nx.DiGraph) -> float:
         """Compute leniency score."""
-        # Count keys and locked doors
-        num_keys = 0
-        num_locks = 0
+        # Keep small-key and boss-key economies separate. Pooling them makes a
+        # dungeon with spare boss keys look lenient even when ordinary locked
+        # doors are unsatisfied.
+        small_keys = 0
+        boss_keys = 0
+        small_locks = 0
+        boss_locks = 0
         
         for _node, data in graph.nodes(data=True):
             tokens = _node_tokens(data)
             node_type = str(data.get('type', '') or '').strip().upper()
             has_boss_key = 'boss_key' in tokens or 'big_key' in tokens or node_type in {'BIG_KEY', 'BOSS_KEY'}
-            # Count small keys separately from boss keys so boss-door layouts are
-            # not incorrectly scored as fully lenient without a Big Key.
-            if not has_boss_key and ('k' in tokens or 'key' in tokens):
-                num_keys += 1
+            if not has_boss_key and ('k' in tokens or 'key' in tokens or node_type == 'KEY'):
+                small_keys += 1
             if has_boss_key:
-                num_keys += 1
+                boss_keys += 1
         
         for _, _, data in graph.edges(data=True):
             constraints = set(_edge_tokens(data))
             edge_type = str(data.get('edge_type', '') or '').strip().upper()
             has_boss_lock = 'boss_locked' in constraints or edge_type == 'BOSS_LOCKED'
-            has_small_lock = ('key_locked' in constraints or 'locked' in constraints or edge_type == 'LOCKED') and not has_boss_lock
+            key_count = int(max(1, data.get('requires_key_count') or data.get('token_count') or 1))
+            has_small_lock = (
+                'key_locked' in constraints
+                or 'locked' in constraints
+                or edge_type in {'LOCKED', 'MULTI_LOCK'}
+            ) and not has_boss_lock
             if has_small_lock:
-                num_locks += 1
+                small_locks += key_count
             if has_boss_lock:
-                num_locks += 1
+                boss_locks += 1
         
         # Leniency: keys available vs keys needed
-        if num_locks == 0:
+        total_locks = small_locks + boss_locks
+        if total_locks == 0:
             return 1.0  # No locks = maximum leniency
         
         # Extra keys ratio: capped at 2.0 so the archive can distinguish tight
         # economies (leniency about 1.0) from abundant ones (leniency > 1.0).
         # Values above 2.0 offer diminishing behavioral relevance.
-        leniency = num_keys / num_locks
+        weighted_leniency = 0.0
+        if small_locks > 0:
+            weighted_leniency += min(2.0, float(small_keys) / float(small_locks)) * float(small_locks)
+        if boss_locks > 0:
+            weighted_leniency += min(2.0, float(boss_keys) / float(boss_locks)) * float(boss_locks)
+        leniency = weighted_leniency / float(total_locks)
         return min(2.0, leniency)
 
 
