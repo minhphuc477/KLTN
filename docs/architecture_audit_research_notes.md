@@ -709,3 +709,97 @@ Focused verification after re-verification:
   passed with 24 tests.
 - `python -m compileall src/generation/evolutionary_director/generator.py src/evaluation/map_elites.py src/ml/logic_net.py src/core/discrete_masked_model.py src/zelda_data/stitching/graph_placement.py src/zelda_data/parsers/core_parsers.py src/data_processing/data_adapter.py scripts/run_ablation_study.py scripts/generate_round5_scientific_gap_manifest.py scripts/run_fixed_graph_multi_seed_audit.py scripts/run_fast_sampler_visual_audit.py tests/test_round5_audit_fixes.py tests/test_protocol_reporting.py`
   completed successfully.
+
+## 2026-06-23 Round 7 Verification Fixes
+
+Confirmed fixes:
+
+- Goal-gauntlet repair now selects reachable approach nodes before preserving
+  stale boss-door predecessors. Non-selected boss-door predecessor edges are
+  removed during normalization, and orphan cleanup is prevented from deleting
+  the protected `GOAL -> BOSS -> BOSS_DOOR` terminal chain.
+- `src/data_processing/data_adapter.py` no longer keeps a standalone VGLC
+  parser implementation. Its adapter-facing `VGLCParser` delegates canonical
+  room parsing, door detection, and semantic conversion to
+  `src.zelda_data.parsers.core_parsers.VGLCParser`, then converts the parsed
+  records into `RoomTensor`.
+- `scripts/generate_round5_scientific_gap_manifest.py` now includes Round-7
+  pending protocols for generated-branch A*/P-CBS pre/post repair reporting,
+  100-room and 500-room designer-controllability stress rows, matched-budget
+  P-CBS component ablations, paired-seed statistical significance, and
+  target-response semantic checks.
+
+Scientific boundary:
+
+- The new manifest rows are executable protocols, not results. They remain
+  `planned` unless the manifest is run with `--execute`, and publication claims
+  still require archived outputs with checkpoint hashes, fixed seeds,
+  pre-repair and post-repair metrics, confidence intervals, and hardware logs.
+
+## 2026-06-23 Repository Cleanup Pass
+
+Confirmed fixes:
+
+- Advanced-rule diversity coverage now counts the advanced feature families
+  actually produced by `advanced_rules.py`, including switches, stairs,
+  secrets, mini-bosses, tutorial chains, hidden edges, switch gates, and
+  stair edges. The previous test only counted an older narrow subset and could
+  fail even when the generated graph contained multiple advanced mechanics.
+- Broken mojibake strings in the advanced-rule integration test output were
+  replaced with ASCII output.
+- Tracked temporary smoke outputs under `temp_round5_*` were removed. These
+  were generated manifest/plan artifacts and are already covered by `.gitignore`
+  temp-directory rules.
+
+Verification:
+
+- `python -m pytest tests/test_advanced_rules_integration.py -q` passed with
+  22 tests and 8 skips.
+- `python -m pytest tests/test_round5_audit_fixes.py tests/test_hmolqd/test_data_adapter.py::TestVGLCParser -q`
+  passed with 32 tests.
+
+## 2026-06-23 Major Non-GUI Audit Pass
+
+Confirmed fixes:
+
+- The centralized Zelda VGLC parser now detects door glyphs on both the outer
+  canonical room boundary and the inner wall shell used by several VGLC files.
+  This restored graph-room matching for Dungeon 2 Quest 1, Dungeon 4 Quest 1,
+  and Dungeon 9 Quest 2, where every room previously parsed with zero doors.
+- P-CBS avoids repeated posterior rebuilds for stable explored tiles, caches
+  static-grid field-of-view sets during a solve, and skips redundant Bayesian
+  updates for already-stable visible observations. These changes preserve the
+  cognitive model but remove hot-path work that dominated long route searches.
+- LogicNet projects latent-scale tile logits smaller than a canonical room back
+  to `ROOM_HEIGHT x ROOM_WIDTH`, while preserving native resolution for
+  already-canonical and larger dynamic maps. `_resolve_room_logic_targets`
+  again accepts omitted `spatial_hw` for compatibility.
+- Diffusion trainer optimizer groups retain decay/no-decay behavior while
+  exposing stable module-level group names (`diffusion`, `condition_encoder`,
+  `logic_net`) plus a `decay_policy` field for logging.
+- The D* Lite key-door regression fixture now actually requires crossing the
+  locked door; the previous open-floor layout allowed a valid route around the
+  key and was a false alarm.
+
+Research boundary:
+
+- Current literature supports reporting quality, diversity, and controllability
+  rather than relying on a single validity score, and treats symbolic repair as
+  a distinct hybrid-PCG component that must be ablated separately. The code now
+  has stronger non-GUI implementation coverage, but SOTA or human-calibration
+  claims still require executing the planned external-baseline, pre/post-repair,
+  paired-seed, and P-CBS persona protocols with archived artifacts.
+
+Verification:
+
+- `python -m pytest tests/test_data_integrity.py -q --maxfail=5` passed with
+  110 tests.
+- `python -m pytest tests/test_cognitive_bounded_search.py tests/test_validator_block_push_regressions.py -q --maxfail=5`
+  passed with 60 tests.
+- `python -m pytest tests/test_hmolqd/test_logic_net.py tests/test_logicnet_optimizer.py tests/test_round5_audit_fixes.py tests/test_topology_generation_fixes.py tests/test_train_diffusion_conditioning_shapes.py::test_diffusion_adamw_groups_exclude_bias_and_norm_from_weight_decay -q --maxfail=5`
+  passed with 67 tests.
+- `python -m pytest tests -q -k "not gui" --maxfail=5` passed with
+  1271 tests, 8 skips, and 280 deselections.
+- Full `python -m pytest tests -q --maxfail=5` still times out in
+  `tests/test_gui_demo_validated_level_artifact.py::test_gui_real_full_pipeline_pdrop035_demo_solves_live_with_pcbs_balanced`;
+  this is a live GUI artifact test and remains outside the non-GUI audit scope.

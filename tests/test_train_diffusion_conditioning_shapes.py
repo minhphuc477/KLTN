@@ -1471,6 +1471,74 @@ def test_dpo_step_nonfinite_gradients_do_not_create_ghost_step():
     assert warmup_calls == 0
 
 
+def test_dpo_step_accumulates_gradients_before_optimizer_step():
+    trainer = DiffusionTrainer.__new__(DiffusionTrainer)
+    trainer.device = torch.device("cpu")
+    trainer.config = SimpleNamespace(
+        diffusion_training_objective="diffusion",
+        grad_clip_norm=0.0,
+        logic_net_trainable=False,
+        gradient_accumulation_steps=2,
+    )
+    trainer.diffusion = _DPOTrainingModule()
+    trainer.condition_encoder = _TinyModule()
+    trainer.logic_net = _DummyLogicNet()
+    trainer.ema_diffusion = _DummyEvalModel()
+    trainer.optimizer = torch.optim.SGD(
+        list(trainer.diffusion.parameters()) + list(trainer.condition_encoder.parameters()),
+        lr=1e-3,
+    )
+    trainer._accelerator = None
+    trainer.distributed_context = None
+    trainer.global_step = 0
+    trainer._accumulation_micro_steps = 0
+    trainer._nonfinite_warning_counts = {}
+    trainer.encode_to_latent = lambda maps: torch.zeros((maps.shape[0], 4, 2, 2), dtype=torch.float32)
+    trainer.get_dummy_conditioning = lambda batch_size: torch.zeros((batch_size, 1, 8), dtype=torch.float32)
+    trainer._gradients_are_finite = lambda: True
+
+    step_calls = 0
+    ema_calls = 0
+    warmup_calls = 0
+
+    def _step():
+        nonlocal step_calls
+        step_calls += 1
+
+    def _update_ema():
+        nonlocal ema_calls
+        ema_calls += 1
+
+    def _warmup(*, completed_steps=None):
+        _ = completed_steps
+        nonlocal warmup_calls
+        warmup_calls += 1
+
+    trainer.optimizer.step = _step
+    trainer._update_ema = _update_ema
+    trainer._apply_lr_warmup = _warmup
+
+    first = DiffusionTrainer.dpo_step(
+        trainer,
+        torch.zeros((2, 1, ROOM_HEIGHT, ROOM_WIDTH), dtype=torch.float32),
+        torch.ones((2, 1, ROOM_HEIGHT, ROOM_WIDTH), dtype=torch.float32),
+    )
+    second = DiffusionTrainer.dpo_step(
+        trainer,
+        torch.zeros((2, 1, ROOM_HEIGHT, ROOM_WIDTH), dtype=torch.float32),
+        torch.ones((2, 1, ROOM_HEIGHT, ROOM_WIDTH), dtype=torch.float32),
+    )
+
+    assert first["optimizer_step"] == pytest.approx(0.0)
+    assert first["gradient_accumulation_micro_steps"] == pytest.approx(1.0)
+    assert second["optimizer_step"] == pytest.approx(1.0)
+    assert trainer.global_step == 1
+    assert step_calls == 1
+    assert ema_calls == 1
+    assert warmup_calls == 1
+    assert trainer._accumulation_micro_steps == 0
+
+
 def test_dpo_step_nonfinite_clipped_grad_norm_does_not_create_ghost_step(monkeypatch):
     trainer = DiffusionTrainer.__new__(DiffusionTrainer)
     trainer.device = torch.device("cpu")

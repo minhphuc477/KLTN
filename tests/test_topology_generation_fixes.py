@@ -168,6 +168,7 @@ class TestDStarLitePredecessorFix:
         
         # Key and locked door
         grid[1, 5] = SEMANTIC_PALETTE['KEY_SMALL']
+        grid[5, 1:9] = SEMANTIC_PALETTE['WALL']
         grid[5, 5] = SEMANTIC_PALETTE['DOOR_LOCKED']
         
         return grid

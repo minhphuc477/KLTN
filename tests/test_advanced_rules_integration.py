@@ -1,4 +1,4 @@
-"""
+﻿"""
 Integration Tests for Advanced Production Rules
 ================================================
 
@@ -229,6 +229,33 @@ class TestAdvancedRulesIntegration:
             for edge in repaired.edges
         )
         assert not any(edge.source == edge.target for edge in repaired.edges)
+
+    def test_repair_goal_gauntlet_does_not_delete_goal_when_preserved_approach_is_orphaned(self):
+        """Orphan cleanup must not delete the repaired terminal chain."""
+        grammar = MissionGrammar(seed=42)
+        graph = MissionGraph()
+        graph.add_node(MissionNode(id=0, node_type=NodeType.START, position=(0, 0, 0), difficulty=0.0))
+        graph.add_node(MissionNode(id=1, node_type=NodeType.ENEMY, position=(1, 0, 0), difficulty=0.3))
+        graph.add_node(MissionNode(id=2, node_type=NodeType.EMPTY, position=(9, 9, 0), difficulty=0.4))
+        graph.add_node(MissionNode(id=3, node_type=NodeType.BOSS_DOOR, position=(2, 0, 0), difficulty=0.9, key_id=3))
+        graph.add_node(MissionNode(id=4, node_type=NodeType.BOSS, position=(3, 0, 0), difficulty=0.95))
+        graph.add_node(MissionNode(id=5, node_type=NodeType.GOAL, position=(4, 0, 0), difficulty=1.0))
+        graph.add_edge(0, 1, EdgeType.PATH)
+        graph.add_edge(2, 3, EdgeType.BOSS_LOCKED, key_required=3)
+        graph.add_edge(3, 4, EdgeType.PATH)
+        graph.add_edge(4, 5, EdgeType.PATH)
+        graph.sanitize()
+
+        repaired = grammar._repair_goal_gauntlet(graph)
+        repaired.sanitize()
+
+        assert repaired.get_goal_node() is not None
+        assert 2 not in repaired.nodes
+        assert grammar.validate_goal_gauntlet(repaired)
+        start = repaired.get_start_node()
+        goal = repaired.get_goal_node()
+        assert start is not None and goal is not None
+        assert goal.id in repaired.get_reachable_nodes(start.id)
     
     def test_large_dungeon_generation(self):
         """Test generating large dungeon with all rules active."""
@@ -535,26 +562,35 @@ class TestAdvancedRulesIntegration:
             max_keys=3,
         )
         
-        # Count all advanced features
+        # Count all advanced feature families produced by advanced_rules.py.
         features = {
             'big_rooms': len([n for n in graph.nodes.values() if n.is_big_room]),
             'arenas': len([n for n in graph.nodes.values() if n.is_arena]),
+            'switches': len([n for n in graph.nodes.values() if n.node_type == NodeType.SWITCH]),
+            'stairs': len([n for n in graph.nodes.values() if n.node_type in {NodeType.STAIRS_UP, NodeType.STAIRS_DOWN}]),
+            'secrets': len([n for n in graph.nodes.values() if n.node_type == NodeType.SECRET]),
             'tokens': len([n for n in graph.nodes.values() if n.node_type == NodeType.TOKEN]),
+            'mini_bosses': len([n for n in graph.nodes.values() if n.node_type == NodeType.MINI_BOSS]),
+            'tutorial_chains': len([n for n in graph.nodes.values() if n.node_type in {NodeType.TUTORIAL_PUZZLE, NodeType.COMBAT_PUZZLE, NodeType.COMPLEX_PUZZLE}]),
+            'resource_farms': len([n for n in graph.nodes.values() if n.node_type == NodeType.RESOURCE_FARM or n.drops_resource]),
             'protection_items': len([n for n in graph.nodes.values() if n.node_type == NodeType.PROTECTION_ITEM]),
             'sectors': len(set(n.sector_id for n in graph.nodes.values() if n.sector_id > 0)),
             'virtual_layers': len([n for n in graph.nodes.values() if n.virtual_layer > 0]),
             'one_way_edges': len([e for e in graph.edges if e.edge_type == EdgeType.ONE_WAY]),
             'hazards': len([e for e in graph.edges if e.edge_type == EdgeType.HAZARD]),
             'visual_links': len([e for e in graph.edges if e.edge_type == EdgeType.VISUAL_LINK]),
+            'switch_gates': len([e for e in graph.edges if e.edge_type in {EdgeType.ON_OFF_GATE, EdgeType.STATE_BLOCK}]),
+            'hidden_edges': len([e for e in graph.edges if e.edge_type == EdgeType.HIDDEN]),
+            'stairs_edges': len([e for e in graph.edges if e.edge_type == EdgeType.STAIRS]),
             'shutters': len([e for e in graph.edges if e.edge_type == EdgeType.SHUTTER]),
             'multi_locks': len([e for e in graph.edges if e.edge_type == EdgeType.MULTI_LOCK]),
         }
         
-        print("\n📊 Advanced Features Summary:")
+        print("\nAdvanced Features Summary:")
         total = 0
         for feature, count in features.items():
             if count > 0:
-                print(f"   ✓ {feature}: {count}")
+                print(f"   - {feature}: {count}")
                 total += count
         
         # Should have multiple types of advanced features
@@ -777,3 +813,4 @@ if __name__ == '__main__':
     print("\n" + "="*70)
     print("ALL TESTS COMPLETED SUCCESSFULLY")
     print("="*70)
+

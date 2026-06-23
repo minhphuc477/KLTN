@@ -1265,9 +1265,17 @@ class LogicNet(nn.Module):
 
     @staticmethod
     def _project_tile_logits_to_room(tile_logits: Tensor) -> Tensor:
-        """Return tile logits at their native spatial resolution."""
+        """Project latent-scale room logits to canonical room size when needed."""
         if tile_logits.dim() != 4:
             raise ValueError(f"tile_logits must be [B,C,H,W], got {tuple(tile_logits.shape)}.")
+        height, width = int(tile_logits.shape[-2]), int(tile_logits.shape[-1])
+        if (height, width) != (ROOM_HEIGHT, ROOM_WIDTH) and height <= ROOM_HEIGHT and width <= ROOM_WIDTH:
+            return F.interpolate(
+                tile_logits,
+                size=(ROOM_HEIGHT, ROOM_WIDTH),
+                mode="bilinear",
+                align_corners=False,
+            )
         return tile_logits
 
     @staticmethod
@@ -1379,8 +1387,9 @@ class LogicNet(nn.Module):
         batch_size: int,
         device: torch.device,
         dtype: torch.dtype,
-        spatial_hw: Tuple[int, int],
+        spatial_hw: Optional[Tuple[int, int]] = None,
     ) -> Dict[str, Optional[Tensor]]:
+        spatial_hw = spatial_hw if spatial_hw is not None else (ROOM_HEIGHT, ROOM_WIDTH)
         targets: Dict[str, Optional[Tensor]] = {
             "source_mask": None,
             "target_mask": None,

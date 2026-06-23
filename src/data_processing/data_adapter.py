@@ -31,14 +31,13 @@ import networkx as nx
 
 # Import core definitions from KLTN project
 from src.core.definitions import (
-    CHAR_TO_SEMANTIC,
-    DOOR_POSITIONS,
     ROOM_HEIGHT,
     ROOM_WIDTH,
     EDGE_TYPE_MAP,
     NODE_CONTENT_MAP,
     TileID,
 )
+from src.zelda_data.parsers.core_parsers import VGLCParser as CoreVGLCParser
 
 logger = logging.getLogger(__name__)
 
@@ -221,187 +220,83 @@ class DungeonTensor:
 # VGLC PARSER
 # ============================================================================
 
+@dataclass
+class _ParsedVGLCRoom:
+    position: Tuple[int, int]
+    char_grid: np.ndarray
+    semantic_grid: np.ndarray
+    doors: Dict[str, bool]
+    has_stair: bool = False
+
+
 class VGLCParser:
     """
-    Parser for Video Game Level Corpus (VGLC) text files.
-    
-    VGLC Zelda Format:
-    - Grid divided into 11-col x 16-row slots
-    - Each slot is either a room or a gap (all dashes)
-    - Characters: F=floor, W=wall, D=door, S=stair, B=block, M=monster
+    Compatibility wrapper around the centralized Zelda VGLC parser.
+
+    Keep adapter-specific `RoomTensor` conversion here, but delegate room
+    slicing, canonical door positions, and semantic-grid conversion to
+    `src.zelda_data.parsers.core_parsers.VGLCParser` so the data pipeline does
+    not drift from the rest of the codebase.
     """
-    
-    SLOT_WIDTH = ROOM_WIDTH    # 11 characters per room
-    SLOT_HEIGHT = ROOM_HEIGHT  # 16 rows per room
+
+    SLOT_WIDTH = ROOM_WIDTH
+    SLOT_HEIGHT = ROOM_HEIGHT
     GAP_CHAR = '-'
-    
+
     def __init__(self, gap_threshold: float = 0.7):
-        """
-        Initialize parser.
-        
-        Args:
-            gap_threshold: Fraction of dashes to consider slot as gap
-        """
-        self.gap_threshold = gap_threshold
-        
+        self.gap_threshold = float(gap_threshold)
+        self._core = CoreVGLCParser(room_cls=_ParsedVGLCRoom)
+
     def load_grid(self, filepath: Union[str, Path]) -> np.ndarray:
-        """
-        Load VGLC text file into numpy character array.
-        
-        Args:
-            filepath: Path to .txt file
-            
-        Returns:
-            2D character array
-        """
         filepath = Path(filepath)
         if not filepath.exists():
             raise FileNotFoundError(f"VGLC file not found: {filepath}")
-        
         with open(filepath, 'r', encoding='utf-8') as f:
             lines = [line.rstrip('\n') for line in f]
-        
         if not lines:
             return np.zeros((0, 0), dtype='<U1')
-        
-        # Pad all lines to max width
         max_width = max(len(line) for line in lines)
-        padded = [list(line.ljust(max_width, self.GAP_CHAR)) for line in lines]
-        
-        return np.array(padded, dtype='<U1')
-    
+        return np.array([list(line.ljust(max_width, self.GAP_CHAR)) for line in lines], dtype='<U1')
+
     def is_room_slot(self, slot_grid: np.ndarray) -> bool:
-        """
-        Check if a slot contains a valid room (not a gap).
-        
-        A valid room has:
-        1. Wall perimeter (at least 20 wall tiles)
-        2. NOT a pure gap (not >gap_threshold dashes)
-        3. Interior content (any non-wall, non-gap tiles)
-        
-        VGLC uses multiple tile types for interior content:
-        F/. = Floor, O = Element floor, P = Puzzle, D = Door,
-        S = Stair, M = Monster, I = Item, B = Block
-        
-        Args:
-            slot_grid: Character array for one slot
-            
-        Returns:
-            True if slot contains a room
-        """
         if slot_grid.size == 0:
             return False
-        
-        # Count gap characters
-        gap_count = np.sum(slot_grid == self.GAP_CHAR)
-        total = slot_grid.size
-        
+        gap_count = int(np.sum(slot_grid == self.GAP_CHAR))
+        total = int(slot_grid.size)
         if gap_count > total * self.gap_threshold:
             return False
-        
-        # Check for structural elements
-        wall_count = np.sum((slot_grid == 'W') | (slot_grid == 'w'))
-        
-        # Count ALL interior tiles (anything that's not wall or gap)
-        # This correctly handles rooms filled with O, P, M, I, B, D, S tiles
+        wall_count = int(np.sum((slot_grid == 'W') | (slot_grid == 'w')))
         interior_count = total - wall_count - gap_count
-        
         return wall_count >= 20 and interior_count >= 5
-    
+
     def extract_rooms(self, filepath: Union[str, Path]) -> List[RoomTensor]:
-        """
-        Extract all rooms from VGLC file.
-        
-        Args:
-            filepath: Path to .txt file
-            
-        Returns:
-            List of RoomTensor objects
-        """
-        grid = self.load_grid(filepath)
-        
-        if grid.size == 0:
-            return []
-        
-        h, w = grid.shape
-        num_row_slots = h // self.SLOT_HEIGHT
-        num_col_slots = w // self.SLOT_WIDTH
-        
-        rooms = []
-        
-        for row_slot in range(num_row_slots):
-            row_start = row_slot * self.SLOT_HEIGHT
-            row_end = row_start + self.SLOT_HEIGHT
-            
-            for col_slot in range(num_col_slots):
-                col_start = col_slot * self.SLOT_WIDTH
-                col_end = col_start + self.SLOT_WIDTH
-                
-                slot_grid = grid[row_start:row_end, col_start:col_end]
-                
-                # Pad if needed
-                if slot_grid.shape[0] < self.SLOT_HEIGHT:
-                    pad_h = self.SLOT_HEIGHT - slot_grid.shape[0]
-                    slot_grid = np.vstack([
-                        slot_grid,
-                        np.full((pad_h, slot_grid.shape[1]), self.GAP_CHAR)
-                    ])
-                if slot_grid.shape[1] < self.SLOT_WIDTH:
-                    pad_w = self.SLOT_WIDTH - slot_grid.shape[1]
-                    slot_grid = np.hstack([
-                        slot_grid,
-                        np.full((slot_grid.shape[0], pad_w), self.GAP_CHAR)
-                    ])
-                
-                if self.is_room_slot(slot_grid):
-                    # Extract room features
-                    contents = self._extract_contents(slot_grid)
-                    doors = self._detect_doors(slot_grid)
-                    semantic_grid = self._chars_to_semantic(slot_grid, doors=doors)
-                    
-                    room = RoomTensor(
-                        room_id=row_slot * 100 + col_slot,
-                        position=(row_slot, col_slot),
-                        semantic_grid=semantic_grid,
-                        char_grid=slot_grid.copy(),
-                        contents=contents,
-                        doors=doors,
-                    )
-                    rooms.append(room)
-        
+        parsed_rooms = self._core.parse(str(filepath))
+        rooms: List[RoomTensor] = []
+        for position in sorted(parsed_rooms):
+            parsed = parsed_rooms[position]
+            row_slot, col_slot = position
+            doors = {direction: 'open' for direction, is_open in parsed.doors.items() if bool(is_open)}
+            rooms.append(
+                RoomTensor(
+                    room_id=row_slot * 100 + col_slot,
+                    position=position,
+                    semantic_grid=np.asarray(parsed.semantic_grid, dtype=np.int32),
+                    char_grid=np.asarray(parsed.char_grid, dtype='<U1').copy(),
+                    contents=self._extract_contents(parsed.char_grid),
+                    doors=doors,
+                )
+            )
+
         logger.info(f"Extracted {len(rooms)} rooms from {filepath}")
         return rooms
-    
-    def _chars_to_semantic(self, char_grid: np.ndarray, doors: Optional[Dict[str, str]] = None) -> np.ndarray:
-        """Convert character grid to semantic IDs."""
-        semantic = np.zeros(char_grid.shape, dtype=np.int32)
-        
-        for i in range(char_grid.shape[0]):
-            for j in range(char_grid.shape[1]):
-                char = char_grid[i, j]
-                tile_id = CHAR_TO_SEMANTIC.get(char)
-                if tile_id is None:
-                    # Be robust to datasets that use lowercase variants.
-                    tile_id = CHAR_TO_SEMANTIC.get(str(char).upper())
-                if tile_id is None:
-                    tile_id = CHAR_TO_SEMANTIC.get(str(char).lower())
-                semantic[i, j] = int(tile_id if tile_id is not None else TileID.VOID)
 
-        has_any_door = bool(doors) and any(bool(value) for value in doors.values())
-        interior = semantic[2:14, 2:9]
-        if has_any_door and interior.size > 0:
-            void_count = int(np.sum(interior == int(TileID.VOID)))
-            if void_count > interior.size * 0.5:
-                interior[interior == int(TileID.VOID)] = int(TileID.FLOOR)
-        
-        return semantic
-    
+    def _chars_to_semantic(self, char_grid: np.ndarray, doors: Optional[Dict[str, Any]] = None) -> np.ndarray:
+        door_bools = {direction: bool(value) for direction, value in (doors or {}).items()}
+        return np.asarray(self._core._to_semantic(char_grid, door_bools), dtype=np.int32)
+
     def _extract_contents(self, char_grid: np.ndarray) -> List[str]:
-        """Extract notable contents from room."""
         contents = []
-        
-        unique_chars = set(char_grid.flatten())
-        
+        unique_chars = set(np.asarray(char_grid).flatten())
         if 'M' in unique_chars or 'm' in unique_chars:
             contents.append('enemy')
         if 'S' in unique_chars or 's' in unique_chars:
@@ -410,50 +305,14 @@ class VGLCParser:
             contents.append('element')
         if 'B' in unique_chars or 'b' in unique_chars:
             contents.append('block')
-        
         return contents
-    
-    def _detect_doors(self, char_grid: np.ndarray) -> Dict[str, str]:
-        """
-        Detect doors on room boundaries.
-        
-        Door positions in the canonical internal room grid `(16, 11)`:
-        - North: row 0, cols 4-6
-        - South: row 15, cols 4-6
-        - East: col 10, rows 7-8
-        - West: col 0, rows 7-8
-        """
-        doors = {}
-        open_door_glyphs = {"D", "d", "F", "f", "."}
 
-        def _has_open_door(cells: Any) -> bool:
-            return any(str(cell) in open_door_glyphs for cell in np.asarray(cells).ravel())
-        
-        north = DOOR_POSITIONS["N"]
-        n_row = int(north["row"])
-        north_cells = char_grid[n_row, int(north["col_start"]):int(north["col_end"])] if char_grid.shape[0] > n_row else []
-        if _has_open_door(north_cells):
-            doors['N'] = 'open'
-        
-        south = DOOR_POSITIONS["S"]
-        s_row = int(south["row"])
-        south_cells = char_grid[s_row, int(south["col_start"]):int(south["col_end"])] if char_grid.shape[0] > s_row else []
-        if _has_open_door(south_cells):
-            doors['S'] = 'open'
-        
-        east = DOOR_POSITIONS["E"]
-        e_col = int(east["col"])
-        east_cells = char_grid[int(east["row_start"]):int(east["row_end"]), e_col] if char_grid.shape[1] > e_col else []
-        if _has_open_door(east_cells):
-            doors['E'] = 'open'
-        
-        west = DOOR_POSITIONS["W"]
-        w_col = int(west["col"])
-        west_cells = char_grid[int(west["row_start"]):int(west["row_end"]), w_col] if char_grid.shape[1] > w_col else []
-        if _has_open_door(west_cells):
-            doors['W'] = 'open'
-        
-        return doors
+    def _detect_doors(self, char_grid: np.ndarray) -> Dict[str, str]:
+        return {
+            direction: 'open'
+            for direction, is_open in self._core._detect_doors(char_grid).items()
+            if bool(is_open)
+        }
 
 
 # ============================================================================

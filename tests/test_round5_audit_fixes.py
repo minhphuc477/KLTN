@@ -406,7 +406,7 @@ def test_quest2_graph_lookup_prefers_vglc_loz2_naming(tmp_path: Path):
     assert adapter._find_graph_file("tloz3_2") == canonical
 
 
-def test_core_parser_detects_boundary_doors_not_inner_wall_doors():
+def test_core_parser_detects_outer_and_inner_wall_doors():
     parser = VGLCParser(room_cls=object)
     grid = np.full((ROOM_HEIGHT, ROOM_WIDTH), "W", dtype="<U1")
     grid[0, 4:7] = "D"
@@ -417,7 +417,7 @@ def test_core_parser_detects_boundary_doors_not_inner_wall_doors():
     doors = parser._detect_doors(grid)
 
     assert doors["N"] is True
-    assert doors["S"] is False
+    assert doors["S"] is True
 
 
 @pytest.mark.parametrize("glyph", ["D", "d", "F", "f", "."])
@@ -444,6 +444,26 @@ def test_data_adapter_fills_interior_voids_for_rooms_with_doors():
     semantic = parser._chars_to_semantic(grid, doors=doors)
 
     assert np.all(semantic[2:14, 2:9] != int(TileID.VOID))
+
+
+def test_data_adapter_vglc_parser_uses_centralized_core_parser_semantics():
+    parser = AdapterVGLCParser()
+    assert isinstance(parser._core, VGLCParser)
+
+    grid = np.full((ROOM_HEIGHT, ROOM_WIDTH), "-", dtype="<U1")
+    grid[0, :] = "W"
+    grid[-1, :] = "W"
+    grid[:, 0] = "W"
+    grid[:, -1] = "W"
+    grid[0, 4:7] = "d"
+    adapter_doors = parser._detect_doors(grid)
+    core_doors = parser._core._detect_doors(grid)
+
+    assert adapter_doors == {"N": "open"}
+    np.testing.assert_array_equal(
+        parser._chars_to_semantic(grid, adapter_doors),
+        parser._core._to_semantic(grid, core_doors),
+    )
 
 
 def test_graph_placement_boundary_doors_use_canonical_positions():

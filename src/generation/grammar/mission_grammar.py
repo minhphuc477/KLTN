@@ -630,6 +630,18 @@ class MissionGrammar:
         start = graph.get_start_node()
         repairs = 0
 
+        def _reachable_from_start() -> Set[int]:
+            if start is None or start.id not in graph.nodes:
+                return set()
+            return graph.get_reachable_nodes(start.id)
+
+        def _prefer_reachable_node(candidates: List[int]) -> Optional[int]:
+            reachable = _reachable_from_start()
+            for candidate in candidates:
+                if candidate in reachable:
+                    return candidate
+            return candidates[0] if candidates else None
+
         goal_incoming = [
             edge.source
             for edge in graph.edges
@@ -672,18 +684,16 @@ class MissionGrammar:
             for edge in graph.edges
             if edge.target == boss_node.id and edge.source in graph.nodes
         ]
-        primary_approach = next(
-            (
-                source
-                for source in goal_incoming + boss_predecessors
-                if source not in {goal.id, boss_node.id}
-                and graph.nodes.get(source) is not None
-                and graph.nodes[source].node_type != NodeType.BOSS_DOOR
-            ),
-            None,
-        )
+        primary_candidates = [
+            source
+            for source in goal_incoming + boss_predecessors
+            if source not in {goal.id, boss_node.id}
+            and graph.nodes.get(source) is not None
+            and graph.nodes[source].node_type != NodeType.BOSS_DOOR
+        ]
+        primary_approach = _prefer_reachable_node(primary_candidates)
         if primary_approach is None:
-            reachable_from_start = graph.get_reachable_nodes(start.id) if start is not None and start.id in graph.nodes else set()
+            reachable_from_start = _reachable_from_start()
             non_reserved_nodes = sorted(
                 node_id
                 for node_id, node in graph.nodes.items()
@@ -692,7 +702,15 @@ class MissionGrammar:
             )
             if not non_reserved_nodes:
                 return graph
-            primary_approach = next((node_id for node_id in non_reserved_nodes if node_id in reachable_from_start), non_reserved_nodes[0])
+            primary_approach = next(
+                (
+                    node_id
+                    for node_id in non_reserved_nodes
+                    if node_id in reachable_from_start
+                    and graph.nodes[node_id].node_type != NodeType.START
+                ),
+                next((node_id for node_id in non_reserved_nodes if node_id in reachable_from_start), non_reserved_nodes[0]),
+            )
 
         boss_door_nodes = sorted(graph.get_nodes_by_type(NodeType.BOSS_DOOR), key=lambda node: node.id)
         boss_door = boss_door_nodes[0] if boss_door_nodes else None
@@ -726,8 +744,9 @@ class MissionGrammar:
             and edge.source not in {goal.id, boss_node.id, boss_door.id}
             and graph.nodes.get(edge.source) is not None
         ]
-        if preserved_door_approaches:
-            primary_approach = preserved_door_approaches[0]
+        preserved_reachable_approach = _prefer_reachable_node(preserved_door_approaches)
+        if preserved_reachable_approach is not None and preserved_reachable_approach in _reachable_from_start():
+            primary_approach = preserved_reachable_approach
 
         for extra_boss in boss_nodes:
             if extra_boss.id == boss_node.id:
@@ -760,6 +779,9 @@ class MissionGrammar:
             if edge.target == boss_door.id and edge.source in {goal.id, boss_node.id, boss_door.id}:
                 repairs += 1
                 continue
+            if edge.target == boss_door.id and edge.source != primary_approach:
+                repairs += 1
+                continue
             retained_edges.append(edge)
 
         graph.edges = retained_edges
@@ -767,6 +789,12 @@ class MissionGrammar:
 
         def _edge_exists(source: int, target: int) -> bool:
             return any(edge.source == source and edge.target == target for edge in graph.edges)
+
+        if start is not None and start.id in graph.nodes and primary_approach not in _reachable_from_start():
+            anchor_id = start.id
+            if anchor_id != primary_approach and not _edge_exists(anchor_id, primary_approach):
+                graph.add_edge(anchor_id, primary_approach, EdgeType.PATH)
+                repairs += 1
 
         if not _edge_exists(primary_approach, boss_door.id):
             graph.add_edge(
@@ -839,7 +867,12 @@ class MissionGrammar:
         graph.sanitize()
         if start is not None and start.id in graph.nodes:
             reachable = graph.get_reachable_nodes(start.id)
-            orphan_ids = sorted(node_id for node_id in graph.nodes if node_id not in reachable)
+            protected_gauntlet_nodes = {goal.id, boss_node.id, boss_door.id}
+            orphan_ids = sorted(
+                node_id
+                for node_id in graph.nodes
+                if node_id not in reachable and node_id not in protected_gauntlet_nodes
+            )
             if orphan_ids:
                 for node_id in orphan_ids:
                     del graph.nodes[node_id]

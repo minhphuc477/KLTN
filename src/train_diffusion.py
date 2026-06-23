@@ -1250,13 +1250,23 @@ class DiffusionTrainer:
                     logic_group["lr"] = float(config.logic_learning_rate)
             optimizer_groups.extend(logic_groups)
 
+        for group in optimizer_groups:
+            group_name = str(group.get("name", ""))
+            if group_name.endswith("_no_decay"):
+                group["decay_policy"] = "no_decay"
+                group["name"] = group_name[: -len("_no_decay")]
+            elif group_name.endswith("_decay"):
+                group["decay_policy"] = "decay"
+                group["name"] = group_name[: -len("_decay")]
+            group.setdefault("base_lr", float(config.learning_rate))
+
         self.optimizer = optim.AdamW(
             optimizer_groups,
             lr=config.learning_rate,
             weight_decay=0.0,
         )
         for group in self.optimizer.param_groups:
-            group.setdefault("base_lr", float(group.get("lr", config.learning_rate)))
+            group.setdefault("base_lr", float(config.learning_rate))
 
         # --- Accelerate / AMP integration ---
         self._accelerator: Optional[Any] = None
@@ -3274,8 +3284,9 @@ class DiffusionTrainer:
 
         self.global_step += 1
         self._apply_lr_warmup(completed_steps=self.global_step)
-        if self.scheduler is not None:
-            self.scheduler.step()
+        scheduler = getattr(self, "scheduler", None)
+        if scheduler is not None:
+            scheduler.step()
 
         # --- Phase 1D: Anneal LogicNet temperature ---
         # Use estimated total steps from config instead of hardcoded epochs*100
@@ -3427,8 +3438,9 @@ class DiffusionTrainer:
         self._accumulation_micro_steps = 0
         self.global_step += 1
         self._apply_lr_warmup(completed_steps=self.global_step)
-        if self.scheduler is not None:
-            self.scheduler.step()
+        scheduler = getattr(self, "scheduler", None)
+        if scheduler is not None:
+            scheduler.step()
 
         metrics["optimizer_step"] = 1.0
         metrics["gradient_accumulation_micro_steps"] = 0.0

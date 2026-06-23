@@ -171,28 +171,43 @@ class VGLCParser:
         def _has_open_door(cells: Any) -> bool:
             return any(str(cell) in open_door_glyphs for cell in np.asarray(cells).ravel())
 
+        # VGLC Zelda rooms use a two-tile wall shell in some files.  Door
+        # glyphs can therefore appear on either the outer canonical boundary
+        # (row 0/15, col 0/10) or the inner wall layer (row 1/14, col 1/9).
         north = DOOR_POSITIONS["N"]
         n_row = int(north["row"])
         n_c0, n_c1 = int(north["col_start"]), int(north["col_end"])
-        north_cells = char_grid[n_row, n_c0:n_c1] if char_grid.shape[0] > n_row else []
+        north_cells = []
+        for row_idx in (n_row, min(n_row + 1, char_grid.shape[0] - 1)):
+            if 0 <= row_idx < char_grid.shape[0]:
+                north_cells.append(char_grid[row_idx, n_c0:n_c1])
         doors["N"] = _has_open_door(north_cells)
 
         south = DOOR_POSITIONS["S"]
         s_row = int(south["row"])
         s_c0, s_c1 = int(south["col_start"]), int(south["col_end"])
-        south_cells = char_grid[s_row, s_c0:s_c1] if char_grid.shape[0] > s_row else []
+        south_cells = []
+        for row_idx in (s_row, max(s_row - 1, 0)):
+            if 0 <= row_idx < char_grid.shape[0]:
+                south_cells.append(char_grid[row_idx, s_c0:s_c1])
         doors["S"] = _has_open_door(south_cells)
 
         west = DOOR_POSITIONS["W"]
         w_col = int(west["col"])
         w_r0, w_r1 = int(west["row_start"]), int(west["row_end"])
-        west_cells = char_grid[w_r0:w_r1, w_col] if char_grid.shape[1] > w_col else []
+        west_cells = []
+        for col_idx in (w_col, min(w_col + 1, char_grid.shape[1] - 1)):
+            if 0 <= col_idx < char_grid.shape[1]:
+                west_cells.append(char_grid[w_r0:w_r1, col_idx])
         doors["W"] = _has_open_door(west_cells)
 
         east = DOOR_POSITIONS["E"]
         e_col = int(east["col"])
         e_r0, e_r1 = int(east["row_start"]), int(east["row_end"])
-        east_cells = char_grid[e_r0:e_r1, e_col] if char_grid.shape[1] > e_col else []
+        east_cells = []
+        for col_idx in (e_col, max(e_col - 1, 0)):
+            if 0 <= col_idx < char_grid.shape[1]:
+                east_cells.append(char_grid[e_r0:e_r1, col_idx])
         doors["E"] = _has_open_door(east_cells)
 
         return doors

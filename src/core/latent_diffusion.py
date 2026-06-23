@@ -96,7 +96,7 @@ class SwiGLU(nn.Module):
 
 
 def _make_norm(dim: int, norm_type: str = "layer") -> nn.Module:
-    """Factory for norm layers — used by DiTBlock ablations."""
+    """Factory for norm layers - used by DiTBlock ablations."""
     if norm_type == "rms":
         return RMSNorm(dim)
     return nn.LayerNorm(dim, elementwise_affine=False)

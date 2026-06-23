@@ -501,7 +501,7 @@ class DiscreteMaskedRoomModel(nn.Module):
         if int(topo.shape[0]) == 1 and B > 1:
             topo = topo.expand(B, -1, -1, -1)
         if int(topo.shape[0]) != B or topo.shape[-2:] != (H, W):
-            # Shape mismatch – skip silently rather than crash.
+            # Shape mismatch - skip silently rather than crash.
             return logits
 
         bias = torch.zeros_like(logits)  # [B, C, H, W]
@@ -519,7 +519,7 @@ class DiscreteMaskedRoomModel(nn.Module):
         for direction, row_sl, col_sl, door_act in boundary_specs:
             ch_idx = self._topo_door_ch[direction]
             if ch_idx < 0 or ch_idx >= int(topo.shape[1]):
-                # Channel not present in this topology map – skip.
+                # Channel not present in this topology map - skip.
                 continue
 
             # door_act: [B, 1, boundary_len] or [B, boundary_len, 1]

@@ -1,11 +1,17 @@
 """Generate or execute Round-5 scientific-gap ablation commands.
 
-This closes three publication-gap items that were not represented as explicit
+This closes publication-gap items that were not represented as explicit
 experimental factors:
 
 - additive topology conditioning vs SPADE topology conditioning
 - diffusion teacher vs fast sampler latency-quality tradeoff
 - weighted Bayesian WFC vs flat-prior WFC
+- A* vs P-CBS validation on final generated branches, with raw/pre-repair and
+  post-repair metrics kept separate by the downstream pipeline export
+- 100-room and 500-room designer-controllability stress rows
+- matched-budget P-CBS component ablation
+- paired-seed statistical significance
+- target-response checks that graph semantic changes affect room semantics
 
 Default mode is plan-only. Use ``--execute`` only when checkpoints, data, and
 compute budget are ready. The output manifest is intentionally machine-readable
@@ -176,6 +182,206 @@ def build_experiments(args: argparse.Namespace) -> List[GapExperiment]:
                 )
             )
 
+    generated_branch_metrics = (
+        "raw_oracle_solved_rate",
+        "post_oracle_solved_rate",
+        "raw_pcbs_valid_rate",
+        "post_pcbs_valid_rate",
+        "tiles_repaired_mean",
+        "teacher_fallback_used",
+        "paired_logicnet_delta",
+    )
+    for seed in seeds:
+        experiments.append(
+            GapExperiment(
+                name=f"generated_branch_astar_pcbs_prepost_seed_{seed}",
+                family="generated_branch_astar_pcbs",
+                hypothesis=(
+                    "A* and P-CBS must be reported side-by-side on the same generated branches, "
+                    "with raw/pre-repair validity separated from post-repair validity."
+                ),
+                required_metrics=generated_branch_metrics,
+                command=[
+                    args.python,
+                    "scripts/run_generated_graph_full_pipeline_eval.py",
+                    "--run-dir",
+                    str(args.run_dir),
+                    "--output-dir",
+                    str(output_dir / "generated_branch_astar_pcbs" / f"seed_{seed}"),
+                    "--seeds",
+                    str(seed),
+                    "--variants",
+                    str(args.generated_branch_variants),
+                    "--min-rooms",
+                    str(int(args.generated_branch_min_rooms)),
+                    "--max-rooms",
+                    str(int(args.generated_branch_max_rooms)),
+                    "--regime-name",
+                    "round7_generated_branch_prepost",
+                    "--room-budget-cap",
+                    str(int(args.generated_branch_room_budget_cap)),
+                ],
+            )
+        )
+
+    controllability_metrics = (
+        "target_match_score",
+        "target_response_slope",
+        "room_count_error",
+        "linearity_error",
+        "gate_pressure_error",
+        "stress_100_success_rate",
+        "stress_500_success_rate",
+        "wall_clock_sec",
+    )
+    experiments.append(
+        GapExperiment(
+            name="designer_controllability_100_500_stress",
+            family="designer_controllability",
+            hypothesis=(
+                "Designer controllability claims require explicit target-response rows and "
+                "100-room/500-room stress targets, not only ordinary-size averages."
+            ),
+            required_metrics=controllability_metrics,
+            command=[
+                args.python,
+                "scripts/run_designer_controllability_proof.py",
+                "--execute",
+                "--output",
+                str(output_dir / "designer_controllability" / "stress_100_500"),
+                "--seed",
+                str(seeds[0]),
+                "--samples-per-target",
+                str(int(args.controllability_samples_per_target)),
+                "--population-size",
+                str(int(args.controllability_population_size)),
+                "--generations",
+                str(int(args.controllability_generations)),
+                "--write-graphs",
+            ],
+        )
+    )
+
+    pcbs_component_metrics = (
+        "pcbs_success_rate",
+        "astar_success_rate",
+        "pcbs_failure_driver",
+        "pcbs_outcome_class",
+        "component_delta_vs_full",
+        "matched_budget_runtime_sec",
+    )
+    for persona in [p.strip() for p in str(args.pcbs_personas).split(",") if p.strip()]:
+        experiments.append(
+            GapExperiment(
+                name=f"pcbs_component_matched_budget_{persona}",
+                family="pcbs_component_ablation",
+                hypothesis=(
+                    "P-CBS component claims require matched-budget ablations by persona rather than "
+                    "aggregate full-model means."
+                ),
+                required_metrics=pcbs_component_metrics,
+                command=[
+                    args.python,
+                    "scripts/run_pcbs_component_ablation.py",
+                    "--levels",
+                    str(args.pcbs_levels),
+                    "--variants",
+                    str(args.pcbs_variants),
+                    "--persona",
+                    persona,
+                    "--timeout-astar",
+                    str(int(args.timeout_astar)),
+                    "--timeout-pcbs",
+                    str(int(args.timeout_pcbs)),
+                    "--seed",
+                    str(seeds[0]),
+                    "--output-dir",
+                    str(output_dir / "pcbs_component_ablation" / persona),
+                    "--quiet",
+                ],
+            )
+        )
+
+    paired_significance_metrics = (
+        "paired_n",
+        "mean_delta",
+        "bootstrap_ci_low",
+        "bootstrap_ci_high",
+        "permutation_p_value",
+        "effect_size",
+    )
+    experiments.append(
+        GapExperiment(
+            name="matched_budget_paired_seed_significance",
+            family="statistical_significance",
+            hypothesis=(
+                "Architecture and topology comparisons need paired-seed deltas, confidence intervals, "
+                "and permutation p-values rather than unpaired aggregate means."
+            ),
+            required_metrics=paired_significance_metrics,
+            command=[
+                args.python,
+                "scripts/run_matched_budget_topology_benchmark.py",
+                "--output",
+                str(output_dir / "matched_budget_significance"),
+                "--seed",
+                str(seeds[0]),
+                "--num-samples",
+                str(int(args.significance_num_samples)),
+                "--eval-budget",
+                str(int(args.significance_eval_budget)),
+                "--min-rooms",
+                str(int(args.significance_min_rooms)),
+                "--max-rooms",
+                str(int(args.significance_max_rooms)),
+                "--methods",
+                str(args.significance_methods),
+            ],
+        )
+    )
+
+    target_response_metrics = (
+        "semantic_target_delta",
+        "pre_repair_anchor_error_delta",
+        "pre_repair_role_match_delta",
+        "post_repair_role_match_delta",
+        "target_response_monotonicity",
+    )
+    for seed in seeds:
+        target_response_command = [
+            args.python,
+            "scripts/run_conditioning_logicnet_repair_ablation.py",
+            "--execute",
+            "--config",
+            str(args.config),
+            "--output",
+            str(output_dir / "target_response_semantics" / f"seed_{seed}"),
+            "--seeds",
+            str(seed),
+            "--num-rooms",
+            str(int(args.target_response_num_rooms)),
+            "--timeout-astar",
+            str(int(args.timeout_astar)),
+            "--timeout-pcbs",
+            str(int(args.timeout_pcbs)),
+        ]
+        if args.vqvae_checkpoint:
+            target_response_command.extend(["--vqvae-checkpoint", str(args.vqvae_checkpoint)])
+        if args.diffusion_checkpoint:
+            target_response_command.extend(["--diffusion-checkpoint", str(args.diffusion_checkpoint)])
+        experiments.append(
+            GapExperiment(
+                name=f"target_response_semantic_pre_repair_seed_{seed}",
+                family="target_response_semantics",
+                hypothesis=(
+                    "Changing graph semantics must measurably change generated room semantics before "
+                    "symbolic repair; otherwise the repair layer, not the model, may be carrying the claim."
+                ),
+                required_metrics=target_response_metrics,
+                command=target_response_command,
+            )
+        )
+
     return experiments
 
 
@@ -256,6 +462,24 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--lcm-checkpoint", type=Path, default=None)
     parser.add_argument("--masked-room-checkpoint", type=Path, default=None)
     parser.add_argument("--mission-graph-json", type=Path, default=None)
+    parser.add_argument("--generated-branch-variants", type=str, default="diffusion,fast_sampler,masked_room")
+    parser.add_argument("--generated-branch-min-rooms", type=int, default=18)
+    parser.add_argument("--generated-branch-max-rooms", type=int, default=32)
+    parser.add_argument("--generated-branch-room-budget-cap", type=int, default=64)
+    parser.add_argument("--controllability-samples-per-target", type=int, default=5)
+    parser.add_argument("--controllability-population-size", type=int, default=64)
+    parser.add_argument("--controllability-generations", type=int, default=20)
+    parser.add_argument("--pcbs-levels", type=str, default="1,2,3,4,5,6,7,8,9")
+    parser.add_argument("--pcbs-variants", type=str, default="1,2")
+    parser.add_argument("--pcbs-personas", type=str, default="novice,balanced,expert")
+    parser.add_argument("--timeout-astar", type=int, default=200000)
+    parser.add_argument("--timeout-pcbs", type=int, default=50000)
+    parser.add_argument("--significance-num-samples", type=int, default=30)
+    parser.add_argument("--significance-eval-budget", type=int, default=200)
+    parser.add_argument("--significance-min-rooms", type=int, default=18)
+    parser.add_argument("--significance-max-rooms", type=int, default=32)
+    parser.add_argument("--significance-methods", type=str, default="VGLC_REF,FULL_GA,FULL_MAP_ELITES")
+    parser.add_argument("--target-response-num-rooms", type=int, default=24)
     parser.add_argument("--extra-train-args", nargs=argparse.REMAINDER, default=[])
     parser.add_argument("--execute", action="store_true")
     return parser.parse_args(argv)

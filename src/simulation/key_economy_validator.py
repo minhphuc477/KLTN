@@ -86,7 +86,7 @@ class PlayerState:
     def copy(self) -> 'PlayerState':
         return PlayerState(
             current_node=self.current_node,
-            inventory=dict(self.inventory),  # shallow copy sufficient — values are ints
+            inventory=dict(self.inventory),  # shallow copy sufficient - values are ints
             visited_nodes=self.visited_nodes.copy(),
             path_taken=self.path_taken.copy()
         )
@@ -250,7 +250,7 @@ class GreedyPlayer:
                     continue
                 
                 next_state = curr_state.copy()
-                # Consume the key on the *copy* — this is the committed move.
+                # Consume the key on the *copy* - this is the committed move.
                 self._consume_key_for_edge(next_state, edge_data)
                 next_state.current_node = neighbor
                 self._collect_items_at_node(next_state, neighbor)

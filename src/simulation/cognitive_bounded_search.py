@@ -680,13 +680,24 @@ class BeliefMap:
         raw_rate = decay_rate if decay_rate is not None else self.decay_rate
         rate = min(1.0, max(0.0, float(raw_rate)))
         for pos, obs in self.known_tiles.items():
-            previous_entropy = self._entropy_for_position(pos)
             if obs.visited or obs.knowledge == TileKnowledge.EXPLORED:
+                stable_one_hot = (
+                    obs.visited
+                    and obs.knowledge == TileKnowledge.EXPLORED
+                    and obs.confidence >= 1.0
+                    and obs.posterior is not None
+                    and float(obs.posterior.get(int(obs.tile_type), 0.0)) >= 1.0
+                )
+                if stable_one_hot:
+                    continue
+                previous_entropy = self._entropy_for_position(pos)
                 obs.confidence = 1.0
                 obs.posterior = self._posterior_from_observation(obs.tile_type, 1.0, is_visit=True)
                 obs.knowledge = TileKnowledge.EXPLORED
                 obs.visited = True
+                self._update_total_entropy(pos, previous_entropy)
             elif obs.confidence > 0:
+                previous_entropy = self._entropy_for_position(pos)
                 effective_rate = rate
                 if obs.knowledge == TileKnowledge.OBSERVED:
                     effective_rate = min(1.0, 0.5 * (1.0 + rate))
@@ -714,7 +725,7 @@ class BeliefMap:
                         obs.confidence = min(float(obs.confidence), decayed_confidence)
                     # Only sync posterior for tiles still in memory
                     self._sync_observation_from_posterior(obs)
-            self._update_total_entropy(pos, previous_entropy)
+                self._update_total_entropy(pos, previous_entropy)
     
     def get_unexplored_neighbors(self, position: Tuple[int, int]) -> List[Tuple[int, int]]:
         """Get adjacent positions that haven't been visited."""
@@ -2191,6 +2202,10 @@ class CognitiveBoundedSearch:
         self._focus_switches: int = 0
         self._focus_guided_steps: int = 0
         self._loop_escape_events: int = 0
+        self._visible_tiles_cache: Dict[
+            Tuple[int, Tuple[int, int], Tuple[int, int], Tuple[int, int]],
+            Set[Tuple[int, int]],
+        ] = {}
     
     def solve(self) -> Tuple[bool, List[Tuple[int, int]], int, CBSMetrics]:
         """
@@ -2224,6 +2239,7 @@ class CognitiveBoundedSearch:
         self._focus_switches = 0
         self._focus_guided_steps = 0
         self._loop_escape_events = 0
+        self._visible_tiles_cache.clear()
         
         # Validation
         if self.env.goal_pos is None:
@@ -2323,12 +2339,7 @@ class CognitiveBoundedSearch:
                     target_pos[0] - current_pos[0],
                     target_pos[1] - current_pos[1],
                 )
-                info_gain = self.belief_map.expected_info_gain(
-                    target_pos,
-                    self.vision,
-                    grid=grid,
-                    direction=facing,
-                )
+                info_gain = self._expected_info_gain_cached(target_pos, grid, facing)
                 score = self._score_move(cog_state, target_pos, target_tile, info_gain=info_gain)
                 scored.append((score, target_pos, target_tile))
             
@@ -2482,6 +2493,47 @@ class CognitiveBoundedSearch:
         pos = (int(position[0]), int(position[1]))
         self._visit_counts[pos] += 1
         self._room_visit_counts[self._room_key_for_position(pos)] += 1
+
+    def _get_visible_tiles_cached(
+        self,
+        position: Tuple[int, int],
+        direction: Tuple[int, int],
+        grid: np.ndarray,
+    ) -> Set[Tuple[int, int]]:
+        """Return cached field-of-view tiles for static-grid P-CBS scoring."""
+        pos = (int(position[0]), int(position[1]))
+        facing = (int(direction[0]), int(direction[1]))
+        key = (id(grid), tuple(int(v) for v in grid.shape), pos, facing)
+        cached = self._visible_tiles_cache.get(key)
+        if cached is not None:
+            return cached
+        visible = self.vision.get_visible_tiles(pos, facing, grid)
+        self._visible_tiles_cache[key] = visible
+        return visible
+
+    def _expected_info_gain_cached(
+        self,
+        position: Tuple[int, int],
+        grid: np.ndarray,
+        direction: Tuple[int, int],
+    ) -> float:
+        """Compute information gain using cached visibility for repeated states."""
+        visible = self._get_visible_tiles_cached(position, direction, grid)
+        if not visible:
+            return 0.0
+
+        total_uncertainty = 0.0
+        eps = 1e-6
+        for pos in visible:
+            obs = self.belief_map.known_tiles.get(pos)
+            if obs is None or obs.knowledge == TileKnowledge.UNKNOWN:
+                total_uncertainty += 1.0
+                continue
+
+            conf = float(min(1.0 - eps, max(eps, obs.confidence)))
+            total_uncertainty += -conf * math.log2(conf) - (1.0 - conf) * math.log2(1.0 - conf)
+
+        return total_uncertainty / len(visible)
     
     def _perceive(self, cog_state: CognitiveState, grid: np.ndarray) -> None:
         """
@@ -2492,16 +2544,28 @@ class CognitiveBoundedSearch:
         direction = cog_state.facing_direction
         
         # Get visible tiles
-        visible = self.vision.get_visible_tiles(pos, direction, grid)
+        visible = self._get_visible_tiles_cached(pos, direction, grid)
         
         for tile_pos in visible:
             tile_type = grid[tile_pos[0], tile_pos[1]]
             is_current = (tile_pos == pos)
+            vision_accuracy = float(getattr(self.config, 'vision_accuracy', 0.9))
+
+            if not is_current:
+                obs = self.belief_map.known_tiles.get(tile_pos)
+                if (
+                    obs is not None
+                    and int(obs.tile_type) == int(tile_type)
+                    and obs.knowledge in (TileKnowledge.OBSERVED, TileKnowledge.EXPLORED)
+                    and float(obs.confidence) >= vision_accuracy
+                ):
+                    obs.last_seen = step
+                    continue
 
             # Bayesian update of belief map using sensor accuracy from persona
             self.belief_map.bayes_update(
                 tile_pos, tile_type, step,
-                obs_accuracy=getattr(self.config, 'vision_accuracy', 0.9),
+                obs_accuracy=vision_accuracy,
                 is_visit=is_current
             )
             

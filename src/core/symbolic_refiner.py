@@ -1038,7 +1038,7 @@ class WaveFunctionCollapse:
             if not success:
                 return self._extract_grid(state), False
             
-            # Propagate constraints — returns False on contradiction.
+            # Propagate constraints - returns False on contradiction.
             if not self._propagate(state, x, y):
                 logger.warning(f"WFC contradiction detected during propagation after collapsing {min_cell}")
                 return self._extract_grid(state), False
@@ -1131,7 +1131,7 @@ class WaveFunctionCollapse:
                     allowed &= neighbour_allows
 
             if allowed is None:
-                # No neighbours at all (edge cell with all collapsed neighbours) —
+                # No neighbours at all (edge cell with all collapsed neighbours) -
                 # keep all current options.
                 continue
 
@@ -1148,7 +1148,7 @@ class WaveFunctionCollapse:
             # Renormalise.
             total = state.grid[cy, cx].sum()
             if total <= 0:
-                # Contradiction — this cell has no remaining valid tile.
+                # Contradiction - this cell has no remaining valid tile.
                 return False
             state.grid[cy, cx] /= total
 

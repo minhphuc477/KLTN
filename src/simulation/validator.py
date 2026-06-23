@@ -309,10 +309,10 @@ def is_push_destination_available(state: GameState, pos: Tuple[int, int], static
 
 
 # ==========================================
-# BITSET-OPTIMIZED GAME STATE (10× FASTER HASHING)
+# BITSET-OPTIMIZED GAME STATE (10x FASTER HASHING)
 # ==========================================
 # Research: Holte et al. (2010) - "Efficient State Representation in A* Search"
-# Replaces frozenset with 64-bit integer bitsets for 5-10× speedup
+# Replaces frozenset with 64-bit integer bitsets for 5-10x speedup
 
 class BitsetStateManager:
     """
@@ -365,12 +365,12 @@ class GameStateBitset:
     Memory-optimized GameState using bitsets instead of frozensets.
     
     Performance improvement:
-    - Hash time: 5-10× faster (integer hash vs frozenset hash)
+    - Hash time: 5-10x faster (integer hash vs frozenset hash)
     - Memory: 50% reduction (64-bit int vs set overhead)
     - Search speed: 10-20% faster A* due to reduced hash collisions
     
     Scientific basis: Holte et al. (2010) showed bitset hashing reduces
-    state space overhead by 10-20× in grid-based pathfinding games.
+    state space overhead by 10-20x in grid-based pathfinding games.
     """
     position: Tuple[int, int]
     keys: int = 0
@@ -1231,7 +1231,7 @@ class ZeldaLogicEnv:
             )
             return True, new_state, 0.0, {'msg': 'Passed puzzle door'}
         
-        # ELEMENT (water/lava) — needs KEY_ITEM (Ladder) to cross.
+        # ELEMENT (water/lava) - needs KEY_ITEM (Ladder) to cross.
         # Without the Ladder the tile is impassable.
         if target_tile == SEMANTIC_PALETTE['ELEMENT']:
             if new_state.has_item:
@@ -1244,7 +1244,7 @@ class ZeldaLogicEnv:
                 return True, new_state, 0.0, {'msg': 'Crossed water/lava with Ladder'}
             return False, self.state, 0.0, {'msg': 'Need Ladder to cross water/lava'}
 
-        # BLOCK — pushable tile.  Attempt to push in the direction of movement.
+        # BLOCK - pushable tile.  Attempt to push in the direction of movement.
         if target_tile == SEMANTIC_PALETTE['BLOCK']:
             dr = target_pos[0] - new_state.position[0]
             dc = target_pos[1] - new_state.position[1]
@@ -1259,7 +1259,7 @@ class ZeldaLogicEnv:
             push_dest_tile = int(self.grid[push_dest_r, push_dest_c])
 
             if not is_push_destination_available(new_state, push_dest, push_dest_tile):
-                return False, self.state, 0.0, {'msg': 'Cannot push block — destination blocked'}
+                return False, self.state, 0.0, {'msg': 'Cannot push block - destination blocked'}
 
             # Move block in the grid (mutable environment)
             self.grid[push_dest_r, push_dest_c] = SEMANTIC_PALETTE['BLOCK']
@@ -1273,7 +1273,7 @@ class ZeldaLogicEnv:
             # Bug #3 fix: if a pickup item was at the player's new position *before*
             # the push moved a block off it, we may have just exposed a collectible
             # that was underneath.  More importantly, check whether the tile the block
-            # was pushed *from* (target_pos) was previously a pickup — this cannot
+            # was pushed *from* (target_pos) was previously a pickup - this cannot
             # happen because the grid showed BLOCK there.  However, if the player
             # stepped onto target_pos after the grid was updated to FLOOR, check for
             # items there (e.g. a key that was already on the floor before the block).
@@ -1840,7 +1840,7 @@ class StateSpaceAStar:
             self.enable_hierarchical = True
         # Diagonal movement disabled by default for standard 4-directional gameplay
         # Can be enabled via priority_options={'allow_diagonals': True} if needed
-        # Note: Enabling diagonals gives 30× speedup but changes animation behavior
+        # Note: Enabling diagonals gives 30x speedup but changes animation behavior
         self.allow_diagonals = bool(self.priority_options.get('allow_diagonals', False))
         if self.strict_original_mode:
             self.allow_diagonals = False
@@ -1896,7 +1896,7 @@ class StateSpaceAStar:
             self.min_locked_needed_node = {}
         
         # PERFORMANCE FIX: Cache door and element positions at initialization
-        # Avoids O(width × height) scan on every heuristic call
+        # Avoids O(width x height) scan on every heuristic call
         self._locked_doors_cache = self.env.find_all_positions(SEMANTIC_PALETTE['DOOR_LOCKED'])
         self._boss_doors_cache = self.env.find_all_positions(SEMANTIC_PALETTE['DOOR_BOSS'])
         self._bomb_doors_cache = self.env.find_all_positions(SEMANTIC_PALETTE['DOOR_BOMB'])
@@ -2625,7 +2625,7 @@ class StateSpaceAStar:
     # State = (node, keys, bombs, has_boss_key, has_item,
     #          frozenset(collected_item_positions), frozenset(opened_door_positions))
     # Successor = graph neighbors, filtered by edge-type item requirements.
-    # Heuristic = graph BFS distance × average room diameter.
+    # Heuristic = graph BFS distance x average room diameter.
     # This reduces the search space from thousands of tiles to tens of nodes.
     # ------------------------------------------------------------------
 
@@ -2786,7 +2786,7 @@ class StateSpaceAStar:
             new_front = []
             for existing in pareto[node]:
                 pk, pb, pbk, pi, pc, po, pg = existing
-                # Is existing dominated by new?
+                # Is existing dominated by newx
                 if (keys >= pk and bombs >= pb and
                     (bk or not pbk) and (item or not pi) and
                     coll.issuperset(pc) and opn.issuperset(po) and g <= pg):
@@ -3281,7 +3281,7 @@ class StateSpaceAStar:
                 target_tile = grid[new_r, new_c]
                 neighbors.append((target_pos, target_tile, CARDINAL_COST, False))  # is_teleport=False
             
-            # PERFORMANCE: Diagonal movement only if enabled (disabled by default for 2× speedup)
+            # PERFORMANCE: Diagonal movement only if enabled (disabled by default for 2x speedup)
             # Diagonal movement (cost = √2 ≈ 1.414)
             # CRITICAL: Prevent corner-cutting through walls
             if self.allow_diagonals:
@@ -3899,7 +3899,7 @@ class StateSpaceAStar:
             - cost: Traversal cost (number of edges traversed)
             - edge_type: Type of edge constraint (for locked doors, etc.)
         """
-        # Quick check: do we have graph connectivity?
+        # Quick check: do we have graph connectivityx
         if not self.env.graph or not self.env.room_to_node or not self.env.room_positions:
             return []
         
@@ -4014,7 +4014,7 @@ class StateSpaceAStar:
         Returns:
             List of (dest_pos, cost, edge_type) tuples for valid virtual transitions
         """
-        # Quick check: do we have graph connectivity?
+        # Quick check: do we have graph connectivityx
         if not self.env.graph or not self.env.room_to_node or not self.env.room_positions:
             return []
         
@@ -4515,7 +4515,7 @@ class StateSpaceAStar:
         Heuristic function for A*.
         
         Uses Manhattan distance to goal, with adjustments for:
-        - Graph-based BFS distance (room hops × avg room diameter)
+        - Graph-based BFS distance (room hops x avg room diameter)
         - Missing keys when locked doors are on path
         - Missing bombs when bomb doors are on path
         - Missing boss key when boss doors are on path
@@ -4864,7 +4864,7 @@ class ZeldaValidator:
         
         for test_pos in test_positions:
             # Create a modified environment starting from test_pos
-            # We need to simulate "player teleported here, can they escape?"
+            # We need to simulate "player teleported here, can they escapex"
             
             # Simple heuristic: Check if test_pos is on the winning path
             # If not on winning path and isolated, it might be a trap
