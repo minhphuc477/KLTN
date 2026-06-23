@@ -217,9 +217,16 @@ class DifferentiablePathfinder(nn.Module):
             posinf=inf,
             neginf=-inf,
         ).clamp(-inf, inf)
-        candidates = (distances.unsqueeze(1) + effective_weights).clamp(-inf, inf)
-        has_finite_candidate = (candidates < (inf - 1e-6)).any(dim=0)
-        new_distances = soft_min(candidates, dim=0, temperature=self.temperature)
+        if distances.ndim == 1:
+            candidates = (distances.unsqueeze(1) + effective_weights).clamp(-inf, inf)
+            reduce_dim = 0
+        elif distances.ndim == 2:
+            candidates = (distances.unsqueeze(2) + effective_weights).clamp(-inf, inf)
+            reduce_dim = 1
+        else:
+            raise ValueError(f"Graph relaxation expects distances [N] or [B,N], got {tuple(distances.shape)}.")
+        has_finite_candidate = (candidates < (inf - 1e-6)).any(dim=reduce_dim)
+        new_distances = soft_min(candidates, dim=reduce_dim, temperature=self.temperature)
         new_distances = torch.where(
             has_finite_candidate,
             new_distances,
@@ -275,8 +282,14 @@ class DifferentiablePathfinder(nn.Module):
         #   adjacency -> walkability [B, H, W]
         #   edge_weights -> traversal weights [B, H, W]
         #   source_mask -> source/start mask [B, H, W]
+        batched_graph_mode = (
+            adjacency.ndim == 3
+            and edge_weights.ndim == 3
+            and source_mask.ndim == 2
+        )
         grid_mode = (
-            isinstance(adjacency, torch.Tensor)
+            not batched_graph_mode
+            and isinstance(adjacency, torch.Tensor)
             and isinstance(edge_weights, torch.Tensor)
             and isinstance(source_mask, torch.Tensor)
             and any(t.ndim == 3 for t in (adjacency, edge_weights, source_mask))
@@ -325,9 +338,47 @@ class DifferentiablePathfinder(nn.Module):
 
             return dist
 
+        if batched_graph_mode:
+            if adjacency.shape != edge_weights.shape:
+                raise ValueError(
+                    f"Batched graph mode shape mismatch: adjacency={tuple(adjacency.shape)} edge_weights={tuple(edge_weights.shape)}."
+                )
+            if adjacency.shape[1] != adjacency.shape[2]:
+                raise ValueError(f"Batched graph adjacency must be square, got {tuple(adjacency.shape)}.")
+            if source_mask.shape != adjacency.shape[:2]:
+                raise ValueError(
+                    f"Batched graph source_mask shape {tuple(source_mask.shape)} must match [B,N]={tuple(adjacency.shape[:2])}."
+                )
+            B, N, _ = adjacency.shape
+            device = adjacency.device
+            distances = torch.where(
+                source_mask.bool(),
+                torch.zeros((B, N), device=device, dtype=adjacency.dtype),
+                torch.full((B, N), self.inf_distance, device=device, dtype=adjacency.dtype),
+            )
+            effective_weights = torch.where(
+                adjacency > 0,
+                edge_weights,
+                torch.full_like(edge_weights, self.inf_distance),
+            ).clamp(-float(self.inf_distance), float(self.inf_distance))
+            use_checkpoint = self._should_checkpoint_relaxation(effective_weights, source_mask)
+            for _ in range(self.num_iterations):
+                if use_checkpoint:
+                    distances = checkpoint(
+                        self._graph_relax_step,
+                        distances,
+                        effective_weights,
+                        source_mask,
+                        use_reentrant=False,
+                    )
+                else:
+                    distances = self._graph_relax_step(distances, effective_weights, source_mask)
+            return distances
+
         if adjacency.ndim != 2 or edge_weights.ndim != 2 or source_mask.ndim != 1:
             raise ValueError(
-                "Graph mode requires adjacency [N,N], edge_weights [N,N], source_mask [N]."
+                "Graph mode requires adjacency [N,N], edge_weights [N,N], source_mask [N], "
+                "or batched adjacency [B,N,N], edge_weights [B,N,N], source_mask [B,N]."
             )
         if adjacency.shape != edge_weights.shape:
             raise ValueError(

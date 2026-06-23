@@ -3336,7 +3336,7 @@ class DiffusionTrainer:
                 objective=objective,
             )
         if not self._tensor_is_finite(loss):
-            self.optimizer.zero_grad(set_to_none=True)
+            self._reset_gradient_accumulation()
             self._warn_nonfinite(
                 "dpo_loss",
                 "Diffusion-DPO: non-finite DPO loss detected; skipping optimizer step for this batch.",
@@ -3349,11 +3349,29 @@ class DiffusionTrainer:
                 "skipped_nonfinite_batch": 1.0,
             }
 
-        self.optimizer.zero_grad(set_to_none=True)
-        if self._accelerator is not None:
-            self._accelerator.backward(loss)
-        else:
-            loss.backward()
+        accum_steps = self._gradient_accumulation_steps()
+        if self._accumulated_micro_steps() == 0:
+            self.optimizer.zero_grad(set_to_none=True)
+        self._backward_loss(loss)
+        self._accumulation_micro_steps = self._accumulated_micro_steps() + 1
+        micro_steps = self._accumulated_micro_steps()
+        should_step_optimizer = bool(micro_steps >= accum_steps)
+        metrics = {
+            "loss": float(loss.detach().item()),
+            "dpo_loss": float(loss.detach().item()),
+            "dpo_margin": float(dpo_metrics["dpo_margin"].item()),
+            "dpo_accuracy": float(dpo_metrics["dpo_accuracy"].item()),
+            "chosen_score": float(dpo_metrics["chosen_score"].item()),
+            "rejected_score": float(dpo_metrics["rejected_score"].item()),
+            "skipped_nonfinite_batch": 0.0,
+            "gradient_accumulation_steps": float(accum_steps),
+            "gradient_accumulation_micro_steps": float(micro_steps),
+            "optimizer_step": 0.0,
+        }
+        if not should_step_optimizer:
+            return metrics
+
+        self._unscale_gradients_if_needed()
         modules_for_average = [self.diffusion, self.condition_encoder]
         if bool(getattr(self.config, "logic_net_trainable", True)):
             modules_for_average.append(self.logic_net)
@@ -3361,8 +3379,9 @@ class DiffusionTrainer:
             tuple(modules_for_average),
             context=getattr(self, "distributed_context", None),
         )
+        self._scale_accumulated_gradients(micro_steps)
         if not self._gradients_are_finite():
-            self.optimizer.zero_grad(set_to_none=True)
+            self._reset_gradient_accumulation()
             self._warn_nonfinite(
                 "dpo_gradient",
                 "Diffusion-DPO: non-finite gradients detected; skipping optimizer step for this batch.",
@@ -3391,7 +3410,7 @@ class DiffusionTrainer:
                 if bool(getattr(self.config, "logic_net_trainable", True)):
                     grad_norms.append(torch.nn.utils.clip_grad_norm_(self.logic_net.parameters(), grad_clip))
             if not all(self._tensor_is_finite(norm) for norm in grad_norms):
-                self.optimizer.zero_grad(set_to_none=True)
+                self._reset_gradient_accumulation()
                 self._warn_nonfinite(
                     "dpo_gradient_norm",
                     "Diffusion-DPO: non-finite gradient norm detected after clipping; skipping optimizer step for this batch.",
@@ -3403,22 +3422,17 @@ class DiffusionTrainer:
                     "dpo_accuracy": float(dpo_metrics["dpo_accuracy"].detach().item()) if self._tensor_is_finite(dpo_metrics.get("dpo_accuracy")) else 0.0,
                     "skipped_nonfinite_batch": 1.0,
                 }
-        self.optimizer.step()
+        self._optimizer_step_with_scaler()
         self._update_ema()
+        self._accumulation_micro_steps = 0
         self.global_step += 1
         self._apply_lr_warmup(completed_steps=self.global_step)
         if self.scheduler is not None:
             self.scheduler.step()
 
-        return {
-            "loss": float(loss.detach().item()),
-            "dpo_loss": float(loss.detach().item()),
-            "dpo_margin": float(dpo_metrics["dpo_margin"].item()),
-            "dpo_accuracy": float(dpo_metrics["dpo_accuracy"].item()),
-            "chosen_score": float(dpo_metrics["chosen_score"].item()),
-            "rejected_score": float(dpo_metrics["rejected_score"].item()),
-            "skipped_nonfinite_batch": 0.0,
-        }
+        metrics["optimizer_step"] = 1.0
+        metrics["gradient_accumulation_micro_steps"] = 0.0
+        return metrics
     
     def _extract_coords_from_maps(self, real_maps: torch.Tensor) -> Tuple[Tuple[int,int], Tuple[int,int]]:
         """Extract start/goal coordinates from map tensors. Fallback to defaults."""

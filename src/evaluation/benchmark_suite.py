@@ -73,6 +73,7 @@ LOCK_EDGE_TYPES = {
     "switch_locked",
     "state_block",
     "item_gate",
+    "multi_lock",
 }
 SOFT_LOCK_EDGE_TYPES = {"soft_locked", "one_way", "shutter"}
 BOMBABLE_EDGE_TYPES = {"bombable"}
@@ -222,6 +223,22 @@ def _is_key_node(attrs: Dict[str, Any]) -> bool:
     if "key" in tokens and "boss_key" not in tokens:
         return True
     return "k" in tokens or "key_small" in tokens
+
+
+def _is_boss_key_node(attrs: Dict[str, Any]) -> bool:
+    tokens = set(_normalized_node_tokens(attrs))
+    node_type = str(attrs.get("type", "") or "").strip().lower()
+    return "boss_key" in tokens or "big_key" in tokens or node_type in {"big_key", "boss_key"}
+
+
+def _is_token_node(attrs: Dict[str, Any]) -> bool:
+    tokens = set(_normalized_node_tokens(attrs))
+    return "token" in tokens or str(attrs.get("type", "") or "").strip().lower() == "token"
+
+
+def _is_switch_node(attrs: Dict[str, Any]) -> bool:
+    tokens = set(_normalized_node_tokens(attrs))
+    return "switch" in tokens or str(attrs.get("type", "") or "").strip().lower() == "switch"
 
 
 def _is_enemy_node(attrs: Dict[str, Any]) -> bool:
@@ -761,6 +778,9 @@ def extract_graph_descriptor(
     ) = _path_metrics(graph, start, goal)
 
     key_count = 0
+    boss_key_count = 0
+    token_count = 0
+    switch_provider_count = 0
     enemy_count = 0
     puzzle_count = 0
     item_count = 0
@@ -769,10 +789,16 @@ def extract_graph_descriptor(
         enemy_hint = _count_hint(attrs, ("enemy_count_hint", "enemy_count"))
         puzzle_hint = _count_hint(attrs, ("puzzle_count_hint", "puzzle_count"))
         item_hint = _count_hint(attrs, ("item_count_hint", "item_count"))
-        if _is_key_node(attrs):
+        if _is_boss_key_node(attrs):
+            boss_key_count += max(1, key_hint)
+        elif _is_key_node(attrs):
             key_count += max(1, key_hint)
+        elif _is_token_node(attrs):
+            token_count += max(1, key_hint)
         else:
             key_count += key_hint
+        if _is_switch_node(attrs):
+            switch_provider_count += 1
         if _is_enemy_node(attrs):
             enemy_count += max(1, enemy_hint)
         else:
@@ -787,6 +813,9 @@ def extract_graph_descriptor(
             item_count += item_hint
 
     lock_count = 0
+    small_lock_count = 0
+    boss_lock_count = 0
+    multi_lock_count = 0
     bombable_count = 0
     softlock_count = 0
     item_gate_count = 0
@@ -795,8 +824,15 @@ def extract_graph_descriptor(
     shortcut_count = 0
     for _, _, attrs in graph.edges(data=True):
         constraints = set(_edge_constraints(attrs))
+        key_requirement = max(1, _count_hint(attrs, ("requires_key_count", "token_count")))
         if constraints.intersection(LOCK_EDGE_TYPES):
             lock_count += 1
+        if "boss_locked" in constraints:
+            boss_lock_count += 1
+        elif "multi_lock" in constraints:
+            multi_lock_count += key_requirement
+        elif constraints.intersection({"locked", "key_locked"}):
+            small_lock_count += key_requirement
         if constraints.intersection(BOMBABLE_EDGE_TYPES):
             bombable_count += 1
         if constraints.intersection(SOFT_LOCK_EDGE_TYPES):
@@ -815,7 +851,18 @@ def extract_graph_descriptor(
         if constraints.intersection(SHORTCUT_EDGE_TYPES) or path_savings >= 2:
             shortcut_count += 1
 
-    leniency = _clip01(key_count / max(1, lock_count)) if lock_count > 0 else 1.0
+    leniency_required = small_lock_count + boss_lock_count + multi_lock_count + item_gate_count + switch_count
+    if leniency_required > 0:
+        leniency_satisfied = (
+            min(key_count, small_lock_count)
+            + min(boss_key_count, boss_lock_count)
+            + min(token_count, multi_lock_count)
+            + min(item_count, item_gate_count)
+            + min(switch_provider_count + puzzle_count, switch_count)
+        )
+        leniency = _clip01(leniency_satisfied / max(1, leniency_required))
+    else:
+        leniency = 1.0
 
     if isinstance(graph, nx.DiGraph):
         branching_nodes = sum(1 for n in graph.nodes() if graph.out_degree(n) >= 2)

@@ -32,6 +32,7 @@ import networkx as nx
 # Import core definitions from KLTN project
 from src.core.definitions import (
     CHAR_TO_SEMANTIC,
+    DOOR_POSITIONS,
     ROOM_HEIGHT,
     ROOM_WIDTH,
     EDGE_TYPE_MAP,
@@ -423,25 +424,33 @@ class VGLCParser:
         - West: col 0, rows 7-8
         """
         doors = {}
+        open_door_glyphs = {"D", "d", "F", "f", "."}
+
+        def _has_open_door(cells: Any) -> bool:
+            return any(str(cell) in open_door_glyphs for cell in np.asarray(cells).ravel())
         
-        # North door
-        north_cells = char_grid[0, 4:7]
-        if 'D' in north_cells or 'd' in north_cells or 'F' in north_cells or 'f' in north_cells or '.' in north_cells:
+        north = DOOR_POSITIONS["N"]
+        n_row = int(north["row"])
+        north_cells = char_grid[n_row, int(north["col_start"]):int(north["col_end"])] if char_grid.shape[0] > n_row else []
+        if _has_open_door(north_cells):
             doors['N'] = 'open'
         
-        # South door
-        south_cells = char_grid[15, 4:7] if char_grid.shape[0] > 15 else []
-        if len(south_cells) > 0 and ('D' in south_cells or 'd' in south_cells or 'F' in south_cells or 'f' in south_cells or '.' in south_cells):
+        south = DOOR_POSITIONS["S"]
+        s_row = int(south["row"])
+        south_cells = char_grid[s_row, int(south["col_start"]):int(south["col_end"])] if char_grid.shape[0] > s_row else []
+        if _has_open_door(south_cells):
             doors['S'] = 'open'
         
-        # East door
-        east_cells = char_grid[7:9, 10] if char_grid.shape[1] > 10 else []
-        if len(east_cells) > 0 and ('D' in east_cells or 'd' in east_cells or 'F' in east_cells or 'f' in east_cells or '.' in east_cells):
+        east = DOOR_POSITIONS["E"]
+        e_col = int(east["col"])
+        east_cells = char_grid[int(east["row_start"]):int(east["row_end"]), e_col] if char_grid.shape[1] > e_col else []
+        if _has_open_door(east_cells):
             doors['E'] = 'open'
         
-        # West door
-        west_cells = char_grid[7:9, 0]
-        if 'D' in west_cells or 'd' in west_cells or 'F' in west_cells or 'f' in west_cells or '.' in west_cells:
+        west = DOOR_POSITIONS["W"]
+        w_col = int(west["col"])
+        west_cells = char_grid[int(west["row_start"]):int(west["row_end"]), w_col] if char_grid.shape[1] > w_col else []
+        if _has_open_door(west_cells):
             doors['W'] = 'open'
         
         return doors

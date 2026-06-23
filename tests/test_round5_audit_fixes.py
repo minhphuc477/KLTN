@@ -10,10 +10,13 @@ from src.core.definitions import ROOM_HEIGHT, ROOM_TOPOLOGY_CHANNELS, ROOM_TOPOL
 from src.core.discrete_masked_model import create_discrete_masked_model
 from src.data_processing.data_adapter import IntelligentDataAdapter, VGLCParser as AdapterVGLCParser
 from src.evaluation.map_elites import LinearityLeniencyExtractor
+from src.evaluation.benchmark_suite import extract_graph_descriptor
 from src.evaluation.search_benchmark_utils import confusion_ratio_vs_oracle, normalized_confusion_ratio
 from src.generation.evolutionary_director import EvolutionaryTopologyGenerator
 from src.ml.logic_net import DifferentiableTortuosity, SoftBellmanFord
+from src.core.logic_net import DifferentiablePathfinder
 from src.pipeline.room_stitching import carve_room_connection_between_bboxes
+from src.simulation.validator import GameState, SEMANTIC_PALETTE, StateSpaceAStar, ZeldaLogicEnv
 from src.zelda_data.stitching.graph_placement import find_boundary_doors
 from src.zelda_data.parsers.core_parsers import VGLCParser
 
@@ -77,6 +80,34 @@ def test_output_node_cap_keeps_generic_item_provider_for_item_gate_without_requi
     assert "gate" in capped.nodes
 
 
+def test_output_node_cap_keeps_token_provider_for_multi_lock():
+    gen = EvolutionaryTopologyGenerator(
+        target_curve=[0.2, 0.6, 1.0],
+        population_size=2,
+        generations=1,
+        max_nodes=2,
+        seed=1,
+    )
+    graph = nx.DiGraph()
+    graph.add_node("start", type="START")
+    graph.add_node("token", type="TOKEN")
+    graph.add_node("gate", type="ENEMY")
+    graph.add_node("goal", type="GOAL")
+    graph.add_node("extra", type="TREASURE")
+    graph.add_edges_from(
+        [
+            ("start", "token", {"edge_type": "PATH"}),
+            ("token", "gate", {"edge_type": "MULTI_LOCK", "token_count": 1}),
+            ("gate", "goal", {"edge_type": "PATH"}),
+            ("start", "extra", {"edge_type": "PATH"}),
+        ]
+    )
+
+    capped = gen._enforce_output_node_cap(graph)
+
+    assert "token" in capped.nodes
+
+
 def test_output_connectivity_repairs_goal_only_component():
     graph = nx.DiGraph()
     graph.add_node("start", type="START", position=(0, 0, 0))
@@ -130,6 +161,30 @@ def test_leniency_does_not_pool_boss_keys_with_small_locks():
     assert extractor._compute_leniency(graph) == pytest.approx(0.0)
 
 
+def test_leniency_counts_token_nodes_and_key_count_for_multi_locks():
+    graph = nx.DiGraph()
+    graph.add_node("s", type="START")
+    graph.add_node("token_bundle", type="TOKEN", key_count=2)
+    graph.add_node("g", type="GOAL")
+    graph.add_edge("s", "g", edge_type="MULTI_LOCK", token_count=2)
+    extractor = LinearityLeniencyExtractor()
+
+    assert extractor._compute_leniency(graph) == pytest.approx(1.0)
+
+
+def test_benchmark_leniency_matches_token_multi_lock_economy():
+    graph = nx.DiGraph()
+    graph.add_node("s", type="START")
+    graph.add_node("token_bundle", type="TOKEN", key_count=2)
+    graph.add_node("g", type="GOAL")
+    graph.add_edge("s", "token_bundle", edge_type="open")
+    graph.add_edge("token_bundle", "g", edge_type="MULTI_LOCK", token_count=2)
+
+    descriptor = extract_graph_descriptor(graph)
+
+    assert descriptor.leniency == pytest.approx(1.0)
+
+
 def test_confusion_ratios_handle_zero_length_oracle_paths():
     assert confusion_ratio_vs_oracle(0, 0, oracle_status="solved", candidate_success=True) == pytest.approx(0.0)
     assert math.isfinite(confusion_ratio_vs_oracle(0, 3, oracle_status="solved", candidate_success=True))
@@ -171,6 +226,97 @@ def test_soft_bellman_ford_uses_grid_area_distance_sentinel():
     distances = module.distance_map(probability, [(0, 0)])
 
     assert float(distances.max().item()) > 20.0 * (8 + 8)
+
+
+def test_differentiable_pathfinder_accepts_batched_graph_inputs():
+    pathfinder = DifferentiablePathfinder(num_iterations=4, temperature=0.05, inf_distance=50.0)
+    adjacency = torch.tensor(
+        [
+            [[0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [0.0, 0.0, 0.0]],
+            [[0.0, 1.0, 1.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
+        ]
+    )
+    weights = torch.where(adjacency > 0, torch.ones_like(adjacency), torch.full_like(adjacency, 50.0))
+    source = torch.tensor([[True, False, False], [True, False, False]])
+
+    distances = pathfinder(adjacency, weights, source)
+
+    assert tuple(distances.shape) == (2, 3)
+    assert float(distances[0, 2].item()) < 3.0
+    assert float(distances[1, 2].item()) < 2.0
+
+
+def test_state_space_astar_pareto_frontier_keeps_incomparable_inventory_states():
+    grid = np.full((3, 3), SEMANTIC_PALETTE["FLOOR"], dtype=np.int64)
+    grid[1, 1] = SEMANTIC_PALETTE["START"]
+    grid[1, 2] = SEMANTIC_PALETTE["TRIFORCE"]
+    solver = StateSpaceAStar(ZeldaLogicEnv(grid), timeout=32)
+    base = GameState(position=(1, 1))
+    has_key = base.copy()
+    has_key.keys = 1
+    has_bomb = base.copy()
+    has_bomb.bomb_count = 1
+
+    frontier = solver._add_to_pareto_frontier([], has_key, 1.0)
+    frontier = solver._add_to_pareto_frontier(frontier, has_bomb, 1.0)
+
+    assert len(frontier) == 2
+    assert not solver._pareto_frontier_dominates(frontier[:1], has_bomb, 1.0)
+
+
+def test_validator_collects_hidden_item_exposed_by_block_push_in_pure_and_mutable_paths():
+    grid = np.full((3, 6), SEMANTIC_PALETTE["WALL"], dtype=np.int64)
+    grid[1, 1:5] = SEMANTIC_PALETTE["FLOOR"]
+    grid[1, 1] = SEMANTIC_PALETTE["START"]
+    grid[1, 2] = SEMANTIC_PALETTE["BLOCK"]
+    grid[1, 4] = SEMANTIC_PALETTE["TRIFORCE"]
+    underlay = {(1, 2): int(SEMANTIC_PALETTE["KEY_SMALL"])}
+
+    env = ZeldaLogicEnv(grid, block_underlay_tiles=underlay)
+    state = env.state.copy()
+    ok, state = env.try_move_pure(state, (1, 2), int(grid[1, 2]))
+    assert ok
+    assert state.keys == 1
+
+    env = ZeldaLogicEnv(grid, block_underlay_tiles=underlay)
+    env.state.position = (1, 1)
+    ok, state, _reward, _info = env._try_move((1, 2), int(grid[1, 2]))
+    assert ok
+    assert state.keys == 1
+
+
+def test_puzzle_stage_progress_updates_on_element_and_collected_item_tiles():
+    grid = np.full((3, 6), SEMANTIC_PALETTE["WALL"], dtype=np.int64)
+    grid[1, 1:5] = SEMANTIC_PALETTE["FLOOR"]
+    grid[1, 1] = SEMANTIC_PALETTE["START"]
+    grid[1, 2] = SEMANTIC_PALETTE["KEY_ITEM"]
+    grid[1, 3] = SEMANTIC_PALETTE["ELEMENT"]
+    grid[1, 4] = SEMANTIC_PALETTE["TRIFORCE"]
+    metadata = {
+        "plans": {
+            "room_0": {
+                "controlled_doors_global": [],
+                "stage_sequence": [
+                    {"stage_index": 0, "kind": "collect_item", "global_anchor": [1, 2]},
+                    {"stage_index": 1, "kind": "step_on_element", "global_anchor": [1, 3], "trigger_tile_id": int(SEMANTIC_PALETTE["ELEMENT"])},
+                ],
+            }
+        }
+    }
+    env = ZeldaLogicEnv(grid, room_puzzle_metadata=metadata)
+    state = env.state.copy()
+    ok, state = env.try_move_pure(state, (1, 2), int(grid[1, 2]))
+    assert ok
+    assert ("room_0", 0) in state.completed_puzzle_stages
+    ok, state = env.try_move_pure(state, (1, 3), int(grid[1, 3]))
+    assert ok
+    assert ("room_0", 1) in state.completed_puzzle_stages
+
+    replay_state = state.copy()
+    replay_state.completed_puzzle_stages = set()
+    ok, replay_state = env.try_move_pure(replay_state, (1, 2), int(grid[1, 2]))
+    assert ok
+    assert ("room_0", 0) in replay_state.completed_puzzle_stages
 
 
 def test_edge_aware_logit_bias_accumulates_corner_evidence():

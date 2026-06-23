@@ -76,6 +76,7 @@ if TORCH_AVAILABLE:
             
             self.map_height = map_height
             self.map_width = map_width
+            self.output_scale = float(max(1, int(map_height) + int(map_width)))
             
             # Network layers
             self.fc1 = nn.Linear(10, 128)
@@ -107,7 +108,7 @@ if TORCH_AVAILABLE:
             with torch.no_grad():
                 x = torch.FloatTensor(state_features).unsqueeze(0)
                 pred = self.forward(x)
-                return max(0.0, pred.item())  # Ensure non-negative
+                return max(0.0, float(pred.item()) * float(getattr(self, "output_scale", 1.0)))
 else:
     class HeuristicNetwork(object):
         """Fallback stub when PyTorch is unavailable."""
@@ -139,6 +140,8 @@ class HeuristicTrainer:
         
         self.optimizer = optim.Adam(self.model.parameters(), lr=0.001)
         self.criterion = nn.MSELoss()
+        self.target_scale = float(max(1, self.map_height + self.map_width))
+        self.model.output_scale = self.target_scale
         
         self.training_history = []
     
@@ -249,7 +252,7 @@ class HeuristicTrainer:
         for example in examples:
             features = self.featurize_state(example, env)
             X.append(features)
-            y.append(example.remaining_cost)
+            y.append(float(example.remaining_cost) / self.target_scale)
         
         X = torch.FloatTensor(X)
         y = torch.FloatTensor(y).unsqueeze(1)
@@ -282,7 +285,7 @@ class HeuristicTrainer:
                 loss.backward()
                 self.optimizer.step()
                 
-                total_loss += loss.item()
+                total_loss += float(loss.item())
                 num_batches += 1
             
             avg_loss = total_loss / num_batches if num_batches > 0 else 0
@@ -344,6 +347,7 @@ class HeuristicTrainer:
             'model_state_dict': self.model.state_dict(),
             'map_height': self.map_height,
             'map_width': self.map_width,
+            'target_scale': self.target_scale,
             'training_history': self.training_history
         }, path)
         logger.info(f"Model saved to {path}")
@@ -362,6 +366,10 @@ class HeuristicTrainer:
             checkpoint['map_width']
         )
         model.load_state_dict(checkpoint['model_state_dict'])
+        model.output_scale = float(checkpoint.get(
+            'target_scale',
+            max(1, int(checkpoint['map_height']) + int(checkpoint['map_width'])),
+        ))
         model.eval()
         
         logger.info(f"Model loaded from {path}")

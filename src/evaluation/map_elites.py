@@ -152,6 +152,17 @@ def _node_tokens(data: Dict[str, Any]) -> set:
     return tokens
 
 
+def _count_hint(data: Dict[str, Any], names: Tuple[str, ...]) -> int:
+    for name in names:
+        try:
+            value = int(data.get(name, 0) or 0)
+        except (TypeError, ValueError):
+            value = 0
+        if value > 0:
+            return value
+    return 0
+
+
 def _edge_tokens(data: Dict[str, Any]) -> List[str]:
     """Normalize edge constraints from compact and canonical forms."""
     return parse_edge_type_tokens(
@@ -246,10 +257,15 @@ class LinearityLeniencyExtractor(FeatureExtractor):
             tokens = _node_tokens(data)
             node_type = str(data.get('type', '') or '').strip().upper()
             has_boss_key = 'boss_key' in tokens or 'big_key' in tokens or node_type in {'BIG_KEY', 'BOSS_KEY'}
+            token_count = _count_hint(data, ('token_count', 'key_count_hint', 'key_count'))
             if not has_boss_key and ('k' in tokens or 'key' in tokens or node_type == 'KEY'):
-                small_keys += 1
+                small_keys += max(1, token_count)
+            elif node_type == 'TOKEN' or 'token' in tokens:
+                small_keys += max(1, token_count)
+            elif token_count > 0:
+                small_keys += token_count
             if has_boss_key:
-                boss_keys += 1
+                boss_keys += max(1, token_count)
         
         for _, _, data in graph.edges(data=True):
             constraints = set(_edge_tokens(data))

@@ -683,6 +683,7 @@ class MissionGrammar:
             None,
         )
         if primary_approach is None:
+            reachable_from_start = graph.get_reachable_nodes(start.id) if start is not None and start.id in graph.nodes else set()
             non_reserved_nodes = sorted(
                 node_id
                 for node_id, node in graph.nodes.items()
@@ -691,7 +692,7 @@ class MissionGrammar:
             )
             if not non_reserved_nodes:
                 return graph
-            primary_approach = non_reserved_nodes[0]
+            primary_approach = next((node_id for node_id in non_reserved_nodes if node_id in reachable_from_start), non_reserved_nodes[0])
 
         boss_door_nodes = sorted(graph.get_nodes_by_type(NodeType.BOSS_DOOR), key=lambda node: node.id)
         boss_door = boss_door_nodes[0] if boss_door_nodes else None

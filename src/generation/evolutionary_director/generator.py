@@ -639,6 +639,7 @@ class EvolutionaryTopologyGenerator:
             "BIG_KEY",
             "KEY",
             "SWITCH",
+            "TOKEN",
             "MULTI_LOCK",
         }
         def _edge_type_name(data: Dict[str, Any]) -> str:

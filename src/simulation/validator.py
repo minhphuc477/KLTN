@@ -699,7 +699,8 @@ class ZeldaLogicEnv:
                  graph=None, room_to_node=None, room_positions=None,
                  node_to_room=None,
                  room_puzzle_metadata: Optional[Mapping[str, Any]] = None,
-                 solver_options: Optional['SolverOptions'] = None):
+                 solver_options: Optional['SolverOptions'] = None,
+                 block_underlay_tiles: Optional[Mapping[Tuple[int, int], int]] = None):
         """
         Initialize the environment.
         
@@ -729,6 +730,10 @@ class ZeldaLogicEnv:
         self.room_to_node = room_to_node
         self.room_positions = room_positions
         self.node_to_room = node_to_room  # Includes virtual node mappings
+        self.block_underlay_tiles: Dict[Tuple[int, int], int] = {
+            (int(pos[0]), int(pos[1])): int(tile)
+            for pos, tile in dict(block_underlay_tiles or {}).items()
+        }
         self.room_puzzle_metadata = dict(room_puzzle_metadata or {})
         self._puzzle_plans: Dict[str, Dict[str, Any]] = {}
         self._puzzle_stage_lookup: Dict[Tuple[int, int], List[Dict[str, Any]]] = defaultdict(list)
@@ -780,6 +785,34 @@ class ZeldaLogicEnv:
 
     def try_move_pure(self, state: GameState, target_pos: Tuple[int, int], target_tile: int) -> Tuple[bool, GameState]:
         return self._try_move_pure(state, target_pos, target_tile)
+
+    def _underlay_tile_for_block_origin(self, pos: Tuple[int, int]) -> int:
+        return int(self.block_underlay_tiles.get(tuple(pos), SEMANTIC_PALETTE['FLOOR']))
+
+    def _apply_pickup_if_present(
+        self,
+        state: GameState,
+        pos: Tuple[int, int],
+        tile: int,
+        *,
+        mutate_grid: bool,
+    ) -> Tuple[GameState, float, Dict[str, Any]]:
+        if int(tile) not in PICKUP_IDS or tuple(pos) in state.collected_items:
+            return state, 0.0, {}
+        if mutate_grid:
+            return self._pickup_item(state, pos, int(tile))
+
+        new_state = state.copy()
+        new_state.collected_items = state.collected_items | {tuple(pos)}
+        if int(tile) == SEMANTIC_PALETTE['KEY_SMALL']:
+            new_state.keys = state.keys + 1
+        elif int(tile) == SEMANTIC_PALETTE['KEY_BOSS']:
+            new_state.has_boss_key = True
+        elif int(tile) == SEMANTIC_PALETTE['KEY_ITEM']:
+            new_state.has_item = True
+        elif int(tile) == SEMANTIC_PALETTE['ITEM_MINOR']:
+            new_state.bomb_count = state.bomb_count + 4
+        return new_state, 0.0, {'msg': 'Picked up exposed item', 'item': ID_TO_NAME.get(int(tile), str(tile))}
     
     def _find_position(self, target_id: int) -> Optional[Tuple[int, int]]:
         """Find the first occurrence of a tile ID."""
@@ -1120,6 +1153,11 @@ class ZeldaLogicEnv:
         if target_tile == SEMANTIC_PALETTE['DOOR_LOCKED']:
             if target_pos in new_state.opened_doors:
                 new_state.position = target_pos
+                new_state = self._update_puzzle_stage_progress(
+                    new_state,
+                    target_pos=target_pos,
+                    target_tile=int(target_tile),
+                )
                 return True, new_state, 0.0, {'msg': 'Door already open'}
             elif new_state.keys > 0:
                 new_state.keys -= 1
@@ -1127,6 +1165,11 @@ class ZeldaLogicEnv:
                 new_state.position = target_pos
                 # Update grid to show door is open
                 self.grid[target_pos] = SEMANTIC_PALETTE['DOOR_OPEN']
+                new_state = self._update_puzzle_stage_progress(
+                    new_state,
+                    target_pos=target_pos,
+                    target_tile=int(target_tile),
+                )
                 return True, new_state, 10.0, {'msg': 'Unlocked door with key'}
             else:
                 return False, self.state, 0.0, {'msg': 'Door locked - need key'}
@@ -1134,12 +1177,22 @@ class ZeldaLogicEnv:
         if target_tile == SEMANTIC_PALETTE['DOOR_BOMB']:
             if target_pos in new_state.opened_doors:
                 new_state.position = target_pos
+                new_state = self._update_puzzle_stage_progress(
+                    new_state,
+                    target_pos=target_pos,
+                    target_tile=int(target_tile),
+                )
                 return True, new_state, 0.0, {'msg': 'Wall already bombed'}
             elif new_state.bomb_count > 0:
                 new_state.bomb_count -= 1  # Consume one bomb
                 new_state.opened_doors.add(target_pos)
                 new_state.position = target_pos
                 self.grid[target_pos] = SEMANTIC_PALETTE['DOOR_OPEN']
+                new_state = self._update_puzzle_stage_progress(
+                    new_state,
+                    target_pos=target_pos,
+                    target_tile=int(target_tile),
+                )
                 return True, new_state, 10.0, {'msg': 'Bombed wall'}
             else:
                 return False, self.state, 0.0, {'msg': 'Need bombs'}
@@ -1147,11 +1200,21 @@ class ZeldaLogicEnv:
         if target_tile == SEMANTIC_PALETTE['DOOR_BOSS']:
             if target_pos in new_state.opened_doors:
                 new_state.position = target_pos
+                new_state = self._update_puzzle_stage_progress(
+                    new_state,
+                    target_pos=target_pos,
+                    target_tile=int(target_tile),
+                )
                 return True, new_state, 0.0, {'msg': 'Boss door already open'}
             elif new_state.has_boss_key:
                 new_state.opened_doors.add(target_pos)
                 new_state.position = target_pos
                 self.grid[target_pos] = SEMANTIC_PALETTE['DOOR_OPEN']
+                new_state = self._update_puzzle_stage_progress(
+                    new_state,
+                    target_pos=target_pos,
+                    target_tile=int(target_tile),
+                )
                 return True, new_state, 20.0, {'msg': 'Opened boss door'}
             else:
                 return False, self.state, 0.0, {'msg': 'Need boss key'}
@@ -1200,7 +1263,8 @@ class ZeldaLogicEnv:
 
             # Move block in the grid (mutable environment)
             self.grid[push_dest_r, push_dest_c] = SEMANTIC_PALETTE['BLOCK']
-            self.grid[target_pos[0], target_pos[1]] = SEMANTIC_PALETTE['FLOOR']
+            exposed_tile = self._underlay_tile_for_block_origin(target_pos)
+            self.grid[target_pos[0], target_pos[1]] = exposed_tile
 
             # Track push in state
             new_state.pushed_blocks = new_state.pushed_blocks | {(target_pos, push_dest)}
@@ -1213,13 +1277,14 @@ class ZeldaLogicEnv:
             # happen because the grid showed BLOCK there.  However, if the player
             # stepped onto target_pos after the grid was updated to FLOOR, check for
             # items there (e.g. a key that was already on the floor before the block).
-            refreshed_tile = int(self.grid[target_pos[0], target_pos[1]])
-            if refreshed_tile in PICKUP_IDS and target_pos not in new_state.collected_items:
-                new_state, pickup_reward, pickup_info = self._pickup_item(
-                    new_state, target_pos, refreshed_tile
-                )
-                reward += pickup_reward
-                info.update(pickup_info)
+            new_state, pickup_reward, pickup_info = self._apply_pickup_if_present(
+                new_state,
+                target_pos,
+                exposed_tile,
+                mutate_grid=True,
+            )
+            reward += pickup_reward
+            info.update(pickup_info)
 
             new_state = self._update_puzzle_stage_progress(
                 new_state,
@@ -1331,11 +1396,21 @@ class ZeldaLogicEnv:
         # Check if this door was already opened (in state)
         if target_pos in state.opened_doors:
             # Door is open, can pass freely
+            new_state = self._update_puzzle_stage_progress(
+                new_state,
+                target_pos=target_pos,
+                target_tile=int(target_tile),
+            )
             return True, new_state
         
         # Check if this item was already collected (in state)
         if target_pos in state.collected_items:
             # Item already collected, treat as floor
+            new_state = self._update_puzzle_stage_progress(
+                new_state,
+                target_pos=target_pos,
+                target_tile=int(target_tile),
+            )
             return True, new_state
         
         # Dynamic occupancy wins over the immutable grid. A block may currently
@@ -1386,6 +1461,18 @@ class ZeldaLogicEnv:
 
         # A static block origin is floor after its block has moved away.
         if was_block_vacated(state, target_pos):
+            underlay_tile = self._underlay_tile_for_block_origin(target_pos)
+            new_state, _pickup_reward, _pickup_info = self._apply_pickup_if_present(
+                new_state,
+                target_pos,
+                underlay_tile,
+                mutate_grid=False,
+            )
+            new_state = self._update_puzzle_stage_progress(
+                new_state,
+                target_pos=target_pos,
+                target_tile=int(underlay_tile),
+            )
             return True, new_state
         
         # Walkable tiles - free movement
@@ -1417,6 +1504,11 @@ class ZeldaLogicEnv:
             if state.keys > 0:
                 new_state.keys = state.keys - 1
                 new_state.opened_doors = state.opened_doors | {target_pos}
+                new_state = self._update_puzzle_stage_progress(
+                    new_state,
+                    target_pos=target_pos,
+                    target_tile=int(target_tile),
+                )
                 return True, new_state
             return False, state
         
@@ -1424,12 +1516,22 @@ class ZeldaLogicEnv:
             if state.bomb_count > 0:
                 new_state.bomb_count = state.bomb_count - 1  # Consume one bomb
                 new_state.opened_doors = state.opened_doors | {target_pos}
+                new_state = self._update_puzzle_stage_progress(
+                    new_state,
+                    target_pos=target_pos,
+                    target_tile=int(target_tile),
+                )
                 return True, new_state
             return False, state
         
         if target_tile == SEMANTIC_PALETTE['DOOR_BOSS']:
             if state.has_boss_key:
                 new_state.opened_doors = state.opened_doors | {target_pos}
+                new_state = self._update_puzzle_stage_progress(
+                    new_state,
+                    target_pos=target_pos,
+                    target_tile=int(target_tile),
+                )
                 return True, new_state
             return False, state
         
@@ -1446,10 +1548,20 @@ class ZeldaLogicEnv:
         
         if target_tile == SEMANTIC_PALETTE['DOOR_OPEN']:
             # Already open door
+            new_state = self._update_puzzle_stage_progress(
+                new_state,
+                target_pos=target_pos,
+                target_tile=int(target_tile),
+            )
             return True, new_state
         
         if target_tile == SEMANTIC_PALETTE['DOOR_SOFT']:
             # One-way door - can pass
+            new_state = self._update_puzzle_stage_progress(
+                new_state,
+                target_pos=target_pos,
+                target_tile=int(target_tile),
+            )
             return True, new_state
         
         # ELEMENT (water/lava) - needs KEY_ITEM (Ladder) to cross.
@@ -1463,6 +1575,11 @@ class ZeldaLogicEnv:
                 if (0 <= cur_r < self.height and 0 <= cur_c < self.width
                         and int(self.grid[cur_r, cur_c]) == SEMANTIC_PALETTE['ELEMENT']):
                     return False, state
+                new_state = self._update_puzzle_stage_progress(
+                    new_state,
+                    target_pos=target_pos,
+                    target_tile=int(target_tile),
+                )
                 return True, new_state
             return False, state
         
@@ -1486,10 +1603,17 @@ class ZeldaLogicEnv:
             if is_push_destination_available(state, push_dest, int(push_dest_tile)):
                 # Can push - record in pushed_blocks
                 new_state.pushed_blocks = state.pushed_blocks | {(target_pos, push_dest)}
+                underlay_tile = self._underlay_tile_for_block_origin(target_pos)
+                new_state, _pickup_reward, _pickup_info = self._apply_pickup_if_present(
+                    new_state,
+                    target_pos,
+                    underlay_tile,
+                    mutate_grid=False,
+                )
                 new_state = self._update_puzzle_stage_progress(
                     new_state,
                     target_pos=target_pos,
-                    target_tile=int(target_tile),
+                    target_tile=int(underlay_tile if underlay_tile in PICKUP_IDS else target_tile),
                     pushed_block_to=(int(push_dest_r), int(push_dest_c)),
                 )
                 return True, new_state
@@ -1903,6 +2027,43 @@ class StateSpaceAStar:
     def _state_key(state: GameState) -> Tuple[Any, ...]:
         """Immutable key for closed/g-score maps; equality handles hash collisions."""
         return game_state_key(state)
+
+    @staticmethod
+    def _state_dominates_with_cost(
+        state_a: GameState,
+        cost_a: float,
+        state_b: GameState,
+        cost_b: float,
+    ) -> bool:
+        """True when state_a is at least as capable as state_b and no costlier."""
+        if float(cost_a) > float(cost_b):
+            return False
+        return dominates(state_a, state_b)
+
+    def _pareto_frontier_dominates(
+        self,
+        frontier: List[Tuple[GameState, float]],
+        candidate: GameState,
+        candidate_cost: float,
+    ) -> bool:
+        return any(
+            self._state_dominates_with_cost(existing, existing_cost, candidate, candidate_cost)
+            for existing, existing_cost in frontier
+        )
+
+    def _add_to_pareto_frontier(
+        self,
+        frontier: List[Tuple[GameState, float]],
+        candidate: GameState,
+        candidate_cost: float,
+    ) -> List[Tuple[GameState, float]]:
+        if self._pareto_frontier_dominates(frontier, candidate, candidate_cost):
+            return frontier
+        return [
+            (existing, existing_cost)
+            for existing, existing_cost in frontier
+            if not self._state_dominates_with_cost(candidate, candidate_cost, existing, existing_cost)
+        ] + [(candidate, float(candidate_cost))]
 
     def _edge_constraints_from_data(self, edge_data: Optional[Dict[str, Any]]) -> List[str]:
         """Return canonical edge constraints from edge attributes."""
@@ -3033,88 +3194,20 @@ class StateSpaceAStar:
             if current_key in closed_set:
                 continue
             
-            # STATE DOMINATION PRUNING: Skip states strictly worse than visited states at same position
-            # A state is dominated if: same position, fewer/equal keys, fewer/equal items, subset of opened doors
-            # FIXED: Now checks ALL 6 inventory dimensions for strict dominance
-            # CRITICAL FIX: Also check g-score to prevent re-expansion with worse cost
-            is_dominated = False
+            # STATE DOMINATION PRUNING: keep a Pareto frontier per
+            # position/dynamic-block bucket. A single "best" state is invalid
+            # when incomparable inventories meet at the same tile.
             state_bucket = (current_state.position, frozenset(current_state.pushed_blocks))
-            if hasattr(self, '_best_at_pos'):
-                if state_bucket in self._best_at_pos:
-                    best = self._best_at_pos[state_bucket]
-                    best_g = self._best_g_at_pos.get(state_bucket, float('inf'))
-                    
-                    # Dominated if ALL inventory dimensions are <= best AND g-score is worse
-                    if (current_state.keys <= best.keys and 
-                        current_state.bomb_count <= best.bomb_count and
-                        int(current_state.has_boss_key) <= int(best.has_boss_key) and
-                        int(current_state.has_item) <= int(best.has_item) and
-                        current_state.opened_doors.issubset(best.opened_doors) and
-                        current_state.collected_items.issubset(best.collected_items) and
-                        current_state.defeated_enemies.issubset(best.defeated_enemies) and
-                        current_state.completed_puzzle_stages.issubset(best.completed_puzzle_stages) and
-                        current_g >= best_g):  # CRITICAL: Check g-score
-                        # Check if strictly dominated (at least one dimension strictly worse OR same inventory but worse g)
-                        if (current_state.keys < best.keys or 
-                            current_state.bomb_count < best.bomb_count or
-                            int(current_state.has_boss_key) < int(best.has_boss_key) or
-                            int(current_state.has_item) < int(best.has_item) or
-                            len(current_state.opened_doors) < len(best.opened_doors) or
-                            len(current_state.collected_items) < len(best.collected_items) or
-                            len(current_state.defeated_enemies) < len(best.defeated_enemies) or
-                            len(current_state.completed_puzzle_stages) < len(best.completed_puzzle_stages) or
-                            (current_state.keys == best.keys and
-                             current_state.bomb_count == best.bomb_count and
-                             current_state.has_boss_key == best.has_boss_key and
-                             current_state.has_item == best.has_item and
-                             len(current_state.opened_doors) == len(best.opened_doors) and
-                             len(current_state.collected_items) == len(best.collected_items) and
-                             len(current_state.defeated_enemies) == len(best.defeated_enemies) and
-                             len(current_state.completed_puzzle_stages) == len(best.completed_puzzle_stages) and
-                             current_g > best_g)):  # Same inventory but worse g
-                            is_dominated = True
-            
-            if is_dominated:
+            frontier = self._best_at_pos.get(state_bucket, [])
+            if self._pareto_frontier_dominates(frontier, current_state, float(current_g)):
                 dominated_states_pruned += 1
                 continue
-            
-            # Track best state seen at each position for dominance pruning
-            # FIXED: Update logic now properly tracks Pareto frontier instead of just highest-key state
-            # CRITICAL FIX: Also track best g-score at each position
-            if state_bucket not in self._best_at_pos:
-                self._best_at_pos[state_bucket] = current_state
-                self._best_g_at_pos[state_bucket] = current_g
-            else:
-                best = self._best_at_pos[state_bucket]
-                best_g = self._best_g_at_pos.get(state_bucket, float('inf'))
-                
-                # Update if current state dominates best in at least one dimension
-                # and is not worse in any other dimension (Pareto dominance)
-                # OR if it has better g-score with same inventory
-                should_update = False
-                
-                if (current_state.keys >= best.keys and
-                    current_state.bomb_count >= best.bomb_count and
-                    int(current_state.has_boss_key) >= int(best.has_boss_key) and
-                    int(current_state.has_item) >= int(best.has_item) and
-                    current_state.opened_doors.issuperset(best.opened_doors) and
-                    current_state.collected_items.issuperset(best.collected_items) and
-                    current_state.defeated_enemies.issuperset(best.defeated_enemies) and
-                    current_state.completed_puzzle_stages.issuperset(best.completed_puzzle_stages)):
-                    # Current state dominates or equals best in inventory
-                    if (current_state.keys > best.keys or
-                        len(current_state.opened_doors) > len(best.opened_doors) or
-                        len(current_state.collected_items) > len(best.collected_items) or
-                        len(current_state.completed_puzzle_stages) > len(best.completed_puzzle_stages) or
-                        current_state.bomb_count > best.bomb_count or
-                        int(current_state.has_boss_key) > int(best.has_boss_key) or
-                        int(current_state.has_item) > int(best.has_item) or
-                        current_g < best_g):  # Better g-score
-                        should_update = True
-                
-                if should_update:
-                    self._best_at_pos[state_bucket] = current_state
-                    self._best_g_at_pos[state_bucket] = current_g
+            self._best_at_pos[state_bucket] = self._add_to_pareto_frontier(
+                frontier,
+                current_state,
+                float(current_g),
+            )
+            self._best_g_at_pos[state_bucket] = min(cost for _state, cost in self._best_at_pos[state_bucket])
             
             closed_set.add(current_key)
             states_explored += 1
@@ -3469,72 +3562,17 @@ class StateSpaceAStar:
             if current_key in closed_set:
                 continue
             
-            # Dominance pruning (same logic as solve())
-            is_dominated = False
             state_bucket = (current_state.position, frozenset(current_state.pushed_blocks))
-            if state_bucket in self._best_at_pos:
-                best = self._best_at_pos[state_bucket]
-                best_g = self._best_g_at_pos.get(state_bucket, float('inf'))
-                
-                if (current_state.keys <= best.keys and 
-                    current_state.bomb_count <= best.bomb_count and
-                    int(current_state.has_boss_key) <= int(best.has_boss_key) and
-                    int(current_state.has_item) <= int(best.has_item) and
-                    current_state.opened_doors.issubset(best.opened_doors) and
-                    current_state.collected_items.issubset(best.collected_items) and
-                    current_state.defeated_enemies.issubset(best.defeated_enemies) and
-                    current_state.completed_puzzle_stages.issubset(best.completed_puzzle_stages) and
-                    current_g >= best_g):
-                    if (current_state.keys < best.keys or 
-                        current_state.bomb_count < best.bomb_count or
-                        int(current_state.has_boss_key) < int(best.has_boss_key) or
-                        int(current_state.has_item) < int(best.has_item) or
-                        len(current_state.opened_doors) < len(best.opened_doors) or
-                        len(current_state.collected_items) < len(best.collected_items) or
-                        len(current_state.defeated_enemies) < len(best.defeated_enemies) or
-                        len(current_state.completed_puzzle_stages) < len(best.completed_puzzle_stages) or
-                        (current_state.keys == best.keys and
-                         current_state.bomb_count == best.bomb_count and
-                         current_state.has_boss_key == best.has_boss_key and
-                         current_state.has_item == best.has_item and
-                         len(current_state.opened_doors) == len(best.opened_doors) and
-                         len(current_state.collected_items) == len(best.collected_items) and
-                         len(current_state.defeated_enemies) == len(best.defeated_enemies) and
-                         len(current_state.completed_puzzle_stages) == len(best.completed_puzzle_stages) and
-                         current_g > best_g)):
-                        is_dominated = True
-            
-            if is_dominated:
+            frontier = self._best_at_pos.get(state_bucket, [])
+            if self._pareto_frontier_dominates(frontier, current_state, float(current_g)):
                 dominated_states_pruned += 1
                 continue
-            
-            # Update best state at position
-            if state_bucket not in self._best_at_pos:
-                self._best_at_pos[state_bucket] = current_state
-                self._best_g_at_pos[state_bucket] = current_g
-            else:
-                best = self._best_at_pos[state_bucket]
-                best_g = self._best_g_at_pos.get(state_bucket, float('inf'))
-                
-                if (current_state.keys >= best.keys and
-                    current_state.bomb_count >= best.bomb_count and
-                    int(current_state.has_boss_key) >= int(best.has_boss_key) and
-                    int(current_state.has_item) >= int(best.has_item) and
-                    current_state.opened_doors.issuperset(best.opened_doors) and
-                    current_state.collected_items.issuperset(best.collected_items) and
-                    current_state.defeated_enemies.issuperset(best.defeated_enemies) and
-                    current_state.completed_puzzle_stages.issuperset(best.completed_puzzle_stages)):
-                    if (current_state.keys > best.keys or
-                        len(current_state.opened_doors) > len(best.opened_doors) or
-                        len(current_state.collected_items) > len(best.collected_items) or
-                        len(current_state.defeated_enemies) > len(best.defeated_enemies) or
-                        len(current_state.completed_puzzle_stages) > len(best.completed_puzzle_stages) or
-                        current_state.bomb_count > best.bomb_count or
-                        int(current_state.has_boss_key) > int(best.has_boss_key) or
-                        int(current_state.has_item) > int(best.has_item) or
-                        current_g < best_g):
-                        self._best_at_pos[state_bucket] = current_state
-                        self._best_g_at_pos[state_bucket] = current_g
+            self._best_at_pos[state_bucket] = self._add_to_pareto_frontier(
+                frontier,
+                current_state,
+                float(current_g),
+            )
+            self._best_g_at_pos[state_bucket] = min(cost for _state, cost in self._best_at_pos[state_bucket])
             
             closed_set.add(current_key)
             states_explored += 1
