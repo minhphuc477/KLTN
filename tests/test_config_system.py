@@ -94,7 +94,16 @@ def test_validation_rejects_fixed_schema_breakage(tmp_path: Path):
         merge_config(yaml_path=str(cfg_path), cli_overrides=None)
 
 
-@pytest.mark.parametrize("mode", ["graphormer", "graphormer_learned"])
+@pytest.mark.parametrize(
+    "mode",
+    [
+        "graphormer",
+        "graphormer_learned",
+        "graphormer_learned_directed",
+        "graphormer_learned_semantic",
+        "graphormer_learned_directed_semantic",
+    ],
+)
 def test_config_accepts_graphormer_topology_refinement_ablation(tmp_path: Path, mode: str):
     cfg_path = tmp_path / "graphormer.yaml"
     _write_yaml(cfg_path, {"diffusion": {"topology_refinement_mode": mode}})
@@ -104,6 +113,38 @@ def test_config_accepts_graphormer_topology_refinement_ablation(tmp_path: Path, 
 
     assert resolved["diffusion"]["topology_refinement_mode"] == mode
     assert kwargs["topology_refinement_mode"] == mode
+
+
+def test_config_propagates_graph_to_grid_edge_semantics_ablation(tmp_path: Path):
+    cfg_path = tmp_path / "edge_semantics.yaml"
+    _write_yaml(cfg_path, {"diffusion": {"graph_to_grid_edge_semantics": True}})
+
+    resolved = merge_config(yaml_path=str(cfg_path), cli_overrides=None)
+    kwargs = diffusion_training_kwargs_from_resolved_config(resolved)
+
+    assert resolved["diffusion"]["graph_to_grid_edge_semantics"] is True
+    assert kwargs["graph_to_grid_edge_semantics"] is True
+
+
+def test_config_accepts_dit_norm_activation_ablation_fields(tmp_path: Path):
+    cfg_path = tmp_path / "dit_ablation.yaml"
+    _write_yaml(
+        cfg_path,
+        {
+            "diffusion": {
+                "denoiser_backbone": "dit",
+                "dit_activation_type": "swiglu",
+                "dit_norm_type": "rms",
+            }
+        },
+    )
+
+    resolved = merge_config(yaml_path=str(cfg_path), cli_overrides=None)
+    kwargs = diffusion_training_kwargs_from_resolved_config(resolved)
+
+    assert kwargs["denoiser_backbone"] == "dit"
+    assert kwargs["dit_activation_type"] == "swiglu"
+    assert kwargs["dit_norm_type"] == "rms"
 
 
 def test_config_accepts_sparse_semantic_topology_refinement_ablation(tmp_path: Path):

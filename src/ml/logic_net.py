@@ -17,7 +17,7 @@ Algorithm:
     R(t+1)[i,j] = clamp(R(t)[i,j] + sum(R(t)[neighbors]) * P[i,j], 0, 1)
     
     Where P is the probability that cell (i,j) is walkable.
-    After N iterations, R[goal] ≈ 1 if path exists, ≈ 0 otherwise.
+    After N iterations, R[goal] is near 1 if path exists, near 0 otherwise.
 
 Usage:
     >>> logic_net = LogicNet(num_iterations=20)
@@ -396,56 +396,77 @@ class InventoryAwareLogicNet(nn.Module):
     ) -> torch.Tensor:
         """
         Multi-stage reachability with key collection.
-        
+
+        Uses proper Bellman-Ford distance relaxation (find minimum cost path)
+        instead of the deprecated mass-flow accumulation that saturated
+        incorrectly across parallel paths.
+
         Args:
-            floor_prob: (B, 1, H, W) base walkability
+            floor_prob: (B, 1, H, W) base walkability in [0, 1]
             key_locations: (B, 1, H, W) probability of key at each cell
             locked_door_locations: (B, 1, H, W) probability of locked door
             start_coords: Starting positions
             goal_coords: Goal positions
-            
+
         Returns:
-            (B,) solvability scores
+            (B,) solvability scores in [0, 1]
         """
         B, _C, H, W = floor_prob.shape
         device = floor_prob.device
-        
-        # Initialize
-        R = torch.zeros_like(floor_prob)
+        eps = 1e-6
+        # A valid route can wind through most cells. H+W silently caps such
+        # paths as unreachable; use the grid cardinality as the finite
+        # sentinel and leave iteration count to control relaxation depth.
+        large = float(max(H * W + 2, H + W + self.num_iterations + 2))
+
+        # Distance map: D[b,0,r,c] = soft shortest distance from start to (r,c).
+        # Initialised to a large sentinel; start cell set to 0.
+        D = torch.full_like(floor_prob, large)
         keys_collected = torch.zeros(B, device=device)
-        
+
         for i in range(B):
             sr, sc = start_coords[i]
-            R[i, 0, sr, sc] = 1.0
-        
-        # Multi-stage propagation
+            D[i, 0, int(max(0, min(sr, H - 1))), int(max(0, min(sc, W - 1)))] = 0.0
+
+        # Multi-stage propagation: each stage may unlock new doors.
         for _stage in range(self.num_key_stages):
-            # Current walkability (locked doors reduced by keys needed)
             door_passability = torch.sigmoid(
                 self.key_gate * (keys_collected.view(B, 1, 1, 1) - 1)
             )
-            current_walkability = floor_prob * (
-                1 - locked_door_locations + 
-                locked_door_locations * door_passability
-            )
-            
-            # Propagate
+            # Step cost: high where walkability is low; locked doors cost
+            # extra unless enough keys have been collected.
+            effective_walk = floor_prob * (
+                1.0 - locked_door_locations
+                + locked_door_locations * door_passability
+            ).clamp(eps, 1.0)
+            step_cost = 1.0 / effective_walk.clamp(min=eps)
+
+            # Bellman-Ford relaxation: D = min(D, min_neighbor(D) + cost)
             for _ in range(self.num_iterations):
-                neighbors = F.conv2d(R, self.kernel, padding=1)
-                incoming_flow = neighbors * current_walkability
-                R = torch.clamp(R + incoming_flow, 0.0, 1.0)
-            
-            # Collect keys in reachable areas
+                padded = F.pad(D, (1, 1, 1, 1), value=large)
+                neighbor_min = torch.stack(
+                    [
+                        padded[:, :, :-2, 1:-1],  # north
+                        padded[:, :, 2:,  1:-1],  # south
+                        padded[:, :, 1:-1, :-2],  # west
+                        padded[:, :, 1:-1, 2:],   # east
+                    ],
+                    dim=0,
+                ).min(dim=0).values
+                D = torch.minimum(D, neighbor_min + step_cost)
+
+            # Convert distances to reachability scores in [0, 1] for key collection.
+            R = torch.exp(-D.clamp(max=large))
             keys_collected = keys_collected + (R * key_locations).sum(dim=(1, 2, 3))
-        
-        # Extract goal values
+
+        # Final reachability at goal: soft-minimum via negative-exponential.
         goal_values = []
         for i in range(B):
             gr, gc = goal_coords[i]
-            gr = max(0, min(gr, H - 1))
-            gc = max(0, min(gc, W - 1))
-            goal_values.append(R[i, 0, gr, gc])
-        
+            gr = int(max(0, min(gr, H - 1)))
+            gc = int(max(0, min(gc, W - 1)))
+            goal_values.append(torch.exp(-D[i, 0, gr, gc].clamp(max=large)))
+
         return torch.stack(goal_values)
 
 
@@ -521,7 +542,7 @@ class DifferentiableTortuosity(nn.Module):
     A winding path has tortuosity > 1.0
     
     For good dungeon design, we want moderate tortuosity:
-    - Too straight (≈1.0): Boring, trivial navigation
+    - Too straight (about 1.0): Boring, trivial navigation
     - Too winding (>3.0): Frustrating, confusing
     - Ideal range: 1.5 - 2.5 for engaging exploration
     
@@ -575,9 +596,11 @@ class DifferentiableTortuosity(nn.Module):
         """
         B, _C, H, W = probability_map.shape
         
-        # Initialize distance map with large values
-        # D[i,j] = estimated distance from goal to (i,j)
-        D = torch.ones_like(probability_map) * (H + W)  # Max possible
+        large = float(max(H * W + 2, H + W + self.num_iterations + 2))
+
+        # Initialize distance map with large values. A winding valid route can
+        # exceed H+W, so the sentinel must scale with the full grid area.
+        D = torch.full_like(probability_map, large)
         
         # Set goal distance to 0
         for i in range(B):
@@ -586,20 +609,22 @@ class DifferentiableTortuosity(nn.Module):
             gc = max(0, min(gc, W - 1))
             D[i, 0, gr, gc] = 0.0
         
-        # Value iteration (backward from goal)
+        # Value iteration (backward from goal). A shortest-path relaxation uses
+        # the minimum neighbor distance, not the sum of neighbor distances.
         for _ in range(self.num_iterations):
-            # Get neighbor distances (min distance + 1 step)
-            neighbor_dist = F.conv2d(D, self.kernel, padding=1)
-            
-            # Update distance: min of current and (neighbor + 1) * walkability
-            # Non-walkable cells maintain high distance
-            new_dist = neighbor_dist + 1.0
-            
-            # Weight by walkability (low walkability = high effective distance)
-            effective_dist = new_dist / (probability_map + self.epsilon)
-            
-            # Take minimum
-            D = torch.min(D, effective_dist)
+            padded = F.pad(D, (1, 1, 1, 1), value=large)
+            neighbors = torch.stack(
+                [
+                    padded[:, :, :-2, 1:-1],
+                    padded[:, :, 2:, 1:-1],
+                    padded[:, :, 1:-1, :-2],
+                    padded[:, :, 1:-1, 2:],
+                ],
+                dim=0,
+            )
+            neighbor_dist = torch.min(neighbors, dim=0).values
+            step_cost = 1.0 / probability_map.clamp_min(self.epsilon)
+            D = torch.minimum(D, neighbor_dist + step_cost)
         
         # Extract distance at start positions
         path_lengths = []
@@ -663,7 +688,8 @@ class DifferentiableTortuosity(nn.Module):
         tortuosity = path_lengths / euclidean_dists
         
         # Check validity (finite path length indicates reachable)
-        is_valid = path_lengths < (probability_map.shape[2] + probability_map.shape[3])
+        max_simple_path = float(probability_map.shape[2] * probability_map.shape[3] + 1)
+        is_valid = path_lengths < max_simple_path
         
         return tortuosity, is_valid
 

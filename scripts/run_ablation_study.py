@@ -132,6 +132,7 @@ class ExperimentConfig:
     topology_refinement_mode: str = "gat2"  # none | lightweight | sparse*/gat2* | graphormer
     room_generator_mode: str = "latent_diffusion"  # latent_diffusion | discrete_masked
     use_reference_room_maps: Optional[bool] = None
+    wfc_prior_mode: str = "weighted"  # weighted | flat
 
 
 PRIMARY_ABLATION_METRICS: Tuple[str, ...] = (
@@ -975,10 +976,14 @@ class AblationStudy:
         graph: nx.Graph,
         seed: int,
         pipeline: NeuralSymbolicDungeonPipeline,
+        prior_mode: str = "weighted",
     ) -> Any:
+        prior_mode = str(prior_mode or "weighted").strip().lower()
+        if prior_mode not in {"weighted", "flat"}:
+            raise ValueError(f"wfc_prior_mode must be 'weighted' or 'flat', got {prior_mode!r}.")
         tile_priors = self._get_wfc_tile_priors()
         wfc_cfg = WeightedBayesianWFCConfig(
-            use_vqvae_priors=True,
+            use_vqvae_priors=(prior_mode == "weighted"),
             enable_backtracking=True,
             max_backtracks=192,
             max_restarts=2,
@@ -1007,7 +1012,7 @@ class AblationStudy:
                 neural_grid=np.asarray(room_grid, dtype=np.int32),
                 was_repaired=False,
                 repair_mask=None,
-                metrics={"wfc_only": 1.0},
+                metrics={"wfc_only": 1.0, "wfc_prior_mode": prior_mode},
             )
 
         dungeon_grid = _stitch_with_pipeline(pipeline, rooms, graph)
@@ -1018,6 +1023,7 @@ class AblationStudy:
             "dungeon_shape": dungeon_grid.shape,
             "generation_time_sec": float("nan"),
             "wfc_only": 1.0,
+            "wfc_prior_mode": prior_mode,
         }
         return SimpleNamespace(
             dungeon_grid=dungeon_grid,
@@ -1171,6 +1177,7 @@ class AblationStudy:
                     graph=mission_graph,
                     seed=seed,
                     pipeline=pipeline,
+                    prior_mode=cfg.wfc_prior_mode,
                 )
             else:
                 result = pipeline.generate_dungeon(
@@ -1582,6 +1589,14 @@ def build_experiment_set(include_extended: bool = True) -> List[ExperimentConfig
         ExperimentConfig(name="NO_WFC", use_wfc=False),
         ExperimentConfig(name="NO_LOGIC", logic_guidance_scale=0.0),
         ExperimentConfig(name="PURE_WFC", use_evolution=True, pure_wfc=True, use_wfc=False, logic_guidance_scale=0.0),
+        ExperimentConfig(
+            name="PURE_WFC_FLAT_PRIOR",
+            use_evolution=True,
+            pure_wfc=True,
+            use_wfc=False,
+            logic_guidance_scale=0.0,
+            wfc_prior_mode="flat",
+        ),
     ]
     if not include_extended:
         return core

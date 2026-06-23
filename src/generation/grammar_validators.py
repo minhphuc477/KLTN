@@ -4,9 +4,108 @@ from __future__ import annotations
 
 import logging
 from collections import deque
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 logger = logging.getLogger(__name__)
+
+
+def _enum_name(value: Any) -> str:
+    return str(getattr(value, "name", value or "")).upper()
+
+
+def _node_type_name(node: Any) -> str:
+    return _enum_name(getattr(node, "node_type", None))
+
+
+def _progression_reachable_nodes(
+    graph: Any,
+    start_id: int,
+    *,
+    excluded_edges: Set[Tuple[int, int]],
+) -> Set[int]:
+    """Reachability that refuses to walk through unresolved resource gates."""
+    if start_id not in getattr(graph, "nodes", {}):
+        return set()
+
+    reachable: Set[int] = {start_id}
+    changed = True
+
+    def _resources() -> Tuple[Set[int], Set[str], int, int]:
+        key_ids: Set[int] = set()
+        items: Set[str] = set()
+        small_keys = 0
+        tokens = 0
+        for node_id in reachable:
+            node = graph.nodes.get(node_id)
+            if node is None:
+                continue
+            node_type = _node_type_name(node)
+            key_id = getattr(node, "key_id", None)
+            if node_type in {"KEY", "BIG_KEY"} and key_id is not None:
+                key_ids.add(int(key_id))
+            if node_type == "KEY":
+                small_keys += 1
+            item_type = getattr(node, "item_type", None)
+            if node_type == "ITEM" and item_type:
+                items.add(str(item_type))
+            drops_resource = getattr(node, "drops_resource", None)
+            if node_type == "RESOURCE_FARM" and drops_resource:
+                items.add(str(drops_resource))
+            if node_type == "TOKEN":
+                tokens += 1
+        return key_ids, items, small_keys, tokens
+
+    def _node_open(node_id: int, key_ids: Set[int]) -> bool:
+        node = graph.nodes.get(node_id)
+        if node is None:
+            return False
+        node_type = _node_type_name(node)
+        key_id = getattr(node, "key_id", None)
+        if node_type in {"LOCK", "BOSS_DOOR"} and key_id is not None:
+            return int(key_id) in key_ids
+        return True
+
+    def _edge_open(edge: Any, key_ids: Set[int], items: Set[str], small_keys: int, tokens: int) -> bool:
+        edge_type = _enum_name(getattr(edge, "edge_type", None))
+        key_required = getattr(edge, "key_required", None)
+        requires_key_count = int(max(0, getattr(edge, "requires_key_count", 0) or 0))
+        if edge_type in {"LOCKED", "BOSS_LOCKED"}:
+            if key_required is not None and int(key_required) not in key_ids:
+                return False
+            if edge_type == "LOCKED" and requires_key_count > 0 and small_keys < requires_key_count:
+                return False
+            if key_required is None and requires_key_count <= 0:
+                return False
+        if requires_key_count > 0 and small_keys < requires_key_count:
+            return False
+        item_required = getattr(edge, "item_required", None)
+        if edge_type == "ITEM_GATE" and item_required and str(item_required) not in items:
+            return False
+        token_count = int(max(0, getattr(edge, "token_count", 0) or 0))
+        if edge_type == "MULTI_LOCK" and token_count > 0 and tokens < token_count:
+            return False
+        switches_required = set(getattr(edge, "switches_required", []) or [])
+        if edge_type == "STATE_BLOCK" and not switches_required.issubset(reachable):
+            return False
+        return True
+
+    while changed:
+        changed = False
+        key_ids, items, small_keys, tokens = _resources()
+        for edge in getattr(graph, "edges", []):
+            source = int(getattr(edge, "source"))
+            target = int(getattr(edge, "target"))
+            if (source, target) in excluded_edges:
+                continue
+            if source not in reachable or target in reachable:
+                continue
+            if not _node_open(target, key_ids):
+                continue
+            if not _edge_open(edge, key_ids, items, small_keys, tokens):
+                continue
+            reachable.add(target)
+            changed = True
+    return reachable
 
 
 def _find_forward_path(
@@ -208,7 +307,8 @@ def validate_resource_loops(graph: Any) -> bool:
                 resource,
             )
             return False
-        reachable = graph.get_reachable_nodes(
+        reachable = _progression_reachable_nodes(
+            graph,
             start.id,
             excluded_edges={(gate.source, gate.target)},
         )

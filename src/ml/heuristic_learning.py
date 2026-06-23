@@ -18,7 +18,9 @@ Neural Network Architecture:
 
 Admissibility:
 - NN heuristic must satisfy: h(s) <= h*(s) (never overestimate)
-- Enforce via post-training scaling (multiply by 0.9)
+- A constant shrink is only a conservative heuristic. A publishable
+  admissibility claim requires calibration against held-out true costs and
+  subtracting the observed overestimate margin.
 """
 
 import os
@@ -291,21 +293,49 @@ class HeuristicTrainer:
         
         logger.info("Training complete!")
     
-    def enforce_admissibility(self, scaling_factor: float = 0.9):
+    def enforce_admissibility(
+        self,
+        scaling_factor: float = 0.9,
+        *,
+        validation_features: Optional[np.ndarray] = None,
+        true_costs: Optional[np.ndarray] = None,
+        safety_margin: float = 0.0,
+    ):
         """
-        Scale network outputs to ensure admissibility.
+        Calibrate or conservatively shrink network outputs.
         
         Admissible heuristic: h(s) <= h*(s) (never overestimate)
         
-        Simple approach: Multiply all predictions by 0.9
+        If validation_features and true_costs are supplied, the final bias is
+        shifted down by the maximum observed overestimate plus safety_margin.
+        This gives a held-out calibration guarantee for the supplied domain.
+        Without calibration data, this method only applies scaling_factor and
+        must not be described as a proof of admissibility.
         """
-        logger.info(f"Enforcing admissibility with scaling factor {scaling_factor}")
+        logger.info("Calibrating heuristic outputs with scaling factor %.3f", scaling_factor)
         
-        # Scale final layer weights
+        bias_shift = 0.0
+        if validation_features is not None or true_costs is not None:
+            if validation_features is None or true_costs is None:
+                raise ValueError("validation_features and true_costs must be provided together.")
+            features = torch.as_tensor(validation_features, dtype=torch.float32)
+            costs = torch.as_tensor(true_costs, dtype=torch.float32).view(-1, 1)
+            if features.dim() != 2 or int(features.shape[-1]) != 10:
+                raise ValueError(f"validation_features must have shape [N, 10], got {tuple(features.shape)}.")
+            if int(features.shape[0]) != int(costs.shape[0]):
+                raise ValueError("validation_features and true_costs must have the same first dimension.")
+            self.model.eval()
+            with torch.no_grad():
+                preds = self.model(features) * float(scaling_factor)
+                overestimate = torch.clamp(preds - costs, min=0.0)
+                bias_shift = float(overestimate.max().item()) + float(max(0.0, safety_margin))
+            logger.info("Observed calibration overestimate margin: %.6f", bias_shift)
+
         with torch.no_grad():
             self.model.fc4.weight.mul_(scaling_factor)
             if self.model.fc4.bias is not None:
                 self.model.fc4.bias.mul_(scaling_factor)
+                self.model.fc4.bias.sub_(bias_shift)
     
     def save_model(self, path: str):
         """Save trained model to disk."""

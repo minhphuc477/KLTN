@@ -376,6 +376,48 @@ def test_resource_loop_validator_accepts_one_reachable_provider_before_gate():
     assert validate_resource_loops(graph)
 
 
+def test_resource_loop_validator_rejects_mutual_item_gate_softlock():
+    from src.generation.grammar.graph_types import EdgeType, MissionGraph, MissionNode, NodeType
+    from src.generation.grammar_validators import validate_resource_loops
+
+    graph = MissionGraph()
+    for node in [
+        MissionNode(0, NodeType.START),
+        MissionNode(1, NodeType.RESOURCE_FARM, drops_resource="BOMB"),
+        MissionNode(2, NodeType.RESOURCE_FARM, drops_resource="HOOKSHOT"),
+        MissionNode(3, NodeType.GOAL),
+    ]:
+        graph.add_node(node)
+    graph.add_edge(0, 1, EdgeType.ITEM_GATE, item_required="HOOKSHOT")
+    graph.add_edge(0, 2, EdgeType.ITEM_GATE, item_required="BOMB")
+    graph.add_edge(1, 3, EdgeType.PATH)
+    graph.add_edge(2, 3, EdgeType.PATH)
+
+    assert not validate_resource_loops(graph)
+
+
+def test_progression_validator_rejects_mutual_lock_key_softlock():
+    from src.generation.grammar.graph_types import EdgeType, MissionGraph, MissionNode, NodeType
+    from src.generation.grammar.mission_grammar import MissionGrammar
+
+    graph = MissionGraph()
+    for node in [
+        MissionNode(0, NodeType.START),
+        MissionNode(1, NodeType.KEY, key_id=1),
+        MissionNode(2, NodeType.KEY, key_id=2),
+        MissionNode(3, NodeType.GOAL),
+    ]:
+        graph.add_node(node)
+    graph.add_edge(0, 1, EdgeType.LOCKED, key_required=2)
+    graph.add_edge(0, 2, EdgeType.LOCKED, key_required=1)
+    graph.add_edge(1, 3, EdgeType.PATH)
+    graph.add_edge(2, 3, EdgeType.PATH)
+
+    grammar = MissionGrammar(seed=7)
+
+    assert not grammar.validate_progression_constraints(graph, log_failures=False)
+
+
 def test_locked_mission_edges_are_bidirectional_for_physical_traversal():
     from src.generation.grammar.graph_types import EdgeType, MissionGraph, MissionNode, NodeType
 

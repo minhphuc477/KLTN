@@ -663,7 +663,10 @@ class ConsistencyLoRATrainer:
         student_x0 = torch.clamp(student_x0, -1.0, 1.0)
 
         x0_loss = F.mse_loss(student_x0, teacher_x0)
-        pred_loss = F.mse_loss(student_pred, ode_teacher_pred)
+        # Consistency distillation trains the student to recover an x0/secant
+        # target. Matching the teacher's raw local ODE tangent here fights the
+        # jump-step objective, especially for velocity/noise parameterizations.
+        pred_loss = F.mse_loss(student_x0, torch.clamp(ode_teacher_x0.detach(), -1.0, 1.0))
         decode_ce_loss = torch.zeros((), device=self.device, dtype=student_x0.dtype)
         topology_decode_ce_loss = torch.zeros((), device=self.device, dtype=student_x0.dtype)
         puzzle_stage_semantic_loss = torch.zeros((), device=self.device, dtype=student_x0.dtype)
@@ -854,7 +857,7 @@ class ConsistencyLoRATrainer:
         student_x0 = torch.clamp(student_x0, -1.0, 1.0)
 
         x0_loss = F.mse_loss(student_x0, teacher_x0)
-        pred_loss = F.mse_loss(student_pred, ode_teacher_pred)
+        pred_loss = F.mse_loss(student_x0, torch.clamp(ode_teacher_x0.detach(), -1.0, 1.0))
         decode_ce_loss = torch.zeros((), device=self.device, dtype=student_x0.dtype)
         topology_decode_ce_loss = torch.zeros((), device=self.device, dtype=student_x0.dtype)
         puzzle_stage_semantic_loss = torch.zeros((), device=self.device, dtype=student_x0.dtype)

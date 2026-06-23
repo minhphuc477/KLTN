@@ -130,7 +130,7 @@ def _compute_graph_cognitive_proxy(
         normalized_confusion = float('inf')
     else:
         # Assume bounded agent pays structural overhead over optimal shortest path.
-        cbs_path_len = int(max(1, round(shortest * (1.0 + confusion_index))))
+        cbs_path_len = 0 if int(shortest) == 0 else int(max(1, round(shortest * (1.0 + confusion_index))))
         path_efficiency = float(shortest) / float(max(1, cbs_path_len))
         normalized_confusion = normalized_confusion_ratio(
             shortest,
@@ -139,6 +139,8 @@ def _compute_graph_cognitive_proxy(
             oracle_status="solved",
             candidate_success=True,
         )
+        if not np.isfinite(normalized_confusion):
+            normalized_confusion = 1.0
         target_normalized = max(0.0, float(target_confusion_ratio) - 1.0)
         cr_penalty = (normalized_confusion - target_normalized) ** 2
         fitness = 1.0 / (1.0 + cr_penalty)

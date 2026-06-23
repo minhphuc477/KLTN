@@ -641,6 +641,24 @@ class EvolutionaryTopologyGenerator:
             "SWITCH",
             "MULTI_LOCK",
         }
+        required_items = {
+            str(data.get("item_required"))
+            for _src, _dst, data in repaired.edges(data=True)
+            if data.get("item_required") not in {None, ""}
+        }
+        required_item_provider_nodes = {
+            node_id
+            for node_id, attrs in repaired.nodes(data=True)
+            if str(attrs.get("item_type", "") or "") in required_items
+            or (
+                str(attrs.get("type", attrs.get("label", "")) or "").strip().upper() in {"ITEM", "PROTECTION_ITEM"}
+                and "ITEM" in required_items
+            )
+            or (
+                str(attrs.get("type", attrs.get("label", "")) or "").strip().upper() == "RESOURCE_FARM"
+                and str(attrs.get("drops_resource", "") or "") in required_items
+            )
+        }
         removal_priority = {
             "EMPTY": 0,
             "TREASURE": 1,
@@ -676,6 +694,7 @@ class EvolutionaryTopologyGenerator:
                 node_id
                 for node_id in repaired.nodes
                 if _node_type(node_id) not in protected_types
+                and node_id not in required_item_provider_nodes
             ]
             if not candidates:
                 break
@@ -1128,7 +1147,7 @@ class EvolutionaryTopologyGenerator:
 
         def _candidate_nodes(component: set[Any]) -> List[Any]:
             preferred = [node_id for node_id in component if node_id not in protected_goal_nodes]
-            return preferred if preferred else [node_id for node_id in component if node_id not in protected_goal_nodes]
+            return preferred if preferred else list(component)
 
         def _distance(node_a: Any, node_b: Any) -> float:
             ax, ay, az = _position(node_a)
@@ -1157,13 +1176,14 @@ class EvolutionaryTopologyGenerator:
                         best_pair = (left, right)
 
             if best_pair is None:
+                logger.warning(
+                    "Unable to find any node pair while repairing output connectivity; component kept disconnected: %s",
+                    sorted(other_component, key=str),
+                )
                 main_component.update(other_component)
                 continue
 
             source, target = best_pair
-            if source in protected_goal_nodes or target in protected_goal_nodes:
-                main_component.update(other_component)
-                continue
             edge_attrs = {
                 "label": EdgeType.PATH.name.lower(),
                 "edge_type": EdgeType.PATH.name,

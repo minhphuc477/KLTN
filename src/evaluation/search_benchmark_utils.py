@@ -65,8 +65,10 @@ def confusion_ratio_vs_oracle(
         return float("inf")
     oracle_len = int(oracle_path_length)
     candidate_len = int(candidate_path_length)
-    if oracle_len <= 0 or candidate_len <= 0:
+    if oracle_len < 0 or candidate_len < 0:
         return float("nan")
+    if oracle_len == 0:
+        return 0.0 if candidate_len == 0 else float(max(0, candidate_len))
     return float(max(0, candidate_len - oracle_len)) / float(oracle_len)
 
 
@@ -96,7 +98,7 @@ def normalized_confusion_ratio(
     oracle_len = int(oracle_path_length)
     candidate_len = int(candidate_path_length)
     manhattan_i = int(manhattan_distance)
-    if oracle_len <= 0 or candidate_len <= 0:
+    if oracle_len < 0 or candidate_len < 0:
         return float("nan")
     denominator = max(1, oracle_len, manhattan_i)
     ratio = float(max(0, candidate_len - oracle_len)) / float(denominator)

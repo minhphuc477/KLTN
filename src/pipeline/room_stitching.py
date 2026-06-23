@@ -11,7 +11,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 import networkx as nx
 import numpy as np
 
-from src.core.definitions import SEMANTIC_PALETTE, TileID, parse_edge_type_tokens
+from src.core.definitions import DOOR_POSITIONS, SEMANTIC_PALETTE, TileID, parse_edge_type_tokens
 from src.pipeline.spatial_utils import (
     first_free_position,
     get_node_grid_position,
@@ -628,13 +628,26 @@ def carve_room_connection_between_bboxes(
     src_x_min, src_y_min, src_x_max, src_y_max = src_bbox
     dst_x_min, dst_y_min, dst_x_max, dst_y_max = dst_bbox
 
-    def _stroke(center: int, low: int, high: int) -> range:
-        if low > high:
-            low, high = high, low
-        half_span = min(2, max(0, (high - low) // 2))
-        start = max(low, center - half_span)
-        stop = min(high, center + half_span)
+    def _door_rows(bbox: Tuple[int, int, int, int], direction: str) -> range:
+        _x0, y0, _x1, y1 = bbox
+        spec = DOOR_POSITIONS[direction]
+        start = max(y0, y0 + int(spec["row_start"]))
+        stop = min(y1, y0 + int(spec["row_end"]) - 1)
         return range(start, stop + 1)
+
+    def _door_cols(bbox: Tuple[int, int, int, int], direction: str) -> range:
+        x0, _y0, x1, _y1 = bbox
+        spec = DOOR_POSITIONS[direction]
+        start = max(x0, x0 + int(spec["col_start"]))
+        stop = min(x1, x0 + int(spec["col_end"]) - 1)
+        return range(start, stop + 1)
+
+    def _canonical_overlap(first: range, second: range, low: int, high: int) -> List[int]:
+        overlap = sorted(set(first).intersection(second))
+        if overlap:
+            return overlap
+        center = max(low, min(high, (low + high) // 2))
+        return [center]
 
     def _open_apron_cell(row: int, col: int) -> None:
         if not (0 <= row < global_grid.shape[0] and 0 <= col < global_grid.shape[1]):
@@ -649,18 +662,19 @@ def carve_room_connection_between_bboxes(
             row_low = max(src_y_min, dst_y_min)
             row_high = min(src_y_max, dst_y_max)
         if row_low <= row_high:
-            center = (row_low + row_high) // 2
-            for row in _stroke(center, row_low, row_high):
-                if src_x_max < dst_x_min:
-                    src_boundary = src_x_max
-                    dst_boundary = dst_x_min
-                    src_apron = src_x_max - 1
-                    dst_apron = dst_x_min + 1
-                else:
-                    src_boundary = src_x_min
-                    dst_boundary = dst_x_max
-                    src_apron = src_x_min + 1
-                    dst_apron = dst_x_max - 1
+            if src_x_max < dst_x_min:
+                src_boundary = src_x_max
+                dst_boundary = dst_x_min
+                src_apron = src_x_max - 1
+                dst_apron = dst_x_min + 1
+                rows = _canonical_overlap(_door_rows(src_bbox, "E"), _door_rows(dst_bbox, "W"), row_low, row_high)
+            else:
+                src_boundary = src_x_min
+                dst_boundary = dst_x_max
+                src_apron = src_x_min + 1
+                dst_apron = dst_x_max - 1
+                rows = _canonical_overlap(_door_rows(src_bbox, "W"), _door_rows(dst_bbox, "E"), row_low, row_high)
+            for row in rows:
                 global_grid[row, src_boundary] = src_tile
                 global_grid[row, dst_boundary] = dst_tile
                 _open_apron_cell(row, src_apron)
@@ -674,18 +688,19 @@ def carve_room_connection_between_bboxes(
             col_low = max(src_x_min, dst_x_min)
             col_high = min(src_x_max, dst_x_max)
         if col_low <= col_high:
-            center = (col_low + col_high) // 2
-            for col in _stroke(center, col_low, col_high):
-                if src_y_max < dst_y_min:
-                    src_boundary = src_y_max
-                    dst_boundary = dst_y_min
-                    src_apron = src_y_max - 1
-                    dst_apron = dst_y_min + 1
-                else:
-                    src_boundary = src_y_min
-                    dst_boundary = dst_y_max
-                    src_apron = src_y_min + 1
-                    dst_apron = dst_y_max - 1
+            if src_y_max < dst_y_min:
+                src_boundary = src_y_max
+                dst_boundary = dst_y_min
+                src_apron = src_y_max - 1
+                dst_apron = dst_y_min + 1
+                cols = _canonical_overlap(_door_cols(src_bbox, "S"), _door_cols(dst_bbox, "N"), col_low, col_high)
+            else:
+                src_boundary = src_y_min
+                dst_boundary = dst_y_max
+                src_apron = src_y_min + 1
+                dst_apron = dst_y_max - 1
+                cols = _canonical_overlap(_door_cols(src_bbox, "N"), _door_cols(dst_bbox, "S"), col_low, col_high)
+            for col in cols:
                 global_grid[src_boundary, col] = src_tile
                 global_grid[dst_boundary, col] = dst_tile
                 _open_apron_cell(src_apron, col)

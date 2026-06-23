@@ -381,6 +381,10 @@ class DiffusionTrainingConfig:
         self.dit_mlp_ratio = float(max(1.0, dit_mlp_ratio))
         self.dit_activation_type = str(dit_activation_type).strip().lower()
         self.dit_norm_type = str(dit_norm_type).strip().lower()
+        if self.dit_activation_type not in {"gelu", "swiglu"}:
+            raise ValueError(f"dit_activation_type must be 'gelu' or 'swiglu', got {dit_activation_type!r}.")
+        if self.dit_norm_type not in {"layer", "rms"}:
+            raise ValueError(f"dit_norm_type must be 'layer' or 'rms', got {dit_norm_type!r}.")
         if any((self.model_channels * mult) % self.unet_num_heads != 0 for mult in self.unet_channel_mult):
             raise ValueError(
                 "Every attention-enabled U-Net channel width must be divisible by unet_num_heads; "
@@ -4424,6 +4428,8 @@ def main():
     parser.add_argument('--dit-depth', type=int, default=None)
     parser.add_argument('--dit-patch-size', type=int, default=None)
     parser.add_argument('--dit-mlp-ratio', type=float, default=None)
+    parser.add_argument('--dit-activation-type', type=str, default=None, choices=['gelu', 'swiglu'])
+    parser.add_argument('--dit-norm-type', type=str, default=None, choices=['layer', 'rms'])
     parser.add_argument('--pag-scale', type=float, default=None)
     parser.add_argument('--alpha-logic', type=float, default=None)
     parser.add_argument('--alpha-logic-tile', type=float, default=None)

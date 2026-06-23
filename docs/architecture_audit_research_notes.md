@@ -549,21 +549,23 @@ Confirmed implementation fixes:
 - Graph-to-grid conditioning now applies the node mask before the lightweight
   GCN prepass and before degree-feature extraction. Padded nodes and invalid
   padded edges can no longer send topology messages into real graph nodes.
+- Spatial graph-to-grid conditioning now has a default-off
+  `graph_to_grid_edge_semantics` ablation. When enabled, edge labels/features
+  add a learned per-head destination-node attention bias, so locked/open/boss
+  edges can be compared against the edge-blind spatial-conditioning baseline.
 - MaskGIT training step embeddings now track corruption level. High mask ratio
   maps to late reverse-refinement steps, and near-clean corruption maps to step
   zero, matching inference semantics.
 - Graph-level macro validation no longer consumes boss keys in the graph and
   virtual-node branches. Boss keys are persistent authorization items; small
   keys and bombs remain consumable.
+- `graphormer_learned_directed`, `graphormer_learned_semantic`, and
+  `graphormer_learned_directed_semantic` are now explicit ablation modes.
+  The undirected `graphormer_learned` mode remains the checkpoint-compatible
+  learned Graphormer-style baseline.
 
-Open ablation gaps, not solved claims:
+Open ablation gap, not a solved claim:
 
-- Spatial graph-to-grid attention is still mostly edge-semantic blind. Context
-  token refinement can consume edge attributes, but per-grid spatial graph
-  conditioning does not yet have a dedicated locked/open/boss-edge ablation.
-- `graphormer_learned` remains the learned undirected Graphormer-style mode.
-  Directed learned Graphormer and semantic learned Graphormer should be added
-  only as explicit ablation modes with separate metrics.
 - MaskGIT topology helpers still do not make edge attributes affect logits in
   the default model. This is acceptable only if described as a room-topology
   map conditioning baseline; edge-aware MaskGIT should be a named ablation.
@@ -574,3 +576,85 @@ Focused verification:
   passed with 159 tests.
 - `python -m compileall -q src/core/latent_diffusion.py src/core/graph_grid_attention.py src/core/discrete_masked_model.py src/simulation/validator.py`
   passed.
+
+## 2026-06-23 Gap Implementation Pass
+
+Confirmed fixes:
+
+- Mission-grammar lock/key and resource-gate reachability now uses a
+  progression-aware fixed point instead of raw BFS. Mutual softlocks where key
+  A is behind lock B and key B is behind lock A are rejected before Map-Elites
+  archive insertion.
+- Standalone resource-loop validation now uses the same gate-aware pre-gate
+  reachability and still accepts valid early-provider / late-provider dungeons.
+- Room-level macro solver switch checks reconstruct `GameState` with
+  `bomb_count` and current-room defeated enemies, removing the undefined
+  `_GameState` path and matching the room-level abstraction that rooms are
+  cleared before shutter traversal.
+- Differentiable tortuosity now relaxes via the minimum cardinal neighbor
+  distance. The previous convolution summed neighbors and was not a
+  shortest-path relaxation.
+- Learned A* heuristic calibration no longer claims that a constant 0.9 scale
+  proves admissibility. The API can subtract the maximum observed held-out
+  overestimate margin; scale-only use is documented as conservative shrinkage.
+- LCM distillation auxiliary `pred_loss` now compares converted x0 predictions
+  rather than forcing the student to match the teacher's raw local ODE tangent.
+- DiT `dit_activation_type` and `dit_norm_type` are exposed through the
+  validated config schema and CLI. `scripts/generate_model_architecture_ablation_manifest.py`
+  generates plan-only or executable manifests for U-Net-vs-DiT and
+  RMSNorm/SwiGLU DiT ablations.
+
+Research boundary:
+
+- Graphormer-style edge/spatial/centrality encodings are supported as
+  controlled ablations, consistent with the Graphormer paper's structural
+  encoding premise. FlashAttention/SDPA remains a kernel efficiency choice and
+  should be reported as runtime optimization, not a new model contribution.
+- The new architecture manifest is an experiment scaffold. It is not evidence
+  until executed with fixed seeds, checkpoint hashes, confidence intervals,
+  wall-clock/VRAM logs, quality metrics, and fallback-use metrics.
+
+## 2026-06-23 Round 5 Diagnostic Fixes
+
+Confirmed fixes:
+
+- Evolutionary output capping now protects item providers required by
+  `ITEM_GATE` edges. Final topology cleanup no longer prunes the only provider
+  for a required traversal item.
+- Output connectivity repair now connects protected goal-only components
+  instead of silently merging their component sets without adding an edge.
+- MAP-Elites leniency counts boss locks and Big Keys separately from small
+  key locks. Boss-door layouts without a Big Key no longer receive maximum
+  leniency.
+- Zero-length oracle paths now produce finite confusion ratios. Start-equals-
+  goal cases no longer inject NaN into MAP-Elites replacement decisions.
+- `InventoryAwareLogicNet` and `DifferentiableTortuosity` use grid-cardinality
+  sentinels rather than `H+W`, so winding valid routes are not truncated as
+  unreachable.
+- MaskGIT edge-aware boundary logit bias now accumulates overlapping boundary
+  evidence at corners instead of overwriting the prior boundary pass.
+- Quest-2 VGLC graph discovery now prefers canonical `LoZ2_X.dot` names before
+  legacy `_q2` names and only then falls back to Quest-1 graphs with a warning.
+- Core VGLC door parsing and stitched-room connection carving now use the
+  canonical `DOOR_POSITIONS` boundary slots, eliminating inner-wall door
+  detection and oversized connection carving.
+- `scripts/run_ablation_study.py` now includes `PURE_WFC_FLAT_PRIOR`, making
+  weighted Bayesian WFC versus flat-prior WFC a controlled ablation.
+- `scripts/generate_round5_scientific_gap_manifest.py` creates a reproducible
+  manifest for SPADE-vs-additive topology conditioning, fixed-graph fast
+  sampler latency-quality, and weighted-vs-flat WFC prior experiments.
+
+Research boundary:
+
+- SPADE, fast-sampler, and WFC-prior rows are ablation hypotheses until their
+  generated manifests are executed and archived with fixed seeds, checkpoint
+  hashes, paired metrics, and confidence intervals. The script prevents the
+  gap from being forgotten; it does not by itself prove the claims.
+
+Focused verification:
+
+- `python -m pytest tests/test_round5_audit_fixes.py tests/test_search_benchmark_utils.py -q`
+  passed with 15 tests.
+- `python scripts/generate_round5_scientific_gap_manifest.py --seeds 1 --epochs 1 --output-dir temp_round5_manifest_check`
+  wrote JSON/CSV successfully; the temporary output was removed after the
+  smoke test.

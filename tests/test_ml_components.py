@@ -80,6 +80,20 @@ class TestTortuosityLoss:
         
         assert prob_map.grad is not None
         assert not torch.isnan(prob_map.grad).any()
+
+    def test_tortuosity_value_iteration_uses_shortest_neighbor_not_sum(self):
+        from src.ml.logic_net import DifferentiableTortuosity
+
+        module = DifferentiableTortuosity(num_iterations=8)
+        prob_map = torch.ones(1, 1, 3, 5)
+
+        path_length = module.compute_soft_path_length(
+            prob_map,
+            start_coords=[(1, 0)],
+            goal_coords=[(1, 4)],
+        )
+
+        assert path_length.item() == pytest.approx(4.0, abs=1e-4)
     
     def test_combined_logic_loss(self):
         """Test combined solvability + tortuosity loss."""
@@ -177,6 +191,30 @@ class TestTortuosityLoss:
         # Straight path should have higher loss (more penalty)
         # This is a soft test since the losses depend on the actual path computation
         assert straight_loss.item() >= 0  # Should be non-negative
+
+
+def test_heuristic_admissibility_calibration_subtracts_observed_overestimate():
+    from src.ml.heuristic_learning import HeuristicTrainer
+
+    trainer = HeuristicTrainer(map_height=8, map_width=8)
+    with torch.no_grad():
+        for param in trainer.model.parameters():
+            param.zero_()
+        trainer.model.fc4.bias.fill_(10.0)
+
+    features = np.zeros((2, 10), dtype=np.float32)
+    true_costs = np.array([3.0, 4.0], dtype=np.float32)
+
+    trainer.enforce_admissibility(
+        scaling_factor=1.0,
+        validation_features=features,
+        true_costs=true_costs,
+    )
+
+    with torch.no_grad():
+        preds = trainer.model(torch.as_tensor(features)).squeeze(-1).numpy()
+
+    assert np.all(preds <= true_costs + 1e-6)
 
 
 # ============================================================================
@@ -408,7 +446,7 @@ class TestGraphGridAttention:
 
         assert torch.allclose(out_with_padded_edge, out_without_edge, atol=1e-6)
 
-    def test_graph_to_grid_edge_semantics_are_explicit_ablation():
+    def test_graph_to_grid_edge_semantics_are_explicit_ablation(self):
         from src.core.graph_grid_attention import GraphToGridCrossAttention
 
         torch.manual_seed(34)

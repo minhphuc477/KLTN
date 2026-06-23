@@ -802,9 +802,20 @@ class GraphToGridCrossAttention(nn.Module):
             and int(node_positions.shape[-1]) == 8
             and node_tpe is None
         )
+        legacy_argument_swap_with_edge_attr_slot = (
+            isinstance(edge_index, torch.Tensor)
+            and edge_index.dim() >= 2
+            and torch.is_floating_point(edge_index)
+            and int(edge_index.shape[-1]) == 2
+            and isinstance(edge_attr, torch.Tensor)
+            and edge_attr.dim() >= 2
+            and int(edge_attr.shape[-1]) == 8
+            and node_positions is None
+            and node_tpe is None
+        )
         # Backward-compatibility for older positional calls:
         # module(x, graph_nodes, node_positions, node_tpe)
-        if legacy_argument_swap and not self.allow_legacy_argument_swap:
+        if (legacy_argument_swap or legacy_argument_swap_with_edge_attr_slot) and not self.allow_legacy_argument_swap:
             raise ValueError(
                 "GraphToGridCrossAttention received legacy positional arguments that look like "
                 "(node_positions, node_tpe). Pass node_positions=... and node_tpe=... as keywords, "
@@ -813,6 +824,11 @@ class GraphToGridCrossAttention(nn.Module):
         if legacy_argument_swap:
             node_tpe = node_positions
             node_positions = edge_index
+            edge_index = None
+        elif legacy_argument_swap_with_edge_attr_slot:
+            node_tpe = edge_attr
+            node_positions = edge_index
+            edge_attr = None
             edge_index = None
 
         B, C, H, W = grid_features.shape

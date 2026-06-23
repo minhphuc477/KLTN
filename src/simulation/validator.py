@@ -2411,12 +2411,16 @@ class StateSpaceAStar:
                 elif et == 'switch':
                     if self.strict_original_mode:
                         current_room = self.env.get_room_for_position(src)
-                        # Reconstruct a temporary GameState from the tuple
-                        # state for is_room_cleared (current_state was undefined).
-                        _tmp_state = _GameState(position=pos, keys=keys, bombs=bombs,
-                                                has_boss_key=bk, has_item=has_item,
-                                                collected_items=frozenset(collected),
-                                                opened_doors=frozenset(opened))
+                        _tmp_state = self._room_level_game_state(
+                            room_pos=current_room,
+                            position=pos,
+                            keys=keys,
+                            bombs=bombs,
+                            has_boss_key=bk,
+                            has_item=has_item,
+                            collected=collected,
+                            opened=opened,
+                        )
                         if not self.env.is_room_cleared(current_room, _tmp_state):
                             continue
                 elif et == 'soft_locked':
@@ -2463,6 +2467,31 @@ class StateSpaceAStar:
     # Heuristic = graph BFS distance × average room diameter.
     # This reduces the search space from thousands of tiles to tens of nodes.
     # ------------------------------------------------------------------
+
+    def _room_level_game_state(
+        self,
+        *,
+        room_pos: Optional[Tuple[int, int]],
+        position: Tuple[int, int],
+        keys: int,
+        bombs: int,
+        has_boss_key: bool,
+        has_item: bool,
+        collected: FrozenSet[Tuple[int, int]],
+        opened: FrozenSet[Tuple[int, int]],
+    ) -> GameState:
+        """Reconstruct a tile-level state consistent with room-level abstraction."""
+        defeated = set(getattr(self.env, "_room_enemy_tiles", {}).get(room_pos, set()))
+        return GameState(
+            position=position,
+            keys=int(keys),
+            bomb_count=int(bombs),
+            has_boss_key=bool(has_boss_key),
+            has_item=bool(has_item),
+            collected_items=set(collected),
+            opened_doors=set(opened),
+            defeated_enemies=defeated,
+        )
 
     def _solve_room_level(self, search_mode: Optional[str] = None) -> Tuple[bool, List[Tuple[int, int]], int]:
         """
@@ -2708,15 +2737,17 @@ class StateSpaceAStar:
                                 if not ti: can = False
                             elif vet == 'switch':
                                 if self.strict_original_mode:
-                                    # `state` is a tuple here, not a GameState.
-                                    # Use the room-node from the outer loop and
-                                    # reconstruct a minimal GameState.
                                     current_room = n2r.get(vn)
-                                    _tmp_vs = _GameState(
+                                    _tmp_vs = self._room_level_game_state(
+                                        room_pos=current_room,
                                         position=self._room_node_to_pos.get(node, (0, 0)),
-                                        keys=vk, bombs=vb, has_boss_key=vbk, has_item=vi,
-                                        collected_items=frozenset(collected),
-                                        opened_doors=frozenset(opened))
+                                        keys=vk,
+                                        bombs=vb,
+                                        has_boss_key=vbk,
+                                        has_item=vi,
+                                        collected=collected,
+                                        opened=opened,
+                                    )
                                     if current_room is None or not self.env.is_room_cleared(current_room, _tmp_vs):
                                         can = False
                             elif vet == 'soft_locked':

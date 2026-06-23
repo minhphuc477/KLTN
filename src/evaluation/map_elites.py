@@ -240,13 +240,23 @@ class LinearityLeniencyExtractor(FeatureExtractor):
         
         for _node, data in graph.nodes(data=True):
             tokens = _node_tokens(data)
-            # Count only small keys toward lock leniency.
-            if 'k' in tokens or ('key' in tokens and 'boss_key' not in tokens):
+            node_type = str(data.get('type', '') or '').strip().upper()
+            has_boss_key = 'boss_key' in tokens or 'big_key' in tokens or node_type in {'BIG_KEY', 'BOSS_KEY'}
+            # Count small keys separately from boss keys so boss-door layouts are
+            # not incorrectly scored as fully lenient without a Big Key.
+            if not has_boss_key and ('k' in tokens or 'key' in tokens):
+                num_keys += 1
+            if has_boss_key:
                 num_keys += 1
         
         for _, _, data in graph.edges(data=True):
             constraints = set(_edge_tokens(data))
-            if 'key_locked' in constraints or 'locked' in constraints:
+            edge_type = str(data.get('edge_type', '') or '').strip().upper()
+            has_boss_lock = 'boss_locked' in constraints or edge_type == 'BOSS_LOCKED'
+            has_small_lock = ('key_locked' in constraints or 'locked' in constraints or edge_type == 'LOCKED') and not has_boss_lock
+            if has_small_lock:
+                num_locks += 1
+            if has_boss_lock:
                 num_locks += 1
         
         # Leniency: keys available vs keys needed
@@ -254,7 +264,7 @@ class LinearityLeniencyExtractor(FeatureExtractor):
             return 1.0  # No locks = maximum leniency
         
         # Extra keys ratio: capped at 2.0 so the archive can distinguish tight
-        # economies (leniency ≈ 1.0) from abundant ones (leniency > 1.0).
+        # economies (leniency about 1.0) from abundant ones (leniency > 1.0).
         # Values above 2.0 offer diminishing behavioral relevance.
         leniency = num_keys / num_locks
         return min(2.0, leniency)

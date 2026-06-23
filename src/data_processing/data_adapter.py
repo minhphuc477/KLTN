@@ -1,4 +1,4 @@
-﻿"""
+"""
 H-MOLQD Block I: Intelligent Data Adapter
 ==========================================
 
@@ -751,47 +751,98 @@ class PhaseAligner:
     def correct_boundaries(self, rooms: List[RoomTensor]) -> List[RoomTensor]:
         """
         Attempt to correct misaligned room boundaries.
-        
+
+        When the ``semantic_grid`` is shifted the ``char_grid``, ``doors``, and
+        ``contents`` must be shifted by the same offset so they remain aligned
+        with the corrected grid.
+
         Args:
             rooms: List of rooms to correct
-            
+
         Returns:
             List of corrected rooms
         """
         corrected = []
-        
+
         for room in rooms:
-            # Check for boundary issues
             grid = room.semantic_grid
-            
-            # Check if walls are properly placed at boundaries
+
             top_walls = np.sum(grid[0, :] == TileID.WALL)
             bottom_walls = np.sum(grid[-1, :] == TileID.WALL)
             left_walls = np.sum(grid[:, 0] == TileID.WALL)
             right_walls = np.sum(grid[:, -1] == TileID.WALL)
-            
-            # If boundaries seem off, try to fix
+
+            row_offset = 0
+            col_offset = 0
+            new_grid = grid
+
             if top_walls < 5 or bottom_walls < 5:
-                # Potentially misaligned - attempt correction
-                grid = self._shift_grid(grid, direction='vertical')
-            
+                new_grid, row_offset = self._shift_grid_with_offset(new_grid, direction='vertical')
+
             if left_walls < 5 or right_walls < 5:
-                grid = self._shift_grid(grid, direction='horizontal')
-            
-            # Create corrected room
+                new_grid, col_offset = self._shift_grid_with_offset(new_grid, direction='horizontal')
+
+            # Shift char_grid by the same offset.
+            new_char_grid = room.char_grid
+            if new_char_grid is not None and (row_offset != 0 or col_offset != 0):
+                new_char_grid = np.roll(new_char_grid, row_offset, axis=0)
+                new_char_grid = np.roll(new_char_grid, col_offset, axis=1)
+
+            # Shift door and content positions by the same offset.
+            def _shift_pos(pos_seq):
+                if not pos_seq:
+                    return pos_seq
+                shifted = []
+                for item in pos_seq:
+                    if isinstance(item, (tuple, list)) and len(item) >= 2:
+                        shifted.append((
+                            int(item[0]) + row_offset,
+                            int(item[1]) + col_offset,
+                            *item[2:],
+                        ))
+                    else:
+                        shifted.append(item)
+                return type(pos_seq)(shifted) if not isinstance(pos_seq, list) else shifted
+
+            new_doors = _shift_pos(room.doors) if (row_offset != 0 or col_offset != 0) else room.doors
+            new_contents = _shift_pos(room.contents) if (row_offset != 0 or col_offset != 0) else room.contents
+
             corrected_room = RoomTensor(
                 room_id=room.room_id,
                 position=room.position,
-                semantic_grid=grid,
-                char_grid=room.char_grid,
+                semantic_grid=new_grid,
+                char_grid=new_char_grid,
                 graph_node_id=room.graph_node_id,
-                contents=room.contents,
-                doors=room.doors,
+                contents=new_contents,
+                doors=new_doors,
                 features=room.features,
             )
             corrected.append(corrected_room)
-        
+
         return corrected
+
+    def _shift_grid_with_offset(
+        self, grid: np.ndarray, direction: str
+    ) -> tuple:
+        """Shift a grid to fix alignment; returns (shifted_grid, offset)."""
+        new_grid = self._shift_grid(grid, direction)
+        # Infer offset by comparing first rows/cols.
+        if np.array_equal(new_grid, grid):
+            return new_grid, 0
+        # Estimate offset via np.roll reversal: check shifts in [-tol, tol].
+        axis = 0 if direction == 'vertical' else 1
+        wall_id = int(TileID.WALL)
+        best_score = self._boundary_alignment_score(grid)
+        best_offset = 0
+        for offset in range(-self.tolerance, self.tolerance + 1):
+            if offset == 0:
+                continue
+            candidate = np.roll(grid, offset, axis=axis)
+            score = self._boundary_alignment_score(candidate)
+            if score > best_score:
+                best_score = score
+                best_offset = offset
+        return new_grid, best_offset
     
     def _shift_grid(self, grid: np.ndarray, direction: str) -> np.ndarray:
         """
@@ -1549,32 +1600,57 @@ class IntelligentDataAdapter:
         raise FileNotFoundError(f"No text file found for dungeon: {dungeon_id}")
     
     def _find_graph_file(self, dungeon_id: str) -> Path:
-        """Find DOT graph file for dungeon."""
+        """Find DOT graph file for dungeon.
+
+        Quest 1 (suffix ``_1``) and Quest 2 (suffix ``_2``) have different
+        topologies. VGLC Quest-2 graph files use ``LoZ2_X.dot``; older local
+        exports sometimes used ``LoZ_X_q2.dot``. Prefer the canonical VGLC
+        name before falling back to Quest 1 with a warning.
+        """
         # Map VGLC naming to graph naming
-        # tloz1_1 -> LoZ_1.dot
-        name_map = {
-            'tloz1_1': 'LoZ_1', 'tloz1_2': 'LoZ_1',
-            'tloz2_1': 'LoZ_2', 'tloz2_2': 'LoZ_2',
-            'tloz3_1': 'LoZ_3', 'tloz3_2': 'LoZ_3',
-            'tloz4_1': 'LoZ_4', 'tloz4_2': 'LoZ_4',
-            'tloz5_1': 'LoZ_5', 'tloz5_2': 'LoZ_5',
-            'tloz6_1': 'LoZ_6', 'tloz6_2': 'LoZ_6',
-            'tloz7_1': 'LoZ_7', 'tloz7_2': 'LoZ_7',
-            'tloz8_1': 'LoZ_8', 'tloz8_2': 'LoZ_8',
-            'tloz9_1': 'LoZ_9', 'tloz9_2': 'LoZ_9',
+        # tlozX_1 -> LoZ_X.dot  (Quest 1 canonical graph)
+        # tlozX_2 -> LoZ2_X.dot if present, else legacy LoZ_X_q2.dot, else
+        # LoZ_X.dot + warning
+        q1_map = {
+            'tloz1_1': 'LoZ_1', 'tloz2_1': 'LoZ_2', 'tloz3_1': 'LoZ_3',
+            'tloz4_1': 'LoZ_4', 'tloz5_1': 'LoZ_5', 'tloz6_1': 'LoZ_6',
+            'tloz7_1': 'LoZ_7', 'tloz8_1': 'LoZ_8', 'tloz9_1': 'LoZ_9',
         }
-        
-        graph_name = name_map.get(dungeon_id, dungeon_id)
-        graph_path = self.graph_dir / f"{graph_name}.dot"
-        
-        if graph_path.exists():
-            return graph_path
-        
-        # Try direct match
+        q2_map = {
+            'tloz1_2': ('LoZ2_1', 'LoZ_1_q2'), 'tloz2_2': ('LoZ2_2', 'LoZ_2_q2'), 'tloz3_2': ('LoZ2_3', 'LoZ_3_q2'),
+            'tloz4_2': ('LoZ2_4', 'LoZ_4_q2'), 'tloz5_2': ('LoZ2_5', 'LoZ_5_q2'), 'tloz6_2': ('LoZ2_6', 'LoZ_6_q2'),
+            'tloz7_2': ('LoZ2_7', 'LoZ_7_q2'), 'tloz8_2': ('LoZ2_8', 'LoZ_8_q2'), 'tloz9_2': ('LoZ2_9', 'LoZ_9_q2'),
+        }
+        is_quest2 = dungeon_id in q2_map
+
+        if is_quest2:
+            q2_graph_names = q2_map[dungeon_id]
+            for q2_graph_name in q2_graph_names:
+                q2_path = self.graph_dir / f"{q2_graph_name}.dot"
+                if q2_path.exists():
+                    return q2_path
+            # Fallback to Quest-1 graph with a clear warning.
+            q1_graph_name = q1_map.get(dungeon_id.replace('_2', '_1'), '')
+            fallback = self.graph_dir / f"{q1_graph_name}.dot" if q1_graph_name else None
+            if fallback and fallback.exists():
+                logger.warning(
+                    "Quest-2 graph files %s not found; falling back to Quest-1 graph '%s.dot'. "
+                    "This is a known topology mismatch ; provide Quest-2 DOT files for accurate training.",
+                    [f"{name}.dot" for name in q2_graph_names],
+                    q1_graph_name,
+                )
+                return fallback
+        elif dungeon_id in q1_map:
+            graph_name = q1_map[dungeon_id]
+            graph_path = self.graph_dir / f"{graph_name}.dot"
+            if graph_path.exists():
+                return graph_path
+
+        # Try direct match (legacy / non-standard naming)
         direct_path = self.graph_dir / f"{dungeon_id}.dot"
         if direct_path.exists():
             return direct_path
-        
+
         raise FileNotFoundError(f"No graph file found for dungeon: {dungeon_id}")
     
     def _build_layout_grid(self, rooms: List[RoomTensor]) -> np.ndarray:

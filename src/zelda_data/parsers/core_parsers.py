@@ -10,6 +10,7 @@ import numpy as np
 
 from src.core.definitions import (
     CHAR_TO_SEMANTIC,
+    DOOR_POSITIONS,
     ROOM_HEIGHT,
     ROOM_WIDTH,
     SEMANTIC_PALETTE,
@@ -166,17 +167,29 @@ class VGLCParser:
     def _detect_doors(self, char_grid: np.ndarray) -> Dict[str, bool]:
         doors = {}
 
-        north_row = "".join(char_grid[1, :]) if char_grid.shape[0] > 1 else ""
-        doors["N"] = "D" in north_row
+        north = DOOR_POSITIONS["N"]
+        n_row = int(north["row"])
+        n_c0, n_c1 = int(north["col_start"]), int(north["col_end"])
+        north_cells = char_grid[n_row, n_c0:n_c1] if char_grid.shape[0] > n_row else []
+        doors["N"] = "D" in north_cells
 
-        south_row = "".join(char_grid[14, :]) if char_grid.shape[0] > 14 else ""
-        doors["S"] = "D" in south_row
+        south = DOOR_POSITIONS["S"]
+        s_row = int(south["row"])
+        s_c0, s_c1 = int(south["col_start"]), int(south["col_end"])
+        south_cells = char_grid[s_row, s_c0:s_c1] if char_grid.shape[0] > s_row else []
+        doors["S"] = "D" in south_cells
 
-        west_col = "".join(char_grid[7:9, 1]) if char_grid.shape[1] > 1 else ""
-        doors["W"] = "D" in west_col
+        west = DOOR_POSITIONS["W"]
+        w_col = int(west["col"])
+        w_r0, w_r1 = int(west["row_start"]), int(west["row_end"])
+        west_cells = char_grid[w_r0:w_r1, w_col] if char_grid.shape[1] > w_col else []
+        doors["W"] = "D" in west_cells
 
-        east_col = "".join(char_grid[7:9, 9]) if char_grid.shape[1] > 9 else ""
-        doors["E"] = "D" in east_col
+        east = DOOR_POSITIONS["E"]
+        e_col = int(east["col"])
+        e_r0, e_r1 = int(east["row_start"]), int(east["row_end"])
+        east_cells = char_grid[e_r0:e_r1, e_col] if char_grid.shape[1] > e_col else []
+        doors["E"] = "D" in east_cells
 
         return doors
 

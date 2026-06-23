@@ -360,6 +360,37 @@ def test_learned_graphormer_centrality_excludes_synthetic_self_loops():
     assert attention.graphormer_out_degree.weight.grad[1].abs().sum() == pytest.approx(0.0)
 
 
+def test_learned_graphormer_directed_variant_respects_edge_direction():
+    from src.core.latent_diffusion import CrossAttention
+
+    torch.manual_seed(38)
+    directed = CrossAttention(
+        query_dim=16,
+        context_dim=16,
+        num_heads=4,
+        topology_refinement_mode="graphormer_learned_directed",
+        dropout=0.0,
+    )
+    undirected = CrossAttention(
+        query_dim=16,
+        context_dim=16,
+        num_heads=4,
+        topology_refinement_mode="graphormer_learned",
+        dropout=0.0,
+    )
+    undirected.load_state_dict(directed.state_dict())
+    context = torch.randn(1, 3, 16)
+    one_way = torch.tensor([[0], [1]], dtype=torch.long)
+    node_mask = torch.ones(1, 3, dtype=torch.bool)
+
+    with torch.no_grad():
+        out_directed = directed._refine_context_topology(context, edge_index=one_way, node_mask=node_mask)
+        out_undirected = undirected._refine_context_topology(context, edge_index=one_way, node_mask=node_mask)
+
+    assert torch.isfinite(out_directed).all()
+    assert not torch.allclose(out_directed, out_undirected)
+
+
 def test_sparse_edge_topology_refinement_mode_runs_as_large_graph_ablation():
     from src.core.latent_diffusion import CrossAttention
 

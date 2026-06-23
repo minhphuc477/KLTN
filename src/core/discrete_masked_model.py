@@ -23,6 +23,7 @@ from src.core.definitions import (
     ROOM_TOPOLOGY_CHANNEL_COUNT,
     ROOM_TOPOLOGY_CHANNELS,
     ROOM_WIDTH,
+    TileID,
 )
 
 logger = logging.getLogger(__name__)
@@ -342,6 +343,37 @@ class DiscreteMaskedRoomModel(nn.Module):
         )
         self.classifier = nn.Conv2d(self.hidden_dim, self.num_classes, kernel_size=1)
 
+        # --- Edge-Aware Logit Bias ---
+        # Pre-compute which class IDs are door-like vs wall-like for fast
+        # boundary masking at inference and training time.
+        _door_ids = [
+            int(TileID.DOOR_OPEN),
+            int(TileID.DOOR_LOCKED),
+            int(TileID.DOOR_BOMB),
+            int(TileID.DOOR_PUZZLE),
+            int(TileID.DOOR_BOSS),
+            int(TileID.DOOR_SOFT),
+        ]
+        _wall_id = int(TileID.WALL)
+        # Boolean mask over class dimension: True for door-class indices.
+        _door_class_mask = torch.zeros(self.num_classes, dtype=torch.bool)
+        for _d in _door_ids:
+            if _d < self.num_classes:
+                _door_class_mask[_d] = True
+        _wall_class_mask = torch.zeros(self.num_classes, dtype=torch.bool)
+        if _wall_id < self.num_classes:
+            _wall_class_mask[_wall_id] = True
+        self.register_buffer('_door_class_mask', _door_class_mask)
+        self.register_buffer('_wall_class_mask', _wall_class_mask)
+
+        # Topology channel indices for the four cardinal door channels.
+        self._topo_door_ch = {
+            'N': int(ROOM_TOPOLOGY_CHANNELS.get('door_n', -1)),
+            'S': int(ROOM_TOPOLOGY_CHANNELS.get('door_s', -1)),
+            'W': int(ROOM_TOPOLOGY_CHANNELS.get('door_w', -1)),
+            'E': int(ROOM_TOPOLOGY_CHANNELS.get('door_e', -1)),
+        }
+
     def attention_complexity_metrics(self, context_tokens: int) -> Dict[str, float]:
         return self.backbone.attention_complexity_metrics(
             context_tokens=int(context_tokens),
@@ -381,6 +413,108 @@ class DiscreteMaskedRoomModel(nn.Module):
     ) -> Tensor:
         uniform = torch.rand(shape, device=device, generator=generator).clamp_(1e-6, 1.0 - 1e-6)
         return -torch.log(-torch.log(uniform))
+
+    def _apply_edge_aware_logit_bias(
+        self,
+        logits: Tensor,
+        graph_data: Optional[Dict[str, Tensor]],
+        *,
+        bias_strength: float = 4.0,
+        door_threshold: float = 0.5,
+    ) -> Tensor:
+        """
+        Apply topology-conditioned boundary logit bias (edge-aware logits).
+
+        For each room boundary row/column the topology map's door channels are
+        consulted:
+        - If a door channel is active at a boundary cell → boost all DOOR_*
+          class logits and suppress the WALL class.
+        - If no door channel is active at a boundary cell → boost the WALL
+          class and suppress all DOOR_* class logits.
+
+        This prevents the MaskGIT from generating walls across open doorways or
+        open passages through solid boundary walls, which is the most common
+        structural violation observed during unconstrained sampling.
+
+        Args:
+            logits: Raw classifier logits ``[B, C, H, W]``.
+            graph_data: Optional graph conditioning dict.  Must contain
+                ``room_topology_map`` under that key.
+            bias_strength: Additive logit delta applied to preferred classes.
+            door_threshold: Minimum topology-channel activation to treat a
+                boundary cell as containing a door.
+
+        Returns:
+            Biased logits with the same shape as ``logits``.
+        """
+        if graph_data is None:
+            return logits
+        topo = graph_data.get('room_topology_map')
+        if not isinstance(topo, torch.Tensor):
+            return logits
+
+        B, C, H, W = logits.shape
+        topo = topo.to(logits.device)
+        if topo.dim() == 3:
+            topo = topo.unsqueeze(0)
+        if int(topo.shape[0]) == 1 and B > 1:
+            topo = topo.expand(B, -1, -1, -1)
+        if int(topo.shape[0]) != B or topo.shape[-2:] != (H, W):
+            # Shape mismatch – skip silently rather than crash.
+            return logits
+
+        bias = torch.zeros_like(logits)  # [B, C, H, W]
+        door_mask = self._door_class_mask.to(logits.device)  # [C]
+        wall_mask = self._wall_class_mask.to(logits.device)  # [C]
+
+        # --- boundary slice definitions and their door channels ---
+        boundary_specs = [
+            ('N', slice(0, 1),        slice(None),  topo[:, self._topo_door_ch['N'], 0:1,  :]),
+            ('S', slice(H - 1, H),    slice(None),  topo[:, self._topo_door_ch['S'], H-1:H, :]),
+            ('W', slice(None),        slice(0, 1),  topo[:, self._topo_door_ch['W'], :,  0:1]),
+            ('E', slice(None),        slice(W - 1, W), topo[:, self._topo_door_ch['E'], :,  W-1:W]),
+        ]
+
+        for direction, row_sl, col_sl, door_act in boundary_specs:
+            ch_idx = self._topo_door_ch[direction]
+            if ch_idx < 0 or ch_idx >= int(topo.shape[1]):
+                # Channel not present in this topology map – skip.
+                continue
+
+            # door_act: [B, 1, boundary_len] or [B, boundary_len, 1]
+            door_present = (door_act >= door_threshold)  # bool [B, h', w']
+
+            # [B, 1, h', w'] -> broadcast over C
+            door_present_4d = door_present.unsqueeze(1)   # [B, 1, h', w']
+
+            # Boost door logits where door is present; boost wall otherwise.
+            # Accumulate a fresh delta instead of rewriting the slice so corner
+            # cells receive both row and column boundary evidence.
+            bias_slice = bias[:, :, row_sl, col_sl]
+            delta = torch.where(
+                door_present_4d,
+                torch.where(
+                    door_mask.view(1, -1, 1, 1),
+                    torch.full_like(bias_slice, bias_strength),
+                    torch.where(
+                        wall_mask.view(1, -1, 1, 1),
+                        torch.full_like(bias_slice, -bias_strength),
+                        torch.zeros_like(bias_slice),
+                    ),
+                ),
+                torch.where(
+                    wall_mask.view(1, -1, 1, 1),
+                    torch.full_like(bias_slice, bias_strength),
+                    torch.where(
+                        door_mask.view(1, -1, 1, 1),
+                        torch.full_like(bias_slice, -bias_strength),
+                        torch.zeros_like(bias_slice),
+                    ),
+                ),
+            )
+            bias[:, :, row_sl, col_sl] = bias_slice + delta
+
+        return logits + bias
 
     def _apply_fixed_token_logits(
         self,
@@ -454,6 +588,11 @@ class DiscreteMaskedRoomModel(nn.Module):
                 dtype=torch.long,
             )
             logits, hidden = self.forward(tokens, step, context, graph_data=graph_data, return_hidden=True)
+            logits = self._apply_edge_aware_logit_bias(
+                logits,
+                graph_data,
+                bias_strength=float(getattr(self, '_edge_bias_strength', 4.0)),
+            )
             logits = self._apply_fixed_token_logits(logits, fixed_tokens=fixed_tokens, fixed_mask=fixed_mask)
 
             progress = float(i + 1) / float(max(1, total_steps))
@@ -889,6 +1028,7 @@ class DiscreteMaskedRoomModel(nn.Module):
         corrector_mask_ratio: float = 0.0,
         seed: Optional[int] = None,
         return_sampling_metrics: bool = False,
+        edge_bias_strength: float = 4.0,
     ) -> Any:
         batch_size = int(context.shape[0])
         device = context.device
@@ -920,6 +1060,8 @@ class DiscreteMaskedRoomModel(nn.Module):
         committed = fixed_mask.clone()
 
         initial_editable = (~fixed_mask).flatten(1).sum(dim=1).to(dtype=torch.float32)
+        # Store bias strength for use inside _iterative_fill via self.
+        self._edge_bias_strength = float(max(0.0, edge_bias_strength))
         tokens, logits, hidden, committed, initial_fill_metrics = self._iterative_fill(
             tokens=tokens,
             committed=committed,
@@ -946,6 +1088,11 @@ class DiscreteMaskedRoomModel(nn.Module):
                     torch.zeros(batch_size, device=device, dtype=torch.long),
                     context,
                     graph_data=graph_data,
+                )
+                logits = self._apply_edge_aware_logit_bias(
+                    logits,
+                    graph_data,
+                    bias_strength=self._edge_bias_strength,
                 )
                 logits = self._apply_fixed_token_logits(logits, fixed_tokens=fixed_tokens, fixed_mask=fixed_mask)
                 current_probs = F.softmax(

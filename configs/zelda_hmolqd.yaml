@@ -111,6 +111,8 @@ diffusion:
   dit_depth: 4  # type=int, default=4, valid>=1
   dit_patch_size: 1  # type=int, default=1, valid>=1
   dit_mlp_ratio: 4.0  # type=float, default=4.0, valid>=1
+  dit_activation_type: gelu  # type=str, default=gelu, valid={gelu,swiglu}; DiT MLP activation ablation
+  dit_norm_type: layer  # type=str, default=layer, valid={layer,rms}; DiT normalization ablation
   condition_hidden_dim: 192  # type=int, default=256, valid>=8; reduced default for small-data stability/cost
   condition_num_gnn_layers: 2  # type=int, default=3, valid>=1; shallower graph stack reduces over-smoothing and compute
   condition_num_attention_heads: 8  # type=int, default=8, valid>=1
@@ -124,11 +126,12 @@ diffusion:
   graph_conditioning_mode: node_sequence  # type=str, default=node_sequence, valid={node_sequence,pooled}
   num_timesteps: 1000  # type=int, default=1000, valid>=10
   schedule_type: cosine  # type=str, default=cosine, valid={linear,cosine}
-  topology_refinement_mode: gat2  # type=str, default=gat2, valid={none,lightweight,sparse_edge,sparse_directed,sparse_semantic,sparse_directed_semantic,gat2,gat2_directed,gat2_semantic,gat2_directed_semantic,graphormer,graphormer_learned,upgraded}
+  topology_refinement_mode: gat2  # type=str, default=gat2, valid={none,lightweight,sparse_edge,sparse_directed,sparse_semantic,sparse_directed_semantic,gat2,gat2_directed,gat2_semantic,gat2_directed_semantic,graphormer,graphormer_learned,graphormer_learned_directed,graphormer_learned_semantic,graphormer_learned_directed_semantic,upgraded}
   attention_mode: softmax  # type=str, default=softmax, valid={softmax,linear_hedgehog}
   topology_conditioning_mode: spade  # type=str, default=additive, valid={additive,spade}; SPADE-style affine modulation is recommended for room topology maps
   hedgehog_feature_dim: 32  # type=int, default=32, valid>=4
   graph_auto_linear_attention_nodes: 128  # type=int, default=128, valid>=0; 0 disables auto-switch to linear graph attention
+  graph_to_grid_edge_semantics: false  # type=bool, default=false, valid={true,false}; ablation for edge-label bias in spatial graph-to-grid attention
   spatial_graph_gate_init: -2.0  # type=float, default=-2.0
   spatial_topology_gate_init: -2.0  # type=float, default=-2.0
   use_teacher_forced_neighbor_latents: true  # type=bool, default=true, valid={true,false}; enables real-neighbor local conditioning during room-level training
