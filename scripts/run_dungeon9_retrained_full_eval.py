@@ -49,7 +49,8 @@ from src.pipeline.dungeon_pipeline import (  # noqa: E402
     NeuralSymbolicDungeonPipeline,
     pipeline_kwargs_from_resolved_config,
 )
-from src.simulation.validator import StateSpaceAStar, ZeldaLogicEnv  # noqa: E402
+from src.evaluation.search_benchmark_utils import run_astar_oracle  # noqa: E402
+from src.simulation.validator import ZeldaLogicEnv  # noqa: E402
 from src.zelda_data.splits import DEFAULT_TRAIN_DUNGEONS, DEFAULT_VARIANTS  # noqa: E402
 from src.zelda_data.zelda_core import ZeldaDungeonAdapter  # noqa: E402
 
@@ -174,13 +175,12 @@ def _specs_for_generated_rooms(
 def _dungeon_solvable(grid: np.ndarray, timeout: int) -> Tuple[bool, int, str]:
     try:
         env = ZeldaLogicEnv(semantic_grid=np.asarray(grid, dtype=np.int32))
-        solver = StateSpaceAStar(env, timeout=int(timeout), search_mode="astar")
-        success, path, stats = solver.solve()
-        path_len = len(path or []) if success else 0
-        reason = ""
-        if not success and isinstance(stats, Mapping):
-            reason = str(stats.get("reason", ""))
-        return bool(success), int(path_len), reason
+        result = run_astar_oracle(env, timeout=int(timeout))
+        return (
+            bool(result["success"]),
+            int(result["path_length"]),
+            str(result.get("failure_reason", "") or ""),
+        )
     except Exception as exc:  # noqa: BLE001 - persisted as diagnostic, not re-raised per sample.
         return False, 0, type(exc).__name__
 

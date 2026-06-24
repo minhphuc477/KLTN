@@ -326,7 +326,7 @@ def _calibrate_single(
 
     confusion_gap = _gap(target.avg_confusion_index, anchor.avg_confusion_index, scale=3.0)
     revisit_gap = _gap(target.avg_revisit_rate, anchor.avg_revisit_rate, scale=1.0)
-    effort_gap = _gap(target.avg_path_efficiency, anchor.avg_path_efficiency, scale=3.0)
+    efficiency_gap = _gap(target.avg_path_efficiency, anchor.avg_path_efficiency, scale=1.0)
     load_gap = _gap(target.avg_cognitive_load, anchor.avg_cognitive_load, scale=2.5)
     entropy_gap = _gap(target.avg_navigation_entropy, anchor.avg_navigation_entropy, scale=2.0)
     success_gap = _gap(target.success_rate, anchor.success_rate, scale=1.0)
@@ -335,7 +335,7 @@ def _calibrate_single(
     bounded_gap = _clamp(
         0.35 * confusion_gap
         + 0.25 * revisit_gap
-        + 0.20 * effort_gap
+        - 0.20 * efficiency_gap
         + 0.10 * load_gap
         + 0.10 * entropy_gap
         - 0.15 * success_gap,
@@ -390,7 +390,7 @@ def _anchor_from_config(config: PersonaConfig) -> TelemetryAggregate:
         avg_confusion_index=_clamp(0.25 + 1.8 * bounded, 0.0, 3.5),
         avg_navigation_entropy=_clamp(0.45 + 1.0 * config.random_tiebreaker, 0.0, 2.0),
         avg_cognitive_load=_clamp(0.45 + 1.4 * bounded, 0.0, 2.5),
-        avg_path_efficiency=_clamp(1.05 + 1.8 * bounded, 1.0, 4.0),
+        avg_path_efficiency=_clamp(1.0 - 0.65 * bounded, 0.0, 1.0),
         avg_decision_time_ms=_clamp(300.0 + 80.0 * config.deliberation_budget, 100.0, 2000.0),
     )
 
@@ -402,11 +402,13 @@ def _path_efficiency(row: Mapping[str, Any]) -> Optional[float]:
         row.get("avg_path_efficiency"),
     )
     if direct is not None:
-        return direct
+        return _clamp(direct, 0.0, 1.0)
     path_length = _first_number(row.get("path_length"), row.get("pcbs_path_length"), row.get("trajectory_length"))
     oracle_length = _first_number(row.get("oracle_path_length"), row.get("optimal_path_length"))
     if path_length is not None and oracle_length and oracle_length > 0:
-        return float(path_length) / float(oracle_length)
+        if path_length <= 0:
+            return 0.0
+        return _clamp(float(oracle_length) / float(path_length), 0.0, 1.0)
     return None
 
 

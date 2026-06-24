@@ -27,6 +27,7 @@ if str(ROOT) not in sys.path:
 
 from scripts.visualize_block_i_graphs import save_single_graph_figure
 from src.evaluation.pcbs_validation import prepare_dungeon_grid_for_validation
+from src.evaluation.search_benchmark_utils import path_transition_count
 from src.simulation.cognitive_bounded_search import CognitiveBoundedSearch
 from src.simulation.search_base import GameStateSearchConfig, SearchRepresentation
 from src.simulation.search_factory import iter_game_state_algorithm_specs, run_game_state_solver
@@ -161,7 +162,7 @@ def _run_tile_state_suite(
             "key": str(spec.key),
             "label": str(spec.label),
             "success": bool(result.success),
-            "path_length": int(len(result.path or [])),
+            "path_length": path_transition_count(result.path),
             "states_explored": int(result.states_explored or 0),
             "time_sec": elapsed,
             "metadata": dict(result.metadata or {}),
@@ -185,7 +186,7 @@ def _run_tile_state_suite(
             "key": "pcbs_balanced",
             "label": "P-CBS (balanced)",
             "success": bool(success),
-            "path_length": int(len(path or [])),
+            "path_length": path_transition_count(path),
             "states_explored": int(states or 0),
             "time_sec": elapsed,
             "path": [[int(r), int(c)] for r, c in list(path or [])],
@@ -207,7 +208,7 @@ def _run_tile_state_suite(
             "key": "graph_guided_oracle",
             "label": "Graph-guided oracle",
             "success": bool(graph_guided.get("solvable", False)),
-            "path_length": int(len(graph_path)),
+            "path_length": path_transition_count(graph_path),
             "states_explored": int(graph_guided.get("room_validation_count", 0) or 0),
             "time_sec": 0.0,
             "path": graph_path,

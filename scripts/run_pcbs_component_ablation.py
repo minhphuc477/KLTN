@@ -35,7 +35,11 @@ from src.evaluation.pcbs_validation import (
     count_pcbs_puzzle_stall_steps,
     prepare_dungeon_grid_for_validation,
 )
-from src.evaluation.search_benchmark_utils import confusion_ratio_vs_oracle, run_astar_oracle
+from src.evaluation.search_benchmark_utils import (
+    confusion_ratio_vs_oracle,
+    path_transition_count,
+    run_astar_oracle,
+)
 from src.simulation.cognitive_bounded_search import AgentPersona, CognitiveBoundedSearch, PersonaConfig
 from src.simulation.validator import ZeldaLogicEnv
 from src.zelda_data.zelda_core import ZeldaDungeonAdapter
@@ -212,7 +216,7 @@ def run_ablation(
                 elapsed_ms = (time.perf_counter() - started) * 1000.0
                 solver_status = "solved" if success else ("timeout" if int(states) >= int(timeout_pcbs) else "failed")
                 trajectory_length = int(len(path))
-                solution_path_length = trajectory_length if bool(success) else 0
+                solution_path_length = path_transition_count(path) if bool(success) else 0
                 confusion_ratio = confusion_ratio_vs_oracle(
                     int(oracle["path_length"]),
                     solution_path_length,

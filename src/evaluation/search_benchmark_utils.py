@@ -16,6 +16,16 @@ from src.simulation.search_status import oracle_status_from_outcome
 from src.simulation.validator import SolverDiagnostics, StateSpaceAStar
 
 
+def path_transition_count(path: Any) -> int:
+    """Count moves in a path whose sequence includes its starting state."""
+    if path is None:
+        return 0
+    try:
+        return max(0, len(path) - 1)
+    except TypeError:
+        return 0
+
+
 def safe_positive_int(value: Any, default: int = 1, maximum: int = 2_147_483_647) -> int:
     """Convert telemetry/config values to a bounded positive int without crashing."""
     try:

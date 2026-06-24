@@ -40,6 +40,7 @@ from src.simulation.cognitive_bounded_search import (
 from src.evaluation.search_benchmark_utils import (
     confusion_ratio_vs_oracle,
     finite_mean,
+    path_transition_count,
     path_efficiency_ratio,
     run_astar_oracle,
 )
@@ -115,7 +116,7 @@ def run_full_18(
                     'solver': 'A*', 'persona': 'optimal',
                     'success': int(success_a), 'path_length': pl_a,
                     'states_explored': states_a, 'PER': round(per_a, 4),
-                    'confusion_ratio': 1.0 if success_a else float('nan'),
+                    'confusion_ratio': 0.0 if success_a else float('nan'),
                     'confusion_index': 0.0, 'room_entropy': 0.0,
                     'replans': 0, 'confusion_events': 0, 'backtrack_loops': 0,
                     'cognitive_load': 0.0, 'aha_latency': 0,
@@ -142,7 +143,7 @@ def run_full_18(
                     )
                     success_c, path_c, states_c, metrics = cbs.solve()
                     dt_c = time.time() - t0
-                    pl_c = len(path_c)
+                    pl_c = path_transition_count(path_c)
                     per_c = path_efficiency_ratio(pl_c, manhattan)
                     cr = confusion_ratio_vs_oracle(
                         pl_a,
@@ -450,4 +451,3 @@ def _write_summary_json(rows: List[Dict[str, Any]], output_csv: str) -> None:
 
 if __name__ == '__main__':
     main()
-

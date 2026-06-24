@@ -340,8 +340,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\scripts\\ab_benchmark.py": {
-    "mtime": 1774382401.1885161,
-    "ast_hash": "f0737d2764eecea861687126b37b47bb",
+    "mtime": 1782310697.383914,
+    "ast_hash": "dc1991e1850a285472fe00f860c78ae0",
     "semantic_hash": ""
   },
   "F:\\KLTN\\scripts\\analyze_block_i_feature_distribution.py": {
@@ -535,8 +535,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\scripts\\generate_thesis_ch4_case_figures.py": {
-    "mtime": 1780240151.5648053,
-    "ast_hash": "8478b9bb84d331888a5081ef60147b05",
+    "mtime": 1782310456.9243078,
+    "ast_hash": "e5e2be812c33a6f7461de3e3c5e09835",
     "semantic_hash": ""
   },
   "F:\\KLTN\\scripts\\generate_thesis_report_figures.py": {
@@ -590,8 +590,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\scripts\\run_benchmark_18_levels.py": {
-    "mtime": 1780689160.061275,
-    "ast_hash": "48deef9aef5f1a2805a580b939d26bcf",
+    "mtime": 1782310403.1104558,
+    "ast_hash": "1698d53e66e90db8030670ea092c556f",
     "semantic_hash": ""
   },
   "F:\\KLTN\\scripts\\run_block_i_improvement_experiments.py": {
@@ -630,8 +630,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\scripts\\run_dungeon9_retrained_full_eval.py": {
-    "mtime": 1780240164.9267743,
-    "ast_hash": "070f998afcc4a6390c470405f982e203",
+    "mtime": 1782310426.2046874,
+    "ast_hash": "1e2437103db8c42efaf74bc3614133b8",
     "semantic_hash": ""
   },
   "F:\\KLTN\\scripts\\run_fairness_bias_audit.py": {
@@ -640,8 +640,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\scripts\\run_fast_sampler_visual_audit.py": {
-    "mtime": 1782197345.867964,
-    "ast_hash": "789ea57b15e70850a69b2cb89375103b",
+    "mtime": 1782310456.9147043,
+    "ast_hash": "0694371290aa9d2933df514500ce10e0",
     "semantic_hash": ""
   },
   "F:\\KLTN\\scripts\\run_fixed_graph_multi_seed_audit.py": {
@@ -650,8 +650,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\scripts\\run_full_benchmark.py": {
-    "mtime": 1780691321.7666075,
-    "ast_hash": "5e7b5409752275be257a08518a2d4cdf",
+    "mtime": 1782310293.360173,
+    "ast_hash": "cd3f821732b9d777ab255183b891acdb",
     "semantic_hash": ""
   },
   "F:\\KLTN\\scripts\\run_full_training_ablation_eval_parallel_2026_04_19.ps1": {
@@ -690,8 +690,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\scripts\\run_pcbs_component_ablation.py": {
-    "mtime": 1781916983.457188,
-    "ast_hash": "8a3982cc434aff6137cc6ee71746235f",
+    "mtime": 1782310403.1094458,
+    "ast_hash": "0c73518bc3b932870ada492e177616dc",
     "semantic_hash": ""
   },
   "F:\\KLTN\\scripts\\run_pcbs_persona_map_sweep.py": {
@@ -1030,8 +1030,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\evaluation\\pcbs_telemetry_calibration.py": {
-    "mtime": 1780563805.9395454,
-    "ast_hash": "73d7c34a3ef2a2fb9826a78c3c990be7",
+    "mtime": 1782310293.3641734,
+    "ast_hash": "5cf65869f2f1b1ce7313c864042163c7",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\evaluation\\pcbs_validation.py": {
@@ -1045,8 +1045,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\evaluation\\search_benchmark_utils.py": {
-    "mtime": 1782272764.8199112,
-    "ast_hash": "7d77ef4fd7d50d5d86c69e2e6f750cef",
+    "mtime": 1782310293.3561678,
+    "ast_hash": "23d2c064f3f0c2cf5c3e0fcfe2b6aa77",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\evaluation\\structural_metrics.py": {
@@ -3570,8 +3570,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_search_benchmark_utils.py": {
-    "mtime": 1780689497.2816837,
-    "ast_hash": "6b57d60fcbf00662d932193e500a8cf7",
+    "mtime": 1782310705.4689968,
+    "ast_hash": "0b60e4ff1423432f1d7d6555d518ea71",
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_search_factory.py": {
@@ -4070,8 +4070,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\docs\\architecture_audit_research_notes.md": {
-    "mtime": 1782296922.1133661,
-    "ast_hash": "dbbf238a1d4b19e270bf35871916f633",
+    "mtime": 1782310705.4699967,
+    "ast_hash": "9f09dd597e4c36a4670397877f2a2dcd",
     "semantic_hash": ""
   },
   "F:\\KLTN\\docs\\archive\\2026-q1\\ARCHITECTURE_RESEARCH_JUDGMENT_2026_02_24.md": {

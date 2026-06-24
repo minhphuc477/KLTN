@@ -40,6 +40,7 @@ from src.simulation.cognitive_bounded_search import (
 )
 from src.zelda_data.zelda_core import ZeldaDungeonAdapter
 from src.evaluation.search_benchmark_utils import (
+    path_transition_count,
     path_efficiency_ratio,
     run_astar_oracle,
 )
@@ -424,7 +425,7 @@ def run_solver(
             success, path, states, metrics = cbs.solve()
             
             result['success'] = success
-            result['path_length'] = len(path) if path else 0
+            result['path_length'] = path_transition_count(path)
             result['states_explored'] = states
             result['solver_status'] = (
                 'solved'
@@ -455,9 +456,9 @@ def run_solver(
                     result['confusion_ratio_kind'] = 'cbs_steps_per_unique_tile'
             
             # Path efficiency ratio
-            if success and len(path) > 0:
+            if success and result['path_length'] > 0:
                 manhattan = abs(env.goal_pos[0] - env.start_pos[0]) + abs(env.goal_pos[1] - env.start_pos[1])
-                result['PER'] = path_efficiency_ratio(len(path), manhattan)
+                result['PER'] = path_efficiency_ratio(result['path_length'], manhattan)
         
         result['time'] = time.time() - start_time
         

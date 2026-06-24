@@ -11,9 +11,11 @@ from src.evaluation.search_benchmark_utils import (
     normalized_confusion_ratio,
     oracle_status_from_outcome,
     path_efficiency_ratio,
+    path_transition_count,
     run_astar_oracle,
 )
 from src.simulation.validator import ZeldaLogicEnv
+from src.evaluation.pcbs_telemetry_calibration import _path_efficiency
 
 
 def _simple_grid() -> np.ndarray:
@@ -36,6 +38,25 @@ def test_path_efficiency_ratio_is_bounded_and_directionally_consistent():
     assert path_efficiency_ratio(10, 8) == 0.8
     assert path_efficiency_ratio(0, 8) == 0.0
     assert path_efficiency_ratio(8, 0) == 0.0
+
+
+def test_path_transition_count_excludes_the_starting_state():
+    assert path_transition_count([]) == 0
+    assert path_transition_count([(1, 1)]) == 0
+    assert path_transition_count([(1, 1), (1, 2), (2, 2)]) == 2
+
+
+def test_telemetry_path_efficiency_uses_bounded_oracle_over_candidate_ratio():
+    assert _path_efficiency({"path_length": 20, "oracle_path_length": 10}) == 0.5
+    assert _path_efficiency({"path_length": 5, "oracle_path_length": 10}) == 1.0
+    assert _path_efficiency({"path_efficiency": 1.5}) == 1.0
+
+
+def test_ab_benchmark_is_import_safe_and_headless():
+    from scripts import ab_benchmark
+
+    assert callable(ab_benchmark.main)
+    assert "gui_runner" not in ab_benchmark.__dict__
 
 
 def test_confusion_ratio_vs_oracle_returns_nan_when_oracle_not_resolved():

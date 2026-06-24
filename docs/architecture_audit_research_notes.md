@@ -166,6 +166,17 @@ better than the referenced methods.
   is `0.0`.
 - The main ablation runner now uses transition counts, the canonical
   A*/Dijkstra oracle wrapper, and the same excess-path confusion definition.
+- Legacy benchmark, fast-sampler audit, Dungeon-9 evaluation, and Chapter-4
+  figure scripts now use the same transition-count helper; they no longer mix
+  visited-state counts with movement counts.
+- Path efficiency is consistently bounded as `oracle_length / candidate_length`
+  in `[0, 1]`. Telemetry calibration no longer treats the inverse path-effort
+  ratio as efficiency, and higher efficiency now reduces inferred boundedness.
+- The explicitly labeled `cbs_steps_per_unique_tile` metric remains a separate
+  revisit-density descriptor and must not be reported as oracle-relative
+  confusion.
+- The priority-mode A/B benchmark is import-safe and headless; it constructs a
+  prepared `ZeldaLogicEnv` directly instead of instantiating the GUI runner.
 - A* timeout is reported as indeterminate rather than mislabeled unsolvable in
   CBS fitness.
 - P-CBS suboptimal-decision accounting uses the same graph-aware navigation

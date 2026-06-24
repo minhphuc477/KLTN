@@ -62,6 +62,7 @@ from src.evaluation.end_to_end_level_metrics import (
     compute_end_to_end_structural_metrics,
     load_reference_room_texts,
 )
+from src.evaluation.search_benchmark_utils import confusion_ratio_vs_oracle, path_transition_count
 from src.simulation.search_factory import (
     VALIDATION_EXCLUDED_ALGORITHMS,
     iter_game_state_algorithm_specs,
@@ -731,7 +732,7 @@ def _compute_generation_validation(
                 elapsed = float(time.perf_counter() - started)
                 entry = {
                     "success": bool(result.success),
-                    "path_length": int(len(result.path or [])),
+                    "path_length": path_transition_count(result.path),
                     "states_explored": int(result.states_explored or 0),
                     "time_sec": elapsed,
                     "algorithm": str(result.algorithm),
@@ -910,11 +911,12 @@ def _compute_generation_validation(
                 logger.debug("Failed to close C-BS validation environment.", exc_info=True)
 
         optimal_path_length = int(getattr(grid_result, "path_length", 0) or 0)
-        cbs_path_length = int(len(cbs_path or []))
-        confusion_ratio = (
-            float(cbs_path_length) / float(max(1, optimal_path_length))
-            if optimal_path_length > 0 and cbs_success
-            else float("inf")
+        cbs_path_length = path_transition_count(cbs_path)
+        confusion_ratio = confusion_ratio_vs_oracle(
+            optimal_path_length,
+            cbs_path_length,
+            oracle_status="solved" if bool(getattr(grid_result, "is_solvable", False)) else "no_path",
+            candidate_success=bool(cbs_success),
         )
         payload["cbs_balanced"] = {
             "seed": 123,
