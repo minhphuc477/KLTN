@@ -22,6 +22,7 @@ from src.evaluation.pcbs_validation import (
 )
 from src.evaluation.validator import AgentSimulator, SolvabilityChecker, ValidationState
 from src.simulation.validation_helpers import SanityChecker
+from src.simulation.validator import GameState, StateSpaceAStar, ZeldaLogicEnv
 
 
 def test_semantic_export_preserves_entity_tiles_roundtrip():
@@ -519,6 +520,49 @@ def test_key_economy_treats_boss_keys_as_persistent_for_multiple_boss_doors():
     assert result.greedy_solvable
     assert result.adversarial_solvable
     assert result.is_valid
+
+
+def test_graph_warp_consumes_each_small_key_once_per_edge():
+    grid = np.full((48, 11), int(SEMANTIC_PALETTE["FLOOR"]), dtype=np.int64)
+    grid[0, 0] = int(SEMANTIC_PALETTE["START"])
+    grid[-1, -1] = int(SEMANTIC_PALETTE["TRIFORCE"])
+    graph = nx.DiGraph()
+    graph.add_edges_from(
+        [
+            (0, 1, {"edge_type": "key_locked"}),
+            (1, 2, {"edge_type": "key_locked"}),
+        ]
+    )
+    room_positions = {(0, 0): (0, 0), (1, 0): (16, 0), (2, 0): (32, 0)}
+    room_to_node = {(0, 0): 0, (1, 0): 1, (2, 0): 2}
+    env = ZeldaLogicEnv(
+        grid,
+        graph=graph,
+        room_positions=room_positions,
+        room_to_node=room_to_node,
+        node_to_room={0: (0, 0), 1: (1, 0), 2: (2, 0)},
+    )
+    solver = StateSpaceAStar(env)
+    state = GameState(position=(1, 1), keys=1)
+
+    opened, after_first = solver.apply_graph_edge_transition(
+        state,
+        (1, 1),
+        (17, 1),
+        "key_locked",
+    )
+    after_first.position = (17, 1)
+    blocked, _after_second = solver.apply_graph_edge_transition(
+        after_first,
+        (17, 1),
+        (33, 1),
+        "key_locked",
+    )
+
+    assert opened is True
+    assert after_first.keys == 0
+    assert len(after_first.opened_graph_edges) == 1
+    assert blocked is False
 
 
 def test_solver_comparison_uses_canonical_bomb_and_item_transitions():

@@ -136,7 +136,7 @@ class SolverComparison:
                 name="A*",
                 success=success,
                 path=path,
-                path_length=len(path),
+                path_length=max(0, len(path) - 1),
                 states_explored=states,
                 time_taken=elapsed,
                 optimality=1.0  # Will be updated later
@@ -170,7 +170,7 @@ class SolverComparison:
                     name="BFS",
                     success=True,
                     path=path,
-                    path_length=len(path),
+                    path_length=max(0, len(path) - 1),
                     states_explored=states_explored,
                     time_taken=elapsed,
                     optimality=1.0
@@ -234,7 +234,7 @@ class SolverComparison:
                     name="Dijkstra",
                     success=True,
                     path=path,
-                    path_length=len(path),
+                    path_length=max(0, len(path) - 1),
                     states_explored=states_explored,
                     time_taken=elapsed,
                     optimality=1.0
@@ -306,7 +306,7 @@ class SolverComparison:
                     name="Greedy",
                     success=True,
                     path=path,
-                    path_length=len(path),
+                    path_length=max(0, len(path) - 1),
                     states_explored=states_explored,
                     time_taken=elapsed,
                     optimality=1.0

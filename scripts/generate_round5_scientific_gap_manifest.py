@@ -108,6 +108,11 @@ def build_experiments(args: argparse.Namespace) -> List[GapExperiment]:
                         str(int(args.epochs)),
                         "--seed",
                         str(seed),
+                        *(
+                            ["--vqvae-checkpoint", str(args.vqvae_checkpoint)]
+                            if args.vqvae_checkpoint is not None
+                            else []
+                        ),
                         *list(args.extra_train_args or []),
                     ],
                 )
@@ -442,7 +447,11 @@ def execute_manifest(payload: Dict[str, Any]) -> None:
         start = time.perf_counter()
         completed = subprocess.run(command, cwd=str(ROOT), check=False)
         run["elapsed_sec"] = float(time.perf_counter() - start)
-        run["status"] = "passed" if completed.returncode == 0 else "failed"
+        run["status"] = (
+            "process_completed_unverified"
+            if completed.returncode == 0
+            else "failed"
+        )
         run["returncode"] = int(completed.returncode)
 
 
@@ -487,6 +496,16 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
+    if args.execute:
+        if args.vqvae_checkpoint is None:
+            raise ValueError(
+                "--execute requires --vqvae-checkpoint so diffusion ablations "
+                "cannot silently train against a random tokenizer."
+            )
+        if not args.vqvae_checkpoint.exists():
+            raise FileNotFoundError(
+                f"VQ-VAE checkpoint does not exist: {args.vqvae_checkpoint}"
+            )
     manifest_path = args.manifest or (Path(args.output_dir) / "round5_scientific_gap_manifest.json")
     csv_path = args.csv or manifest_path.with_suffix(".csv")
     payload = build_manifest(args)

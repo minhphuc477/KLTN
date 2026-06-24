@@ -97,6 +97,7 @@ def _command_for(
     variant: ArchitectureVariant,
     seed: int,
     epochs: int,
+    vqvae_checkpoint: Path,
     extra_args: Sequence[str],
 ) -> List[str]:
     checkpoint_dir = output_dir / variant.name / f"seed_{seed}" / "checkpoints"
@@ -113,6 +114,8 @@ def _command_for(
         str(int(epochs)),
         "--seed",
         str(int(seed)),
+        "--vqvae-checkpoint",
+        str(vqvae_checkpoint),
     ]
     if variant.denoiser_backbone == "dit":
         command.extend(
@@ -168,6 +171,18 @@ def build_plan(args: argparse.Namespace) -> Dict[str, Any]:
     output_dir = Path(args.output_dir)
     seeds = _parse_seeds(args.seeds)
     variants = build_variants()
+    configured_vqvae = (
+        getattr(args, "vqvae_checkpoint", None)
+        or resolved.get("diffusion", {}).get("vqvae_checkpoint")
+    )
+    vqvae_checkpoint = Path(configured_vqvae or "REQUIRED_VQVAE_CHECKPOINT")
+    if args.execute and not configured_vqvae:
+        raise ValueError(
+            "--execute requires --vqvae-checkpoint or "
+            "diffusion.vqvae_checkpoint in the base config."
+        )
+    if args.execute and not vqvae_checkpoint.exists():
+        raise FileNotFoundError(f"VQ-VAE checkpoint does not exist: {vqvae_checkpoint}")
     runs: List[Dict[str, Any]] = []
     for variant in variants:
         for seed in seeds:
@@ -178,6 +193,7 @@ def build_plan(args: argparse.Namespace) -> Dict[str, Any]:
                 variant=variant,
                 seed=seed,
                 epochs=args.epochs,
+                vqvae_checkpoint=vqvae_checkpoint,
                 extra_args=list(args.extra_args or []),
             )
             runs.append(
@@ -193,6 +209,7 @@ def build_plan(args: argparse.Namespace) -> Dict[str, Any]:
         "script": Path(__file__).name,
         "mode": "execute" if args.execute else "plan",
         "config": str(config_path),
+        "vqvae_checkpoint": str(vqvae_checkpoint),
         "resolved_output_dir": str(resolved["runtime"]["output_dir"]),
         "output_dir": str(output_dir),
         "required_metrics": [
@@ -214,7 +231,11 @@ def execute_plan(payload: Dict[str, Any]) -> None:
         start = time.perf_counter()
         completed = subprocess.run(run["command"], cwd=str(ROOT), check=False)
         run["elapsed_sec"] = float(time.perf_counter() - start)
-        run["status"] = "passed" if completed.returncode == 0 else "failed"
+        run["status"] = (
+            "process_completed_unverified"
+            if completed.returncode == 0
+            else "failed"
+        )
         run["returncode"] = int(completed.returncode)
 
 
@@ -224,6 +245,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", default="results/model_architecture_ablations")
     parser.add_argument("--seeds", default="42")
     parser.add_argument("--epochs", type=int, default=1)
+    parser.add_argument("--vqvae-checkpoint", type=Path, default=None)
     parser.add_argument("--python", default=sys.executable)
     parser.add_argument("--execute", action="store_true")
     parser.add_argument(

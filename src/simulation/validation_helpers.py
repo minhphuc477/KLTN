@@ -121,7 +121,7 @@ class MetricsEngine:
         if manhattan == 0:
             return 1.0
 
-        return min(1.0, manhattan / len(path))
+        return min(1.0, manhattan / max(1, len(path) - 1))
 
     @staticmethod
     def find_logical_errors(env: Any, path: List[Tuple[int, int]]) -> List[str]:

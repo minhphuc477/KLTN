@@ -361,9 +361,10 @@ def _metrics_from_path(
     success_rate: float,
     final_success: bool,
 ) -> RLAblationMetrics:
-    total_steps = len(path)
+    trajectory_visits = len(path)
+    total_steps = max(0, trajectory_visits - 1)
     unique_tiles = len(set(path))
-    revisits = max(0, total_steps - unique_tiles)
+    revisits = max(0, trajectory_visits - unique_tiles)
     expected_revisits = float(unique_tiles) * math.log(float(max(2, unique_tiles)))
     confusion = float(revisits) / max(1.0, expected_revisits)
     direction_counts: DefaultDict[str, int] = defaultdict(int)
@@ -374,7 +375,7 @@ def _metrics_from_path(
     entropy = _entropy(direction_counts.values())
     lower_bound = 1
     if start is not None and goal is not None:
-        lower_bound = max(1, _manhattan(start, goal) + 1)
+        lower_bound = max(1, _manhattan(start, goal))
     cognitive_load = min(1.0, float(unique_tiles) / float(max(1, memory_capacity * 3)))
     return RLAblationMetrics(
         reward_variant=str(reward_variant),

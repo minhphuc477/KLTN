@@ -762,11 +762,18 @@ class ZeldaDungeonDataset(Dataset):
     def _init_text_files(self) -> None:
         """Initialize dataset from text files."""
         self.files = [
-            self.data_dir / f 
-            for f in os.listdir(self.data_dir) 
+            self.data_dir / f
+            for f in sorted(os.listdir(self.data_dir))
             if f.endswith('.txt')
         ]
         self.samples = None  # Lazy loading
+        if self.pad_to_max and self.target_size is None:
+            for path in self.files:
+                grid = self._load_text_file(path)
+                if grid.ndim != 2:
+                    raise ValueError(f"Expected a 2D dungeon grid in {path}, got shape {grid.shape}.")
+                self.max_h = max(self.max_h, int(grid.shape[0]))
+                self.max_w = max(self.max_w, int(grid.shape[1]))
         
     def _init_vglc(self) -> None:
         """Initialize dataset from VGLC format."""
@@ -961,6 +968,9 @@ class ZeldaDungeonDataset(Dataset):
         """Get raw numpy array for a dungeon (before transforms)."""
         if self.samples is not None:
             return self.samples[idx]
+        if self.use_vglc:
+            grid, _graph = self._load_vglc_sample(idx)
+            return grid
         return self._load_text_file(self.files[idx])
 
 

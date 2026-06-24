@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List
 
+import yaml
 
 VARIANTS: List[Dict[str, Any]] = [
     {
@@ -63,7 +64,17 @@ def _deep_merge(base: Dict[str, Any], patch: Dict[str, Any]) -> Dict[str, Any]:
     return merged
 
 
+def _load_base_config(path: Path) -> Dict[str, Any]:
+    if not path.exists():
+        raise FileNotFoundError(f"Base config does not exist: {path}")
+    loaded = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    if not isinstance(loaded, dict):
+        raise ValueError(f"Base config {path} must contain a mapping.")
+    return loaded
+
+
 def build_manifest(args: argparse.Namespace) -> Dict[str, Any]:
+    base_config = _load_base_config(args.base_config)
     runs = []
     for variant in VARIANTS:
         config_patch = _deep_merge(
@@ -75,6 +86,7 @@ def build_manifest(args: argparse.Namespace) -> Dict[str, Any]:
             },
             variant["overrides"],
         )
+        resolved_config = _deep_merge(base_config, config_patch)
         config_path = args.output_dir / variant["name"] / "config.json"
         command = [
             "python",
@@ -89,7 +101,7 @@ def build_manifest(args: argparse.Namespace) -> Dict[str, Any]:
                 "description": variant["description"],
                 "base_config": str(args.base_config),
                 "config_path": str(config_path),
-                "config": config_patch,
+                "config": resolved_config,
                 "manual_command": " ".join(command),
             }
         )

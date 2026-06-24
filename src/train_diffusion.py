@@ -1263,7 +1263,7 @@ class DiffusionTrainer:
             elif group_name.endswith("_decay"):
                 group["decay_policy"] = "decay"
                 group["name"] = group_name[: -len("_decay")]
-            group.setdefault("base_lr", float(config.learning_rate))
+            group.setdefault("base_lr", float(group.get("lr", config.learning_rate)))
 
         self.optimizer = optim.AdamW(
             optimizer_groups,
@@ -1271,7 +1271,7 @@ class DiffusionTrainer:
             weight_decay=0.0,
         )
         for group in self.optimizer.param_groups:
-            group.setdefault("base_lr", float(config.learning_rate))
+            group.setdefault("base_lr", float(group.get("lr", config.learning_rate)))
 
         # --- Accelerate / AMP integration ---
         self._accelerator: Optional[Any] = None
@@ -2727,6 +2727,7 @@ class DiffusionTrainer:
             confidence, pred_ids = probs.max(dim=1)
             threshold = float(getattr(self.config, "wfc_pseudo_confidence_threshold", 0.75))
             repair_targets: List[torch.Tensor] = []
+            repaired_indices: List[int] = []
             limit = min(int(pred_tile_logits.shape[0]), max_samples)
             wfc_config = WeightedBayesianWFCConfig(
                 use_vqvae_priors=True,
@@ -2753,11 +2754,17 @@ class DiffusionTrainer:
                     dtype=torch.long,
                 ).clamp(0, int(getattr(self.config, "num_classes", 44)) - 1)
                 repair_targets.append(target)
+                repaired_indices.append(sample_idx)
 
         if not repair_targets:
             return zero, 0.0, zero
         target_batch = torch.stack(repair_targets, dim=0)
-        logits = pred_tile_logits[: target_batch.shape[0]]
+        selected = torch.as_tensor(
+            repaired_indices,
+            device=pred_tile_logits.device,
+            dtype=torch.long,
+        )
+        logits = pred_tile_logits.index_select(0, selected)
         repaired_mean = F.cross_entropy(logits, target_batch, reduction="mean")
         full_batch_loss = F.cross_entropy(logits, target_batch, reduction="sum") / float(
             max(1, int(target_batch.shape[0]) * int(pred_tile_logits.shape[2]) * int(pred_tile_logits.shape[3]))
@@ -2904,7 +2911,8 @@ class DiffusionTrainer:
             scale = global_scale
             if group.get("name") == "logic_net":
                 scale = min(scale, logic_scale)
-            group["lr"] = base_lr * scale
+            if scale < 1.0:
+                group["lr"] = base_lr * scale
 
     def _effective_logic_loss_weight(self, include_logic_loss: bool) -> float:
         """Linearly ramp alpha_logic after the warmup boundary."""
@@ -3288,10 +3296,10 @@ class DiffusionTrainer:
         self._accumulation_micro_steps = 0
 
         self.global_step += 1
-        self._apply_lr_warmup(completed_steps=self.global_step)
         scheduler = getattr(self, "scheduler", None)
         if scheduler is not None:
             scheduler.step()
+        self._apply_lr_warmup(completed_steps=self.global_step)
 
         # --- Phase 1D: Anneal LogicNet temperature ---
         # Use estimated total steps from config instead of hardcoded epochs*100
@@ -3564,8 +3572,6 @@ class DiffusionTrainer:
                     f"logic_loss={metrics['logic_loss']:.4f}"
                 )
         
-        self.epoch += 1
-
         metrics_sum["num_batches"] = float(num_batches)
         reduced = reduce_scalar_metrics(
             metrics_sum,
@@ -3617,7 +3623,10 @@ class DiffusionTrainer:
         num_hard_solvability_eval = 0
         num_repaired_solvability_eval = 0
         total_logic_tile_accuracy = 0.0
+        total_logic_tile_loss = 0.0
         num_logic_tile_eval = 0
+        total_wfc_pseudo_loss = 0.0
+        total_wfc_pseudo_samples = 0.0
         logic_eval_enabled = bool(getattr(self.config, "logic_net_enabled", True))
         num_generated_eval = 0 if logic_eval_enabled else int(num_samples)
         skipped_nonfinite = 0
@@ -3671,10 +3680,12 @@ class DiffusionTrainer:
                     tile_logits = self.logic_net.tile_classifier(z_0.detach())
                     if hasattr(self.logic_net, "_project_tile_logits_to_room"):
                         tile_logits = self.logic_net._project_tile_logits_to_room(tile_logits)
+                    tile_loss = F.cross_entropy(tile_logits, tile_targets)
                     tile_accuracy = (tile_logits.argmax(dim=1) == tile_targets).float().mean()
-                    if self._tensor_is_finite(tile_accuracy):
+                    if self._tensor_is_finite(tile_accuracy) and self._tensor_is_finite(tile_loss):
                         batch_logic_tile_accuracy = float(tile_accuracy.detach().item())
                         total_logic_tile_accuracy += batch_logic_tile_accuracy * batch_size
+                        total_logic_tile_loss += float(tile_loss.detach().item()) * batch_size
                         num_logic_tile_eval += batch_size
                 except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                     logger.debug("LogicNet tile-classifier validation failed; omitting tile accuracy: %s", exc)
@@ -3760,6 +3771,13 @@ class DiffusionTrainer:
                         if hasattr(self, "vqvae") and hasattr(self.vqvae, "decode"):
                             try:
                                 decoded = self._decode_latent_for_logic(z_gen[:generated_batch])
+                                wfc_loss, wfc_samples, _wfc_mean = self._wfc_pseudo_label_loss(
+                                    decoded,
+                                    real_maps[:generated_batch],
+                                )
+                                if wfc_samples > 0.0 and self._tensor_is_finite(wfc_loss):
+                                    total_wfc_pseudo_loss += float(wfc_loss.detach().item()) * float(wfc_samples)
+                                    total_wfc_pseudo_samples += float(wfc_samples)
                                 hard_solvability = self._compute_hard_solvability(decoded)
                                 total_hard_solvability += hard_solvability * generated_batch
                                 num_hard_solvability_eval += generated_batch
@@ -3818,17 +3836,24 @@ class DiffusionTrainer:
         )
         val_diffusion_loss = total_diffusion_loss / max(num_diffusion_eval, 1)
         val_logic_loss = total_logic_loss / max(num_generated_eval, 1)
-        val_total_loss = compute_teacher_validation_total_loss(
-            val_diffusion_loss=val_diffusion_loss,
-            val_logic_loss=val_logic_loss,
-            alpha_visual=float(getattr(self.config, "alpha_visual", 1.0)),
-            alpha_logic=float(getattr(self.config, "alpha_logic", 0.0)),
-            include_logic_loss=bool(include_logic),
+        val_logic_tile_loss = total_logic_tile_loss / max(num_logic_tile_eval, 1)
+        val_wfc_pseudo_loss = (
+            total_wfc_pseudo_loss / total_wfc_pseudo_samples
+            if total_wfc_pseudo_samples > 0.0
+            else 0.0
+        )
+        val_total_loss = (
+            float(getattr(self.config, "alpha_visual", 1.0)) * val_diffusion_loss
+            + self._effective_logic_loss_weight(bool(include_logic)) * val_logic_loss
+            + float(getattr(self.config, "alpha_logic_tile", 0.0)) * val_logic_tile_loss
+            + float(getattr(self.config, "alpha_wfc_pseudo", 0.0)) * val_wfc_pseudo_loss
         )
 
         return {
             'val_diffusion_loss': val_diffusion_loss,
             'val_logic_loss': val_logic_loss,
+            'val_logic_tile_loss': val_logic_tile_loss,
+            'val_wfc_pseudo_loss': val_wfc_pseudo_loss,
             'val_total_loss': val_total_loss,
             'val_solvability_proxy': total_solvability_proxy / max(num_generated_eval, 1),
             'val_solvability': total_solvability_proxy / max(num_generated_eval, 1),
@@ -3853,6 +3878,7 @@ class DiffusionTrainer:
             'logic_net_state_dict': self.logic_net.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
             'scheduler_state_dict': self.scheduler.state_dict(),
+            'grad_scaler_state_dict': self._grad_scaler.state_dict(),
             'config': self.config.to_dict(),
             'metrics': metrics,
             # Store schedule/prediction type for inference consistency
@@ -4114,6 +4140,15 @@ class DiffusionTrainer:
                     "Skipping scheduler state from %s because %s: %s",
                     path,
                     reason,
+                    exc,
+                )
+        if 'grad_scaler_state_dict' in checkpoint:
+            try:
+                self._grad_scaler.load_state_dict(checkpoint['grad_scaler_state_dict'])
+            except (RuntimeError, ValueError, TypeError) as exc:
+                logger.warning(
+                    "Skipping AMP GradScaler state from %s because it is incompatible: %s",
+                    path,
                     exc,
                 )
         

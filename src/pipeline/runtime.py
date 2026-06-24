@@ -606,10 +606,7 @@ def supports_room_generation(pipeline) -> bool:
             and getattr(pipeline, "masked_room_model", None) is not None
         )
     if str(getattr(pipeline, "default_latent_sampler", "diffusion") or "diffusion").strip().lower() == "categorical":
-        return (
-            pipeline.vqvae is not None
-            and pipeline.condition_encoder is not None
-        )
+        return pipeline.vqvae is not None
     return (
         pipeline.vqvae is not None
         and pipeline.condition_encoder is not None
@@ -661,6 +658,8 @@ def _require_room_generation_components(
             else ('vqvae', 'condition_encoder', 'diffusion')
         )
     )
+    if sampler_mode == "categorical" and mode != "discrete_masked":
+        required = ('vqvae',)
     missing = [name for name in required if getattr(pipeline, name, None) is None]
     if missing:
         raise MissingPipelineComponentError(

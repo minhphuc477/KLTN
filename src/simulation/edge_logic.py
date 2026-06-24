@@ -13,7 +13,7 @@ def edge_constraints_from_data(edge_data: Optional[Dict[str, Any]]) -> List[str]
         return ["open"]
     return parse_edge_type_tokens(
         label=edge_data.get("label", ""),
-        edge_type=edge_data.get("edge_type", ""),
+        edge_type=edge_data.get("edge_type", edge_data.get("type", "")),
     )
 
 

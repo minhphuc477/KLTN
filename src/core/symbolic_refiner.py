@@ -489,7 +489,6 @@ class PathAnalyzer:
 
         while queue:
             node, keys, has_boss_key = queue.popleft()
-            state = (node, min(keys, max_small_keys), bool(has_boss_key))
             if node == goal_node:
                 return True
 
@@ -522,7 +521,6 @@ class PathAnalyzer:
 
         while queue:
             node, keys, has_boss_key = queue.popleft()
-            state = (node, min(keys, max_small_keys), bool(has_boss_key))
 
             for next_node in graph.successors(node):
                 edge_data = dict(graph.edges[node, next_node])

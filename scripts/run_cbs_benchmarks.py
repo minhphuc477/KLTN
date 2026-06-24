@@ -164,7 +164,7 @@ def run_bench(
                     'focus_guided_steps': 0,
                     'oracle_status': str(astar_payload['status']),
                     'oracle_failure_reason': str(astar_payload['failure_reason']),
-                    'confusion_ratio': 1.0 if success_a else float('nan'),
+                    'confusion_ratio': 0.0 if success_a else float('nan'),
                 })
                 
                 if verbose:
@@ -186,10 +186,10 @@ def run_bench(
                     )
                     success_c, path_c, states_c, metrics = cbs.solve()
                     cbs_time_ms = (time.perf_counter() - t0) * 1000.0
-                    path_len_c = len(path_c)
+                    path_len_c = max(0, len(path_c) - 1)
                     per_c = path_efficiency_ratio(path_len_c, manhattan)
                     
-                    # Confusion Ratio = CBS_steps / A*_steps
+                    # Confusion ratio is excess path overhead relative to A*.
                     confusion_ratio = confusion_ratio_vs_oracle(
                         path_len_a,
                         path_len_c,
@@ -377,7 +377,7 @@ def print_summary(summary: Dict[str, Any]) -> None:
         print(f"    Success rate | oracle solved: {oracle_success_text}")
         print(f"    Cognitive gap | oracle solved: {cognitive_gap_text}")
         print(f"    Avg path length: {stats['avg_path_length']:.1f}")
-        print(f"    Avg confusion ratio: {stats['avg_confusion_ratio']:.2f}x")
+        print(f"    Avg path overhead: {stats['avg_confusion_ratio']:.2%}")
         print(f"    Avg confusion index: {stats['avg_confusion_index']:.3f}")
         print(f"    Avg replans: {stats['avg_replans']:.1f}")
         print(f"    Avg backtrack loops: {stats['avg_backtrack_loops']:.1f}")

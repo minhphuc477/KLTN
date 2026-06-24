@@ -7,9 +7,13 @@ from typing import Any, Dict
 import networkx as nx
 import numpy as np
 
-from src.evaluation.search_benchmark_utils import normalized_confusion_ratio
+from src.evaluation.search_benchmark_utils import (
+    confusion_ratio_vs_oracle,
+    normalized_confusion_ratio,
+    run_astar_oracle,
+)
 from src.simulation.cognitive_bounded_search import CognitiveBoundedSearch
-from src.simulation.validator import StateSpaceAStar, ZeldaLogicEnv
+from src.simulation.validator import ZeldaLogicEnv
 
 
 def _compute_graph_cognitive_proxy(
@@ -23,7 +27,6 @@ def _compute_graph_cognitive_proxy(
     (e.g., MAP-Elites graph feature extraction stage).
     """
     n = int(graph.number_of_nodes())
-    e = int(graph.number_of_edges())
     if n <= 0:
         return {
             'fitness': -10.0,
@@ -121,7 +124,7 @@ def _compute_graph_cognitive_proxy(
     branch_pressure = float(np.clip((mean_deg - 1.0) / 3.0, 0.0, 1.0))
 
     confusion_index = float(np.clip((0.45 * branch_pressure) + (0.35 * dead_ends) + (0.20 * loop_pressure), 0.0, 3.0))
-    confusion_ratio = 1.0 + confusion_index
+    confusion_ratio = confusion_index
 
     if not solvable:
         fitness = -10.0
@@ -201,8 +204,28 @@ def compute_cbs_fitness(
     grid_for_pcbs = np.array(grid, dtype=np.int64, copy=True)
 
     env_a = ZeldaLogicEnv(semantic_grid=grid_for_astar)
-    solver_a = StateSpaceAStar(env_a, timeout=astar_timeout)
-    success_a, path_a, states_a = solver_a.solve()
+    oracle = run_astar_oracle(env_a, timeout=astar_timeout)
+    success_a = bool(oracle["success"])
+    path_a = list(oracle["path"])
+    states_a = int(oracle["states_explored"])
+    oracle_status = str(oracle["status"])
+    if oracle_status == "timeout":
+        return {
+            'fitness': 0.0,
+            'solvable_astar': False,
+            'solvable_cbs': False,
+            'oracle_status': oracle_status,
+            'confusion_ratio': float('inf'),
+            'normalized_confusion_ratio': float('inf'),
+            'path_efficiency': 0.0,
+            'exploration_efficiency': 0.0,
+            'room_entropy': 0.0,
+            'confusion_index': 0.0,
+            'astar_path_length': 0,
+            'cbs_path_length': 0,
+            'astar_states': states_a,
+            'is_proxy': 0.0,
+        }
     if success_a and len(path_a) <= 0:
         return {
             'fitness': -10.0,
@@ -225,13 +248,13 @@ def compute_cbs_fitness(
     success_c, path_c, _states_c, metrics = cbs.solve()
     
     # Confusion Ratio
-    astar_steps = len(path_a) if success_a and len(path_a) > 0 else 0
-    cbs_steps = len(path_c) if success_c and len(path_c) > 0 else 0
-    raw_cbs_steps = len(path_c) if len(path_c) > 0 else cbs_timeout
-    confusion_ratio = (
-        float(raw_cbs_steps) / float(astar_steps)
-        if astar_steps > 0 and success_c
-        else float('inf')
+    astar_steps = max(0, len(path_a) - 1) if success_a and path_a else 0
+    cbs_steps = max(0, len(path_c) - 1) if success_c and path_c else 0
+    confusion_ratio = confusion_ratio_vs_oracle(
+        astar_steps,
+        cbs_steps,
+        oracle_status="solved" if success_a else "failed",
+        candidate_success=bool(success_c),
     )
     if env_a.start_pos is not None and env_a.goal_pos is not None:
         manhattan = abs(int(env_a.start_pos[0]) - int(env_a.goal_pos[0])) + abs(int(env_a.start_pos[1]) - int(env_a.goal_pos[1]))
@@ -271,9 +294,10 @@ def compute_cbs_fitness(
         'exploration_efficiency': getattr(metrics, 'exploration_efficiency', 0.0),
         'room_entropy': getattr(metrics, 'room_entropy', 0.0),
         'confusion_index': getattr(metrics, 'confusion_index', 0.0),
-        'astar_path_length': len(path_a) if success_a else 0,
-        'cbs_path_length': len(path_c),
+        'astar_path_length': astar_steps if success_a else 0,
+        'cbs_path_length': cbs_steps,
         'astar_states': states_a,
+        'oracle_status': oracle_status,
         'is_proxy': 0.0,
     }
 

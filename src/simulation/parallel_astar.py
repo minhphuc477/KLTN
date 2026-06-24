@@ -99,9 +99,6 @@ def _try_move_local(
 
     for from_pos, to_pos in state.pushed_blocks:
         if to_pos == target_pos:
-            if int(grid[target_pos[0], target_pos[1]]) == SEMANTIC_PALETTE['TRIFORCE']:
-                return True, new_state
-
             dr = target_pos[0] - state.position[0]
             dc = target_pos[1] - state.position[1]
             push_dest_r = target_pos[0] + dr

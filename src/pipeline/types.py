@@ -80,11 +80,35 @@ class PipelineComponentFactory:
     symbolic_adjacency_threshold: float = 0.01
 
     def build(self, pipeline: Any) -> PipelineComponents:
+        room_mode = str(getattr(pipeline, "room_generator_mode", "latent_diffusion")).strip().lower()
+        sampler_mode = str(getattr(pipeline, "default_latent_sampler", "diffusion")).strip().lower()
+        teacher_fallback_enabled = bool(
+            getattr(pipeline, "default_masked_room_teacher_fallback_enabled", False)
+            if room_mode == "discrete_masked"
+            else getattr(pipeline, "default_fast_sampler_teacher_fallback_enabled", False)
+        )
+        needs_vqvae = room_mode != "discrete_masked" or teacher_fallback_enabled
+        needs_diffusion = teacher_fallback_enabled or (
+            room_mode != "discrete_masked" and sampler_mode != "categorical"
+        )
+        needs_condition_encoder = room_mode == "discrete_masked" or needs_diffusion
         return PipelineComponents(
             neural=NeuralGenerationComponents(
-                vqvae=pipeline._load_vqvae(self.vqvae_checkpoint),
-                condition_encoder=pipeline._load_condition_encoder(self.condition_encoder_checkpoint),
-                diffusion=pipeline._load_diffusion(self.diffusion_checkpoint),
+                vqvae=(
+                    pipeline._load_vqvae(self.vqvae_checkpoint)
+                    if needs_vqvae
+                    else None
+                ),
+                condition_encoder=(
+                    pipeline._load_condition_encoder(self.condition_encoder_checkpoint)
+                    if needs_condition_encoder
+                    else None
+                ),
+                diffusion=(
+                    pipeline._load_diffusion(self.diffusion_checkpoint)
+                    if needs_diffusion
+                    else None
+                ),
                 logic_net=pipeline._load_logic_net(self.logic_net_checkpoint),
             ),
             symbolic=SymbolicGenerationComponents(

@@ -683,6 +683,61 @@ def test_graph_guided_validator_accepts_goal_typed_nodes():
     assert result.triforce_node == 1
 
 
+def test_graph_guided_validator_preserves_directed_reachability():
+    graph = nx.DiGraph()
+    graph.add_node(0, type="START", label="START")
+    graph.add_node(1, type="GOAL", label="GOAL")
+    graph.add_edge(1, 0)
+
+    room = type("Room", (), {"grid": np.array([[1]], dtype=int)})
+    dungeon_data = type(
+        "DungeonDataStub",
+        (),
+        {"graph": graph, "rooms": {"0": room(), "1": room()}},
+    )()
+
+    result = GraphGuidedValidator().validate_dungeon_with_graph(dungeon_data)
+
+    assert result.is_solvable is False
+
+
+def test_edge_validator_models_bombs_and_persistent_boss_key():
+    room = type("Room", (), {"grid": np.array([[1]], dtype=int)})
+
+    bomb_graph = nx.DiGraph()
+    bomb_graph.add_node(0, type="START")
+    bomb_graph.add_node(1, type="GOAL")
+    bomb_graph.add_edge(0, 1, edge_type="bombable")
+    bomb_data = type(
+        "DungeonDataStub",
+        (),
+        {"graph": bomb_graph, "rooms": {"0": room(), "1": room()}},
+    )()
+    bomb_result = GraphGuidedValidator().validate_with_edge_types(
+        bomb_data,
+        inventory_start={"keys": 0, "bombs": 1, "boss_key": False},
+    )
+
+    boss_graph = nx.DiGraph()
+    boss_graph.add_node(0, type="START")
+    boss_graph.add_node(1)
+    boss_graph.add_node(2, type="GOAL")
+    boss_graph.add_edge(0, 1, edge_type="boss_locked")
+    boss_graph.add_edge(1, 2, edge_type="boss_locked")
+    boss_data = type(
+        "DungeonDataStub",
+        (),
+        {"graph": boss_graph, "rooms": {"0": room(), "1": room(), "2": room()}},
+    )()
+    boss_result = GraphGuidedValidator().validate_with_edge_types(
+        boss_data,
+        inventory_start={"keys": 0, "bombs": 0, "boss_key": True},
+    )
+
+    assert bomb_result.is_solvable is True
+    assert boss_result.is_solvable is True
+
+
 def test_validation_context_uses_stitched_slot_keys_for_puzzle_metadata():
     result = DungeonGenerationResult(
         dungeon_grid=[[21, 1, 22]],

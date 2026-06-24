@@ -243,6 +243,31 @@ def test_resblock_groupnorm_selection_supports_tiny_channel_widths():
     assert ResBlock.num_groups(1) == 1
 
 
+def test_cfg_dropout_mask_applies_to_all_batched_graph_conditioning():
+    keep = torch.tensor([1.0, 0.0])
+    graph_data = {
+        "node_features": torch.ones(2, 3, 4),
+        "node_mask": torch.ones(2, 3),
+        "room_topology_map": torch.ones(2, 5, 4, 4),
+        "edge_index": torch.tensor([[0, 1], [1, 2]], dtype=torch.long),
+        "has_room_anchor": True,
+    }
+
+    masked = create_latent_diffusion(
+        latent_dim=4,
+        model_channels=8,
+        context_dim=8,
+        num_timesteps=4,
+    )._apply_cfg_keep_mask_to_graph_data(graph_data, keep, batch_size=2)
+
+    assert masked is not None
+    assert torch.all(masked["node_features"][0] == 1)
+    assert torch.all(masked["node_features"][1] == 0)
+    assert torch.all(masked["node_mask"][1] == 0)
+    assert torch.all(masked["room_topology_map"][1] == 0)
+    assert torch.equal(masked["edge_index"], graph_data["edge_index"])
+
+
 def test_latent_diffusion_compile_for_inference_is_opt_in(monkeypatch):
     model = create_latent_diffusion(
         latent_dim=4,

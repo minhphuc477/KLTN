@@ -3325,6 +3325,47 @@ class LatentDiffusionModel(nn.Module):
 
         return adjusted, edge_attr, node_mask
 
+    @staticmethod
+    def _apply_cfg_keep_mask_to_graph_data(
+        graph_data: Optional[Dict[str, Tensor]],
+        keep_mask: Optional[Tensor],
+        *,
+        batch_size: int,
+    ) -> Optional[Dict[str, Tensor]]:
+        """Drop every per-sample conditioning channel for CFG training."""
+        if not isinstance(graph_data, dict) or keep_mask is None:
+            return graph_data
+
+        masked: Dict[str, Tensor] = dict(graph_data)
+        batched_vector_keys = {
+            "node_mask",
+            "boundary_constraints",
+            "current_node_idx",
+            "start_node_id",
+            "spatial_alignment_valid_mask",
+        }
+        for key, value in graph_data.items():
+            if not isinstance(value, torch.Tensor):
+                continue
+            if "edge_index" in str(key) or int(value.dim()) == 0:
+                continue
+            if int(value.shape[0]) != int(batch_size):
+                continue
+            if value.dim() < 3 and str(key) not in batched_vector_keys:
+                # A 2D node/edge feature matrix may be an unbatched [N,D] or
+                # [E,D] tensor whose N/E happens to equal the batch size.
+                continue
+            shape = [batch_size] + [1] * (value.dim() - 1)
+            masked[key] = value * keep_mask.to(device=value.device, dtype=value.dtype).view(*shape)
+
+        valid = masked.get("spatial_alignment_valid_mask")
+        if isinstance(valid, torch.Tensor) and int(valid.shape[0]) == int(batch_size):
+            shape = [batch_size] + [1] * (valid.dim() - 1)
+            masked["spatial_alignment_valid_mask"] = (
+                valid * keep_mask.to(device=valid.device, dtype=valid.dtype).view(*shape)
+            )
+        return masked
+
     def _extract_spatial_graph_context(
         self,
         context: Tensor,
@@ -3788,7 +3829,6 @@ class LatentDiffusionModel(nn.Module):
 
         sample_dtype = self._sampling_dtype()
         context = self._cast_tensor_for_sampling(context, device=device, dtype=sample_dtype)
-        work_dtype = torch.float32 if sample_dtype in {torch.float16, torch.bfloat16} else sample_dtype
 
         # Start from noise
         x_t = torch.randn(shape, device=device, dtype=sample_dtype)
@@ -4261,6 +4301,7 @@ class LatentDiffusionModel(nn.Module):
         
         # --- Phase 1A: CFG dropout during training ---
         # Randomly zero-out conditioning to train unconditional path
+        keep_mask: Optional[Tensor] = None
         if self.training and self.cfg_dropout_prob > 0:
             if int(context.shape[0]) != B:
                 raise ValueError(
@@ -4271,6 +4312,11 @@ class LatentDiffusionModel(nn.Module):
             keep_mask = (torch.rand(B, device=device) > self.cfg_dropout_prob).to(dtype=context.dtype)
             mask_shape = [B] + [1] * max(0, context.dim() - 1)
             context = context * keep_mask.view(*mask_shape)
+            graph_data = self._apply_cfg_keep_mask_to_graph_data(
+                graph_data,
+                keep_mask,
+                batch_size=B,
+            )
         
         # Get noisy samples
         x_t = self.q_sample(x_0, t, noise)
@@ -4391,6 +4437,7 @@ class LatentDiffusionModel(nn.Module):
         # scale as diffusion timesteps, but avoid quantizing t into integer bins.
         t = t_cont * float(max(1, self.num_timesteps - 1))
 
+        keep_mask: Optional[Tensor] = None
         if self.training and self.cfg_dropout_prob > 0:
             if int(context.shape[0]) != B:
                 raise ValueError(
@@ -4399,6 +4446,11 @@ class LatentDiffusionModel(nn.Module):
             keep_mask = (torch.rand(B, device=device) > self.cfg_dropout_prob).to(dtype=context.dtype)
             mask_shape = [B] + [1] * max(0, context.dim() - 1)
             context = context * keep_mask.view(*mask_shape)
+            graph_data = self._apply_cfg_keep_mask_to_graph_data(
+                graph_data,
+                keep_mask,
+                batch_size=B,
+            )
 
         alignment_weight = 0.0
         alignment_node_indices = None

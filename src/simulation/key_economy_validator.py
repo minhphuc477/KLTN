@@ -81,6 +81,7 @@ class PlayerState:
     current_node: int
     inventory: Dict[str, int] = field(default_factory=dict)  # {key_id: count}; keys consumed on use
     visited_nodes: Set[int] = field(default_factory=set)
+    collected_item_nodes: Set[int] = field(default_factory=set)
     path_taken: List[int] = field(default_factory=list)
     
     def copy(self) -> 'PlayerState':
@@ -88,6 +89,7 @@ class PlayerState:
             current_node=self.current_node,
             inventory=dict(self.inventory),  # shallow copy sufficient - values are ints
             visited_nodes=self.visited_nodes.copy(),
+            collected_item_nodes=self.collected_item_nodes.copy(),
             path_taken=self.path_taken.copy()
         )
 
@@ -232,8 +234,12 @@ class GreedyPlayer:
         start_state = state.copy()
         # path stores (node, edge_data_to_reach_it) pairs; first entry has empty edge.
         queue = deque([(start_state, [(state.current_node, {})])])
-        visited: Set[Tuple[int, FrozenSet]] = {
-            (state.current_node, frozenset(state.inventory.items()))
+        visited: Set[Tuple[int, FrozenSet, FrozenSet]] = {
+            (
+                state.current_node,
+                frozenset(state.inventory.items()),
+                frozenset(state.collected_item_nodes),
+            )
         }
         
         while queue:
@@ -255,7 +261,11 @@ class GreedyPlayer:
                 next_state.current_node = neighbor
                 self._collect_items_at_node(next_state, neighbor)
                 
-                sig = (neighbor, frozenset(next_state.inventory.items()))
+                sig = (
+                    neighbor,
+                    frozenset(next_state.inventory.items()),
+                    frozenset(next_state.collected_item_nodes),
+                )
                 if sig in visited:
                     continue
                 
@@ -297,7 +307,10 @@ class GreedyPlayer:
                 del state.inventory[key_id]
     
     def _collect_items_at_node(self, state: PlayerState, node_id: int):
-        """Collect all items present at node (increments counter)."""
+        """Collect all items present at a node at most once."""
+        if node_id in state.collected_item_nodes:
+            return
+        state.collected_item_nodes.add(node_id)
         node_data = self.graph.nodes[node_id]
         
         # Collect keys
@@ -342,18 +355,23 @@ class AdversarialPlayer:
         # Best-practice safety: allow revisits (backtracking) with loop guard.
         # This avoids false soft-locks on legitimate tree/branch topologies.
         max_steps = max(50, self.graph.number_of_nodes() * max(3, self.graph.number_of_edges() + 1))
-        seen_state_counts: Dict[Tuple[int, FrozenSet[str]], int] = defaultdict(int)
+        seen_state_counts: Dict[Tuple[int, FrozenSet, FrozenSet], int] = defaultdict(int)
         
         steps = 0
         while state.current_node != goal_node and steps < max_steps:
-            signature = (state.current_node, frozenset(state.inventory.items()))
+            signature = (
+                state.current_node,
+                frozenset(state.inventory.items()),
+                frozenset(state.collected_item_nodes),
+            )
             seen_state_counts[signature] += 1
             if seen_state_counts[signature] > self.graph.number_of_nodes() * 2:
                 return (False, state)  # Degenerate loop under worst-case behavior
             
-            next_node, chosen_edge = self._find_next_adversarial_move(state, goal_node)
-            if next_node is None:
+            next_move = self._find_next_adversarial_move(state, goal_node)
+            if next_move is None:
                 return (False, state)
+            next_node, chosen_edge = next_move
             
             # Consume key for the *chosen* edge before moving.
             self._consume_key_for_edge(state, chosen_edge)
@@ -441,7 +459,13 @@ class AdversarialPlayer:
         # reachable path to goal without mutating the live state.
         start_copy = state.copy()
         queue = deque([(start_copy, [state.current_node], [{}])])  # (state, path, edges)
-        visited: Set[Tuple[int, FrozenSet]] = {(state.current_node, frozenset(state.inventory.items()))}
+        visited: Set[Tuple[int, FrozenSet, FrozenSet]] = {
+            (
+                state.current_node,
+                frozenset(state.inventory.items()),
+                frozenset(state.collected_item_nodes),
+            )
+        }
         while queue:
             curr, path, edges = queue.popleft()
             node = curr.current_node
@@ -456,7 +480,11 @@ class AdversarialPlayer:
                 self._consume_key_for_edge(nxt, edge_data)
                 nxt.current_node = neighbor
                 self._collect_items_at_node(nxt, neighbor)
-                sig = (neighbor, frozenset(nxt.inventory.items()))
+                sig = (
+                    neighbor,
+                    frozenset(nxt.inventory.items()),
+                    frozenset(nxt.collected_item_nodes),
+                )
                 if sig in visited:
                     continue
                 visited.add(sig)
@@ -496,7 +524,10 @@ class AdversarialPlayer:
                 del state.inventory[key_id]
     
     def _collect_items_at_node(self, state: PlayerState, node_id: int):
-        """Collect all items at node (increments counter)."""
+        """Collect all items at a node at most once."""
+        if node_id in state.collected_item_nodes:
+            return
+        state.collected_item_nodes.add(node_id)
         node_data = self.graph.nodes[node_id]
         
         if 'key_id' in node_data:

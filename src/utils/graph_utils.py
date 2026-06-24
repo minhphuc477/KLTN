@@ -417,68 +417,6 @@ def validate_goal_subgraph(G: nx.Graph) -> Tuple[bool, List[str]]:
         True
     """
     return _validate_goal_subgraph_strict(G)
-    
-    # Find goal and boss nodes
-    goal_nodes = find_nodes_by_type(G, 'triforce')
-    boss_nodes = find_nodes_by_type(G, 'boss')
-    
-    # Check goal exists
-    if not goal_nodes:
-        errors.append("No goal (triforce) node found in graph")
-        return False, errors
-    
-    # Check boss exists (if required by constraints)
-    if BOSS_REQUIRED_FOR_GOAL and not boss_nodes:
-        errors.append("No boss node found (required for goal)")
-    
-    # Validate each goal node
-    for goal in goal_nodes:
-        # Check degree (should be leaf node)
-        degree = G.degree(goal)
-        if degree > GOAL_NODE_MAX_DEGREE:
-            errors.append(
-                f"Goal node {goal} has degree {degree} "
-                f"(should be ≤{GOAL_NODE_MAX_DEGREE})"
-            )
-        
-        # Check connection to boss
-        if GOAL_CONNECTS_TO_BOSS:
-            # Get neighbors (predecessors + successors for DiGraph)
-            if G.is_directed():
-                neighbors = list(G.predecessors(goal)) + list(G.successors(goal))
-            else:
-                neighbors = list(G.neighbors(goal))
-            
-            connected_to_boss = False
-            for neighbor in neighbors:
-                if has_node_type(G, neighbor, 'boss'):
-                    connected_to_boss = True
-                    break
-            
-            if not connected_to_boss:
-                errors.append(
-                    f"Goal node {goal} not connected to boss "
-                    f"(neighbors: {neighbors})"
-                )
-        
-        # Check for cycles through goal (goal should be terminal)
-        if G.is_directed():
-            # Goal should have no outgoing edges (it's the end)
-            out_degree = G.out_degree(goal)
-            if out_degree > 0:
-                errors.append(
-                    f"Goal node {goal} has {out_degree} outgoing edges "
-                    f"(should be terminal node)"
-                )
-    
-    is_valid = len(errors) == 0
-    
-    if is_valid:
-        logger.info("Boss-Goal subgraph validation PASSED")
-    else:
-        logger.warning(f"Boss-Goal subgraph validation FAILED: {errors}")
-    
-    return is_valid, errors
 
 
 def _validate_goal_subgraph_strict(G: nx.Graph) -> Tuple[bool, List[str]]:
@@ -649,10 +587,7 @@ def validate_graph_topology(G: nx.Graph) -> Tuple[bool, List[str]]:
     if start is not None and goal_nodes:
         goal = goal_nodes[0]
         try:
-            if G.is_directed():
-                path_length = nx.shortest_path_length(G.to_undirected(), start, goal)
-            else:
-                path_length = nx.shortest_path_length(G, start, goal)
+            path_length = nx.shortest_path_length(G, start, goal)
             
             if path_length < MIN_PATH_LENGTH_START_TO_GOAL:
                 errors.append(

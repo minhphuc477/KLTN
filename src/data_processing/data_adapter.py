@@ -870,13 +870,13 @@ class GraphFingerprinter:
                 # Find room with start indicator (usually top-left or center)
                 # VGLC convention: start is often at a specific position
                 start_room = self._find_start_room(rooms)
-                if start_room:
+                if start_room and start_room.position not in room_to_node:
                     node_to_room[node_id] = start_room.position
                     room_to_node[start_room.position] = node_id
             
             elif data.get('has_triforce'):
                 triforce_room = self._find_triforce_room(rooms)
-                if triforce_room:
+                if triforce_room and triforce_room.position not in room_to_node:
                     node_to_room[node_id] = triforce_room.position
                     room_to_node[triforce_room.position] = node_id
         
@@ -907,6 +907,8 @@ class GraphFingerprinter:
                 node_to_room[node_id] = best_room.position
                 room_to_node[best_room.position] = node_id
         
+        if len(node_to_room) != len(set(node_to_room.values())):
+            raise RuntimeError("Graph-to-room alignment is not bijective.")
         logger.info(f"Aligned {len(node_to_room)} nodes to rooms")
         return node_to_room, room_to_node
     

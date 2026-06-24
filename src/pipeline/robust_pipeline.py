@@ -94,9 +94,19 @@ class PipelineBlock:
             try:
                 # Execute the block
                 if self.config.timeout_per_block is not None and self.config.timeout_per_block > 0:
-                    with ThreadPoolExecutor(max_workers=1) as pool:
+                    pool = ThreadPoolExecutor(max_workers=1)
+                    try:
                         future = pool.submit(self.executor, state)
                         output = future.result(timeout=self.config.timeout_per_block)
+                    except FutureTimeoutError:
+                        future.cancel()
+                        pool.shutdown(wait=False, cancel_futures=True)
+                        raise
+                    except Exception:
+                        pool.shutdown(wait=True, cancel_futures=True)
+                        raise
+                    else:
+                        pool.shutdown(wait=True)
                 else:
                     output = self.executor(state)
                 execution_time = time.time() - start_time

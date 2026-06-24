@@ -20,6 +20,7 @@ from src.core import (
 )
 from src.core.definitions import GRAPH_EDGE_FEATURE_DIM, GRAPH_NODE_FEATURE_DIM
 from src.core.symbolic_refiner import DEFAULT_ADJACENCY
+from src.core.discrete_masked_model import DiscreteMaskedRoomModel
 from src.pipeline.block_contracts import summarize_missing_keys
 from src.pipeline.room_topology_conditioning import ROOM_TOPOLOGY_CHANNEL_COUNT
 
@@ -140,11 +141,13 @@ def load_vqvae(pipeline, checkpoint_path: Optional[str]) -> torch.nn.Module:
             unexpected_missing = [k for k in missing if k not in allowed_missing]
 
             if unexpected_missing or unexpected:
-                logger.warning(
-                    "VQ-VAE checkpoint key mismatch. missing=%s unexpected=%s",
-                    unexpected_missing,
-                    unexpected,
+                msg = (
+                    "VQ-VAE checkpoint key mismatch. "
+                    f"missing={unexpected_missing} unexpected={unexpected}"
                 )
+                if pipeline.strict_checkpoint_mode:
+                    raise RuntimeError(msg)
+                logger.warning(msg)
         elif isinstance(checkpoint, dict):
             raise ValueError(
                 f"VQ-VAE checkpoint at {checkpoint_path!r} does not contain "

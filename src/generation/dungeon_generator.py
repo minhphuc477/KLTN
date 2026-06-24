@@ -83,7 +83,7 @@ class BSPNode:
         self.right: Optional['BSPNode'] = None
         self.room: Optional[Room] = None
     
-    def split(self, min_room_size: int = 5, rng: Optional[random.Random] = None) -> bool:
+    def split(self, min_room_size: int = 6, rng: Optional[random.Random] = None) -> bool:
         """
         Recursively split this node into left/right children.
         
@@ -149,8 +149,8 @@ class BSPNode:
             rng_obj = rng if rng is not None else random
             # Leaf node - create room
             # Ensure minimum valid ranges for room dimensions
-            max_width = max(min_room_size, min(max_room_size, self.width - 2))
-            max_height = max(min_room_size, min(max_room_size, self.height - 2))
+            max_width = min(max_room_size, self.width - 2)
+            max_height = min(max_room_size, self.height - 2)
             
             # Skip room creation if space is too small
             if max_width < min_room_size or max_height < min_room_size:
@@ -212,6 +212,11 @@ class DungeonGenerator:
         """
         self.width = width
         self.height = height
+        if min(self.width, self.height) < 6 or max(self.width, self.height) < 12:
+            raise ValueError(
+                "BSP dungeon dimensions must fit at least two bordered 4x4 rooms: "
+                "one dimension must be >= 12 and the other >= 6."
+            )
         self.difficulty = difficulty
         self.seed = seed
         # Keep RNG local to this generator instance.

@@ -36,12 +36,20 @@ from .advanced_rules import (
     SplitRoomRule,
     _bounded_free_position,
 )
-from .core_rules import BranchRule, Difficulty, InsertChallengeRule, InsertLockKeyRule, StartRule
+from .core_rules import (
+    BranchRule,
+    Difficulty,
+    InsertChallengeRule,
+    InsertLockKeyRule,
+    ProductionRule,
+    StartRule,
+)
 from .graph_types import (
     LAYOUT_BASE_OFFSET,
     LAYOUT_LAYER_SPACING,
     LAYOUT_OFFSET_SPACING,
     EdgeType,
+    MissionEdge,
     MissionGraph,
     MissionNode,
     NodeType,

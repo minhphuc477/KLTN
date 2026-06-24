@@ -29,7 +29,6 @@ from src.simulation.cognitive_bounded_search import (
     CuriosityHeuristic,
     SafetyHeuristic,
     GoalSeekingHeuristic,
-    SafetyHeuristic,
     solve_with_cbs,
     compare_personas,
 )
@@ -696,7 +695,7 @@ class TestCBS:
         _success, path, _states, metrics = cbs.solve()
         
         assert isinstance(metrics, CBSMetrics)
-        assert metrics.total_steps == len(path)
+        assert metrics.total_steps == max(0, len(path) - 1)
         assert metrics.unique_tiles_visited > 0
         assert metrics.confusion_index >= 0
         assert metrics.navigation_entropy >= 0
@@ -714,11 +713,11 @@ class TestCBS:
         success, path, _states, metrics = cbs.solve()
 
         assert success
-        assert metrics.total_steps == len(path)
+        assert metrics.total_steps == max(0, len(path) - 1)
         assert metrics.unique_tiles_visited > metrics.unique_rooms_visited
         assert metrics.unique_rooms_visited == 2
         assert set(metrics.room_visit_counts) == {(0, 0), (0, 1)}
-        assert metrics.total_room_visits == metrics.total_steps
+        assert metrics.total_room_visits == metrics.total_steps + 1
         assert metrics.room_entropy > 0
 
     def test_hybrid_pcbs_considers_room_graph_transitions(self):

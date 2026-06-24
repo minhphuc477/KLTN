@@ -48,7 +48,7 @@ from src.generation.graph_constraint_enforcer import GraphConstraintEnforcer, en
 from src.generation.entity_spawner import EntitySpawner, spawn_all_entities
 from src.generation.seam_smoother import SeamSmoother
 from src.generation.style_transfer import ThemeType
-from src.generation.global_state import GlobalStateManager, GlobalStateType
+from src.generation.global_state import GlobalStateManager, GlobalStateType, StateAwareRoomGenerator
 from src.generation.big_room_generator import BigRoomConfig, BigRoomGenerator, RoomDimensions
 from src.generation.weighted_bayesian_wfc import WeightedBayesianWFC, extract_tile_priors_from_vqvae, WeightedBayesianWFCConfig
 from src.pipeline.dungeon_pipeline import NeuralSymbolicDungeonPipeline
@@ -199,6 +199,11 @@ class AdvancedNeuralSymbolicPipeline:
         from src.generation.style_transfer import StyleTransferEngine
         self.style_engine = StyleTransferEngine()
         self.global_state_mgr = GlobalStateManager() if config.enable_global_state else None
+        self.state_aware_generator = (
+            StateAwareRoomGenerator(self.neural_pipeline)
+            if config.enable_global_state
+            else None
+        )
         self.big_room_gen = (
             BigRoomGenerator(base_pipeline=self.neural_pipeline, config=BigRoomConfig())
             if config.enable_big_rooms else None
@@ -1266,6 +1271,7 @@ class AdvancedNeuralSymbolicPipeline:
         for node_id in generation_order:
             room_graph_context = self._clone_graph_context_for_room(graph_context)
             room_graph_context['current_node_idx'] = int(node_to_idx.get(node_id, 0))
+            room_state: Dict[str, Any] = {}
             if base_global_state:
                 room_state = self.global_state_mgr.get_room_state(int(node_id)) if self.global_state_mgr else {}
                 if not room_state:
@@ -1330,6 +1336,12 @@ class AdvancedNeuralSymbolicPipeline:
                     neighbor_latents=neighbor_latents,
                     theme=theme,
                     seed=seed,
+                )
+
+            if room_state and self.state_aware_generator is not None:
+                room = self.state_aware_generator.apply_state_modifications(
+                    room,
+                    room_state,
                 )
             
             rooms[node_id] = room
@@ -1644,6 +1656,8 @@ class DungeonGenerationResult:
     
     def save_artifacts(self, output_dir: Path):
         """Save all artifacts for thesis defense."""
+        import pickle
+
         output_dir.mkdir(parents=True, exist_ok=True)
         
         # Save grids
@@ -1651,7 +1665,8 @@ class DungeonGenerationResult:
         np.save(output_dir / "visual_grid.npy", self.visual_grid)
         
         # Save mission graph
-        nx.write_gpickle(self.mission_graph, output_dir / "mission_graph.gpickle")
+        with open(output_dir / "mission_graph.gpickle", "wb") as graph_file:
+            pickle.dump(self.mission_graph, graph_file, protocol=pickle.HIGHEST_PROTOCOL)
         
         # Save stats as JSON
         import json

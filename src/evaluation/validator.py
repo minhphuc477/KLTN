@@ -447,7 +447,7 @@ class AgentSimulator:
                     solution_path=current.path,
                     key_collection_order=list(current.keys_collected),
                     doors_opened=list(current.doors_opened),
-                    path_length=len(current.path),
+                    path_length=max(0, len(current.path) - 1),
                     states_explored=states_explored,
                     metrics={
                         'keys_used': len(current.keys_collected) - current.keys_held,

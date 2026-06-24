@@ -166,6 +166,44 @@ class VectorQuantizer(nn.Module):
             self.ema_decay_warmup_steps = 100
         self._codebook_update_lock = threading.RLock()
 
+    def get_extra_state(self) -> Dict[str, int]:
+        """Persist EMA/dead-code schedule progression across checkpoints."""
+        return {
+            "reset_counter": int(self._reset_counter),
+            "ema_update_counter": int(self._ema_update_counter),
+        }
+
+    def set_extra_state(self, state: object) -> None:
+        if not isinstance(state, dict):
+            return
+        self._reset_counter = int(max(0, int(state.get("reset_counter", 0))))
+        self._ema_update_counter = int(max(0, int(state.get("ema_update_counter", 0))))
+
+    def _load_from_state_dict(
+        self,
+        state_dict,
+        prefix,
+        local_metadata,
+        strict,
+        missing_keys,
+        unexpected_keys,
+        error_msgs,
+    ):
+        # Older checkpoints predate get_extra_state. Inject the current
+        # counters so strict legacy loading remains backward compatible.
+        extra_key = prefix + "_extra_state"
+        if extra_key not in state_dict:
+            state_dict[extra_key] = self.get_extra_state()
+        super()._load_from_state_dict(
+            state_dict,
+            prefix,
+            local_metadata,
+            strict,
+            missing_keys,
+            unexpected_keys,
+            error_msgs,
+        )
+
     @staticmethod
     def _latent_mse(z_a: Tensor, z_b: Tensor) -> Tensor:
         """Average per-token squared error after summing embedding channels."""

@@ -312,7 +312,7 @@ class StateAwareRoomGenerator:
         )
         
         # Post-process based on state
-        result.room_grid = self._apply_state_modifications(
+        result.room_grid = self.apply_state_modifications(
             result.room_grid,
             global_state
         )
@@ -368,7 +368,7 @@ class StateAwareRoomGenerator:
         
         return embedding
     
-    def _apply_state_modifications(
+    def apply_state_modifications(
         self,
         room_grid: np.ndarray,
         global_state: Dict[str, Any]
@@ -381,20 +381,29 @@ class StateAwareRoomGenerator:
         - Light low -> convert visual palette to dark
         """
         modified = room_grid.copy()
+        from src.core.definitions import SEMANTIC_PALETTE
         
         # Water level modification
         if 'water_level' in global_state:
             water_level = global_state['water_level']
             if water_level == 'high':
-                # Fill floor tiles in bottom half with water (tile ID 40)
+                # Fill floor tiles in the lower half with the domain element.
                 H = modified.shape[0]
                 water_line = H // 2
-                floor_mask = (modified[water_line:] == 1)  # FLOOR_ID
-                modified[water_line:][floor_mask] = 40  # WATER_ID
+                floor_mask = modified[water_line:] == int(SEMANTIC_PALETTE["FLOOR"])
+                modified[water_line:][floor_mask] = int(SEMANTIC_PALETTE["ELEMENT"])
         
         # Additional state modifications...
         
         return modified
+
+    def _apply_state_modifications(
+        self,
+        room_grid: np.ndarray,
+        global_state: Dict[str, Any],
+    ) -> np.ndarray:
+        """Backward-compatible alias for the public state transformation."""
+        return self.apply_state_modifications(room_grid, global_state)
 
 
 # ============================================================================

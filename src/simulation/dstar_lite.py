@@ -74,7 +74,9 @@ class DStarLiteSolver:
         self.g_scores: Dict[Any, float] = {}  # g(s) values
         self.rhs_scores: Dict[Any, float] = {}  # rhs(s) values
         self.open_set: List[DStarKey] = []  # Priority queue
-        self.open_set_hashes: Set[Any] = set()  # Fast membership check
+        self.open_set_hashes: Dict[Any, Tuple[float, float]] = {}
+        self.predecessors: Dict[Any, Optional[Any]] = {}
+        self.states_by_hash: Dict[Any, GameState] = {}
         
         # Environment change detection
         self.last_opened_doors: Set[Tuple[int, int]] = set()
@@ -138,12 +140,16 @@ class DStarLiteSolver:
         If state is locally inconsistent (g != rhs), add to priority queue.
         Otherwise, remove from priority queue.
         """
+        self.states_by_hash[state_hash] = state.copy()
+
         # Start state has rhs = 0
         if state.position == self.env.start_pos:
             self.rhs_scores[state_hash] = 0
+            self.predecessors[state_hash] = None
         else:
             # Compute rhs(s) = min over predecessors: g(s') + c(s', s)
             min_rhs = float('inf')
+            best_predecessor: Optional[Any] = None
             
             # CRITICAL FIX: Get proper predecessor states using environment's movement logic
             # We need to find all states that can reach this state in ONE move
@@ -169,14 +175,17 @@ class DStarLiteSolver:
                     pred_g = self.g_scores.get(pred_hash, float('inf'))
                     if pred_g < float('inf'):
                         cost = self._get_edge_cost(pred_state, state)
-                        min_rhs = min(min_rhs, pred_g + cost)
+                        candidate_rhs = pred_g + cost
+                        if candidate_rhs < min_rhs:
+                            min_rhs = candidate_rhs
+                            best_predecessor = pred_hash
+                            self.states_by_hash[pred_hash] = pred_state.copy()
             
             self.rhs_scores[state_hash] = min_rhs
-        
-        # Remove from OPEN if present
-        if state_hash in self.open_set_hashes:
-            # Mark for removal (lazy deletion)
-            self.open_set_hashes.discard(state_hash)
+            if best_predecessor is None:
+                self.predecessors.pop(state_hash, None)
+            else:
+                self.predecessors[state_hash] = best_predecessor
         
         # Add to OPEN if locally inconsistent
         g = self.g_scores.get(state_hash, float('inf'))
@@ -185,8 +194,10 @@ class DStarLiteSolver:
         if g != rhs:
             key = self.calculate_key(state, state_hash)
             heapq.heappush(self.open_set, key)
-            self.open_set_hashes.add(state_hash)
+            self.open_set_hashes[state_hash] = (float(key.k1), float(key.k2))
             self.states_updated += 1
+        else:
+            self.open_set_hashes.pop(state_hash, None)
 
     def _predecessor_state_candidates(
         self,
@@ -252,7 +263,11 @@ class DStarLiteSolver:
         
         while iterations < max_iterations:
             # Clean lazy-deleted entries from open set
-            while self.open_set and self.open_set[0].state_hash not in self.open_set_hashes:
+            while self.open_set:
+                top = self.open_set[0]
+                active_key = self.open_set_hashes.get(top.state_hash)
+                if active_key == (float(top.k1), float(top.k2)):
+                    break
                 heapq.heappop(self.open_set)
             
             if not self.open_set:
@@ -265,7 +280,7 @@ class DStarLiteSolver:
             current_key = heapq.heappop(self.open_set)
             state_hash = current_key.state_hash
             state = current_key.state
-            self.open_set_hashes.discard(state_hash)
+            self.open_set_hashes.pop(state_hash, None)
             
             g = self.g_scores.get(state_hash, float('inf'))
             rhs = self.rhs_scores.get(state_hash, float('inf'))
@@ -307,6 +322,8 @@ class DStarLiteSolver:
         self.rhs_scores.clear()
         self.open_set.clear()
         self.open_set_hashes.clear()
+        self.predecessors.clear()
+        self.states_by_hash.clear()
         self.used_fallback = False
         
         # Initialize start
@@ -433,38 +450,32 @@ class DStarLiteSolver:
                 current_state.pushed_blocks != self.last_pushed_blocks)
     
     def _extract_path(self, start_state: GameState) -> List[Tuple[int, int]]:
-        """Extract path from g_scores by greedy descent."""
-        path = [start_state.position]
-        current = start_state
-        visited = set()
-        
-        for _ in range(1000):  # Max path length
-            if current.position == self.env.goal_pos:
-                break
-            
-            current_hash = game_state_key(current)
-            if current_hash in visited:
-                break
+        """Reconstruct the best consistent goal state from predecessor links."""
+        if self.env.goal_pos is None:
+            return []
+        start_hash = game_state_key(start_state)
+        goal_hashes = [
+            state_hash
+            for state_hash, state in self.states_by_hash.items()
+            if tuple(state.position) == tuple(self.env.goal_pos)
+            and self.g_scores.get(state_hash, float('inf')) < float('inf')
+        ]
+        if not goal_hashes:
+            return []
+        current_hash = min(goal_hashes, key=lambda key: self.g_scores.get(key, float('inf')))
+        reversed_path: List[Tuple[int, int]] = []
+        visited: Set[Any] = set()
+        while current_hash is not None and current_hash not in visited:
             visited.add(current_hash)
-            
-            # Find best successor (lowest g-score)
-            best_successor = None
-            best_g = float('inf')
-            
-            for successor in self._get_successors(current):
-                successor_hash = game_state_key(successor)
-                g = self.g_scores.get(successor_hash, float('inf'))
-                if g < best_g:
-                    best_g = g
-                    best_successor = successor
-            
-            if best_successor is None:
-                break
-            
-            current = best_successor
-            path.append(current.position)
-        
-        return path
+            state = self.states_by_hash.get(current_hash)
+            if state is None:
+                return []
+            reversed_path.append(tuple(state.position))
+            if current_hash == start_hash:
+                reversed_path.reverse()
+                return reversed_path
+            current_hash = self.predecessors.get(current_hash)
+        return []
 
     def _has_locked_door(self) -> bool:
         """Check whether the current map contains any locked door tiles."""

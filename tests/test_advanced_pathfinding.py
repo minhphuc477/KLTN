@@ -172,6 +172,7 @@ class TestDStarLite:
         assert len(path) > 0, "D* Lite returned empty path"
         assert path[0] == env.start_pos, "Path doesn't start at start position"
         assert path[-1] == env.goal_pos, "Path doesn't end at goal position"
+        assert solver.used_fallback is False
         
         logger.info(f"✓ D* Lite: path_len={len(path)}, nodes={nodes}")
     

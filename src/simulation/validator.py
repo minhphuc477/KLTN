@@ -208,6 +208,7 @@ class GameState:
     defeated_enemies: Set[Tuple[int, int]] = field(default_factory=set)
     completed_puzzle_stages: Set[Tuple[str, int]] = field(default_factory=set)
     current_floor: int = 0  # NEW: Multi-floor dungeon support
+    opened_graph_edges: Set[Tuple[Any, Any]] = field(default_factory=set)
 
     # Backward-compatible property: has_bomb -> bomb_count > 0
     @property
@@ -236,7 +237,8 @@ class GameState:
             frozenset(self.pushed_blocks),
             frozenset(self.defeated_enemies),
             frozenset(self.completed_puzzle_stages),
-            self.current_floor  # Include floor in hash
+            self.current_floor,
+            frozenset(self.opened_graph_edges),
         ))
     
     def __eq__(self, other):
@@ -253,7 +255,8 @@ class GameState:
             self.pushed_blocks == other.pushed_blocks and
             self.defeated_enemies == other.defeated_enemies and
             self.completed_puzzle_stages == other.completed_puzzle_stages and
-            self.current_floor == other.current_floor
+            self.current_floor == other.current_floor and
+            self.opened_graph_edges == other.opened_graph_edges
         )
     
     def copy(self) -> 'GameState':
@@ -269,7 +272,8 @@ class GameState:
             pushed_blocks=set(self.pushed_blocks),
             defeated_enemies=set(self.defeated_enemies),
             completed_puzzle_stages=set(self.completed_puzzle_stages),
-            current_floor=self.current_floor
+            current_floor=self.current_floor,
+            opened_graph_edges=set(self.opened_graph_edges),
         )
 
 
@@ -287,6 +291,7 @@ def game_state_key(state: GameState) -> Tuple[Any, ...]:
         frozenset(state.defeated_enemies),
         frozenset(state.completed_puzzle_stages),
         state.current_floor,
+        frozenset(state.opened_graph_edges),
     )
 
 
@@ -509,6 +514,8 @@ def dominates(state_a: GameState, state_b: GameState) -> bool:
     
     # Opened doors: A's doors must be superset of B's doors
     if not state_a.opened_doors.issuperset(state_b.opened_doors):
+        return False
+    if not state_a.opened_graph_edges.issuperset(state_b.opened_graph_edges):
         return False
     
     # Collected items: A's items must be superset of B's items
@@ -1417,10 +1424,6 @@ class ZeldaLogicEnv:
         # occupy the original position vacated by another block.
         for (from_pos, to_pos) in state.pushed_blocks:
             if to_pos == target_pos:
-                # Allow stepping onto goal even if a pushed block occupies it.
-                # This keeps block puzzles solvable in narrow corridors used by tests.
-                if int(self.grid[target_pos[0], target_pos[1]]) == SEMANTIC_PALETTE['TRIFORCE']:
-                    return True, new_state
                 # There's a pushed block here! Need to try pushing it further
                 # Calculate direction of push
                 dr = target_pos[0] - state.position[0]
@@ -2702,9 +2705,6 @@ class StateSpaceAStar:
         else:
             n2r = {v: k for k, v in r2n.items()}
 
-        # Average room interior tiles (for heuristic scaling)
-        avg_room_tiles = max(1, int(np.mean(list(self._node_walkable_count.values())))) if self._node_walkable_count else 30
-
         # State tuple: (node, keys, bombs, has_boss_key, has_item, collected_fs, opened_fs)
         opts = self.env.solver_options or SolverOptions()
         init_opened: FrozenSet[Tuple[int, int]] = frozenset()
@@ -2732,7 +2732,9 @@ class StateSpaceAStar:
         def h_func(st):
             nd = st[0]
             bd = self._graph_bfs_dist.get(nd, 999)
-            return bd * avg_room_tiles * 0.5  # Scale to approximate tile cost
+            # Each remaining graph transition costs at least one. Scaling by
+            # average room area can overestimate and break A* optimality.
+            return float(bd)
 
         mode = (search_mode or self.search_mode or 'astar').lower()
         open_set = []
@@ -3279,7 +3281,7 @@ class StateSpaceAStar:
                 
                 target_pos = (new_r, new_c)
                 target_tile = grid[new_r, new_c]
-                neighbors.append((target_pos, target_tile, CARDINAL_COST, False))  # is_teleport=False
+                neighbors.append((target_pos, target_tile, CARDINAL_COST, False, None))
             
             # PERFORMANCE: Diagonal movement only if enabled (disabled by default for 2x speedup)
             # Diagonal movement (cost = √2 ≈ 1.414)
@@ -3313,7 +3315,7 @@ class StateSpaceAStar:
                     
                     target_pos = (new_r, new_c)
                     target_tile = grid[new_r, new_c]
-                    neighbors.append((target_pos, target_tile, DIAGONAL_COST, False))  # is_teleport=False
+                    neighbors.append((target_pos, target_tile, DIAGONAL_COST, False, None))
             
             # STAIR HANDLING: Add teleport destinations from graph
             # MUST be standing on STAIR tile to use stairs
@@ -3322,7 +3324,7 @@ class StateSpaceAStar:
                 for dest_pos in stair_destinations:
                     if 0 <= dest_pos[0] < height and 0 <= dest_pos[1] < width:
                         dest_tile = grid[dest_pos[0], dest_pos[1]]
-                        neighbors.append((dest_pos, dest_tile, 1, True))  # is_teleport=True
+                        neighbors.append((dest_pos, dest_tile, 1, True, "stair"))
             
             # VIRTUAL NODE TRAVERSAL: CONTROLLED VERSION
             # The graph encodes hidden passages and bombable walls that aren't in tile data.
@@ -3338,10 +3340,10 @@ class StateSpaceAStar:
                 virtual_destinations = self._get_controlled_virtual_destinations(
                     current_state.position, current_state
                 )
-                for dest_pos, cost, _edge_type in virtual_destinations:
+                for dest_pos, cost, edge_type in virtual_destinations:
                     if 0 <= dest_pos[0] < height and 0 <= dest_pos[1] < width:
                         dest_tile = grid[dest_pos[0], dest_pos[1]]
-                        neighbors.append((dest_pos, dest_tile, cost, True))  # is_teleport=True
+                        neighbors.append((dest_pos, dest_tile, cost, True, edge_type))
             
             # GRAPH-BASED ROOM WARPING: Handle non-adjacent room connections
             # The graph encodes staircase/warp connections between rooms that aren't
@@ -3351,13 +3353,13 @@ class StateSpaceAStar:
                 warp_destinations = self._get_graph_warp_destinations(
                     current_state.position, current_state
                 )
-                for dest_pos, cost, _edge_type in warp_destinations:
+                for dest_pos, cost, edge_type in warp_destinations:
                     if 0 <= dest_pos[0] < height and 0 <= dest_pos[1] < width:
                         dest_tile = grid[dest_pos[0], dest_pos[1]]
-                        neighbors.append((dest_pos, dest_tile, cost, True))  # is_teleport=True
+                        neighbors.append((dest_pos, dest_tile, cost, True, edge_type))
             
             # Process all neighbors
-            for target_pos, target_tile, base_cost, is_teleport in neighbors:
+            for target_pos, target_tile, base_cost, is_teleport, graph_edge_type in neighbors:
                 
                 # CRITICAL: Validate adjacency for non-teleport moves
                 if not is_teleport:
@@ -3367,8 +3369,18 @@ class StateSpaceAStar:
                         continue  # Not adjacent, skip
                 
                 # Determine if move is possible and what state changes occur
+                transition_state = current_state
+                if is_teleport and graph_edge_type not in {None, "stair"}:
+                    can_transition, transition_state = self.apply_graph_edge_transition(
+                        current_state,
+                        current_state.position,
+                        target_pos,
+                        str(graph_edge_type),
+                    )
+                    if not can_transition:
+                        continue
                 can_move, new_state = self._try_move_pure(
-                    current_state, target_pos, target_tile
+                    transition_state, target_pos, target_tile
                 )
                 
                 if not can_move:
@@ -3589,7 +3601,7 @@ class StateSpaceAStar:
                     max_queue_size=max_queue_size,
                     time_taken_ms=elapsed_ms,
                     failure_reason="",
-                    path_length=len(path),
+                    path_length=max(0, len(path) - 1),
                     final_inventory={
                         'keys': current_state.keys,
                         'bomb_count': current_state.bomb_count,
@@ -3637,7 +3649,7 @@ class StateSpaceAStar:
             for dr, dc in cardinal_deltas:
                 new_r, new_c = curr_r + dr, curr_c + dc
                 if 0 <= new_r < height and 0 <= new_c < width:
-                    neighbors.append(((new_r, new_c), grid[new_r, new_c], CARDINAL_COST))
+                    neighbors.append(((new_r, new_c), grid[new_r, new_c], CARDINAL_COST, None))
             
             if self.allow_diagonals:
                 for dr, dc in diagonal_deltas:
@@ -3655,36 +3667,46 @@ class StateSpaceAStar:
                         continue
                     if adj_r_tile in WATER_IDS or adj_c_tile in WATER_IDS:
                         continue
-                    neighbors.append(((new_r, new_c), grid[new_r, new_c], DIAGONAL_COST))
+                    neighbors.append(((new_r, new_c), grid[new_r, new_c], DIAGONAL_COST, None))
             
             # Stair handling
             if grid[curr_r, curr_c] == SEMANTIC_PALETTE['STAIR']:
                 for dest_pos in self._get_stair_destinations(current_state.position):
                     if 0 <= dest_pos[0] < height and 0 <= dest_pos[1] < width:
-                        neighbors.append((dest_pos, grid[dest_pos[0], dest_pos[1]], 1))
+                        neighbors.append((dest_pos, grid[dest_pos[0], dest_pos[1]], 1, "stair"))
             
             # VIRTUAL NODE TRAVERSAL: CONTROLLED VERSION (same as solve())
             if can_teleport and not self.strict_original_mode:
                 virtual_destinations = self._get_controlled_virtual_destinations(
                     current_state.position, current_state
                 )
-                for dest_pos, cost, _edge_type in virtual_destinations:
+                for dest_pos, cost, edge_type in virtual_destinations:
                     if 0 <= dest_pos[0] < height and 0 <= dest_pos[1] < width:
                         dest_tile = grid[dest_pos[0], dest_pos[1]]
-                        neighbors.append((dest_pos, dest_tile, cost))
+                        neighbors.append((dest_pos, dest_tile, cost, edge_type))
             
             # GRAPH-BASED ROOM WARPING (same as solve())
             if can_teleport and not self.strict_original_mode:
                 warp_destinations = self._get_graph_warp_destinations(
                     current_state.position, current_state
                 )
-                for dest_pos, cost, _edge_type in warp_destinations:
+                for dest_pos, cost, edge_type in warp_destinations:
                     if 0 <= dest_pos[0] < height and 0 <= dest_pos[1] < width:
                         dest_tile = grid[dest_pos[0], dest_pos[1]]
-                        neighbors.append((dest_pos, dest_tile, cost))
+                        neighbors.append((dest_pos, dest_tile, cost, edge_type))
             
-            for target_pos, target_tile, base_cost in neighbors:
-                can_move, new_state = self._try_move_pure(current_state, target_pos, target_tile)
+            for target_pos, target_tile, base_cost, graph_edge_type in neighbors:
+                transition_state = current_state
+                if graph_edge_type not in {None, "stair"}:
+                    can_transition, transition_state = self.apply_graph_edge_transition(
+                        current_state,
+                        current_state.position,
+                        target_pos,
+                        str(graph_edge_type),
+                    )
+                    if not can_transition:
+                        continue
+                can_move, new_state = self._try_move_pure(transition_state, target_pos, target_tile)
                 if not can_move:
                     continue
                 
@@ -3778,6 +3800,60 @@ class StateSpaceAStar:
     ) -> List[Tuple[Tuple[int, int], int, str]]:
         """Public wrapper for non-adjacent graph warp transitions."""
         return self._get_graph_warp_destinations(current_pos, state)
+
+    def apply_graph_edge_transition(
+        self,
+        state: GameState,
+        current_pos: Tuple[int, int],
+        target_pos: Tuple[int, int],
+        edge_type: str,
+    ) -> Tuple[bool, GameState]:
+        """Apply inventory/open-state effects for a graph teleport edge."""
+        current_room = self.env.get_room_for_position(current_pos)
+        target_room = self.env.get_room_for_position(target_pos)
+        current_node = (
+            self.env.room_to_node.get(current_room)
+            if current_room is not None and self.env.room_to_node
+            else current_room
+        )
+        target_node = (
+            self.env.room_to_node.get(target_room)
+            if target_room is not None and self.env.room_to_node
+            else target_room
+        )
+        if current_node is None or target_node is None:
+            return False, state
+        edge_key = tuple(
+            sorted(
+                (current_node, target_node),
+                key=lambda value: (type(value).__name__, str(value)),
+            )
+        )
+        normalized = str(edge_type or "open").strip().lower()
+        if normalized in {"open", "path", "stair", "soft_locked", "one_way", "switch", "puzzle"}:
+            return True, state.copy()
+        if edge_key in state.opened_graph_edges:
+            return True, state.copy()
+
+        new_state = state.copy()
+        if normalized in {"key_locked", "locked"}:
+            if new_state.keys <= 0:
+                return False, state
+            new_state.keys -= 1
+        elif normalized in {"bombable", "bomb"}:
+            if new_state.bomb_count <= 0:
+                return False, state
+            new_state.bomb_count -= 1
+        elif normalized in {"boss_locked", "boss"}:
+            if not new_state.has_boss_key:
+                return False, state
+        elif normalized in {"item_locked", "item_gate"}:
+            if not new_state.has_item:
+                return False, state
+        else:
+            return False, state
+        new_state.opened_graph_edges.add(edge_key)
+        return True, new_state
     
     def _get_stair_destinations(self, current_pos: Tuple[int, int]) -> List[Tuple[int, int]]:
         """
@@ -4710,7 +4786,7 @@ class ZeldaValidator:
                                 else "No path: graph-guided A* did not reach goal"
                             )
                         ),
-                        path_length=int(len(path_i or [])),
+                        path_length=max(0, len(path_i or []) - 1),
                     )
                 else:
                     success_i, path_i, diagnostics_i = solver.solve_with_diagnostics()
@@ -4775,7 +4851,7 @@ class ZeldaValidator:
             is_solvable=True,
             is_valid_syntax=True,
             reachability=reachability,
-            path_length=len(path),
+            path_length=max(0, len(path) - 1),
             backtracking_score=backtracking,
             logical_errors=logical_errors,
             path=path,
@@ -5231,8 +5307,7 @@ class GraphGuidedValidator:
         
         # Step 2: Find shortest path in graph from START to TRIFORCE
         try:
-            undirected = graph.to_undirected()
-            graph_path = nx.shortest_path(undirected, source=start_node, target=triforce_node)
+            graph_path = nx.shortest_path(graph, source=start_node, target=triforce_node)
         except nx.NetworkXNoPath:
             return GraphValidationResult(
                 is_solvable=False,
@@ -5249,9 +5324,9 @@ class GraphGuidedValidator:
         # Step 4: Validate each existing room is internally traversable
         room_validations = {}
         for room_id in existing_in_path:
-            room_key = str(room_id)
-            if room_key in rooms:
-                room_grid = rooms[room_key].grid
+            room_data = normalized_rooms.get(room_id)
+            if room_data is not None:
+                room_grid = room_data.grid
                 is_traversable, floor_count = self._validate_room_traversability(room_grid)
                 room_validations[room_id] = {
                     'is_traversable': is_traversable,
@@ -5272,11 +5347,27 @@ class GraphGuidedValidator:
         subgraph_path = self._find_path_in_existing_rooms(
             graph, start_node, triforce_node, existing_room_ids
         )
-        
-        is_solvable = (
-            len(missing_rooms) == 0 and all_existing_traversable
-        ) or (
-            subgraph_path is not None and len(subgraph_path) > 0
+        if subgraph_path is not None:
+            for room_id in subgraph_path:
+                room_data = normalized_rooms.get(room_id)
+                if room_id in room_validations or room_data is None:
+                    continue
+                room_grid = room_data.grid
+                is_traversable, floor_count = self._validate_room_traversability(room_grid)
+                room_validations[room_id] = {
+                    'is_traversable': is_traversable,
+                    'floor_count': floor_count,
+                    'shape': room_grid.shape,
+                }
+
+        subgraph_traversable = bool(subgraph_path) and all(
+            room_id in existing_room_ids
+            and bool(room_validations.get(room_id, {}).get('is_traversable', False))
+            for room_id in (subgraph_path or [])
+        )
+        is_solvable = bool(
+            (len(missing_rooms) == 0 and all_existing_traversable)
+            or subgraph_traversable
         )
         
         # Calculate graph-based metrics
@@ -5357,8 +5448,7 @@ class GraphGuidedValidator:
         subgraph = graph.subgraph(existing_nodes).copy()
         
         try:
-            undirected = subgraph.to_undirected()
-            path = nx.shortest_path(undirected, source=start_node, target=end_node)
+            path = nx.shortest_path(subgraph, source=start_node, target=end_node)
             return path
         except nx.NetworkXNoPath:
             return None
@@ -5398,6 +5488,8 @@ class GraphGuidedValidator:
         triforce_node = None
         key_nodes = []
         bomb_nodes = []
+        boss_key_nodes = []
+        item_nodes = []
         
         for node_id in graph.nodes():
             node_data = graph.nodes[node_id]
@@ -5407,8 +5499,26 @@ class GraphGuidedValidator:
                 triforce_node = node_id
             if node_data.get('has_key', False):
                 key_nodes.append(node_id)
-            if 'bomb' in str(node_data.get('contents', [])).lower():
+            node_tokens = " ".join(
+                str(node_data.get(key, ""))
+                for key in ("type", "node_type", "label", "contents", "items")
+            ).lower()
+            if 'bomb' in node_tokens:
                 bomb_nodes.append(node_id)
+            if (
+                bool(node_data.get("has_boss_key", False))
+                or bool(node_data.get("is_boss_key", False))
+                or "boss_key" in node_tokens
+                or "big_key" in node_tokens
+            ):
+                boss_key_nodes.append(node_id)
+            if (
+                bool(node_data.get("has_item", False))
+                or bool(node_data.get("is_item", False))
+                or "key_item" in node_tokens
+                or "item_minor" in node_tokens
+            ):
+                item_nodes.append(node_id)
         
         if start_node is None or triforce_node is None:
             return GraphValidationResult(
@@ -5419,13 +5529,17 @@ class GraphGuidedValidator:
                 error_message="No START or TRIFORCE in graph"
             )
         
-        # State-space BFS on the graph
-        # State: (current_node, frozenset(collected_keys), frozenset(opened_doors))
+        # State-space BFS on the graph. Consumable resources are decremented
+        # only when opening a previously unopened edge; boss keys and traversal
+        # items are persistent dungeon affordances.
         initial_state = (
             start_node,
             frozenset(),  # collected items
             frozenset(),  # opened doors (edge tuples)
-            inventory_start['keys']  # initial key count
+            int(inventory_start.get('keys', 0)),
+            int(inventory_start.get('bombs', 0)),
+            bool(inventory_start.get('boss_key', False)),
+            bool(inventory_start.get('item', False)),
         )
         
         queue = deque([initial_state])
@@ -5435,7 +5549,7 @@ class GraphGuidedValidator:
         
         while queue:
             state = queue.popleft()
-            current_node, collected, opened, keys = state
+            current_node, collected, opened, keys, bombs, boss_key, has_item = state
             
             # Check win
             if current_node == triforce_node:
@@ -5460,41 +5574,76 @@ class GraphGuidedValidator:
             # Collect items at current node
             new_collected = collected
             new_keys = keys
-            if current_node in key_nodes and current_node not in collected:
+            new_bombs = bombs
+            new_boss_key = boss_key
+            new_has_item = has_item
+            if current_node not in collected and current_node in key_nodes:
                 new_collected = collected | {current_node}
                 new_keys = keys + 1
+            if current_node not in collected and current_node in bomb_nodes:
+                new_collected = new_collected | {current_node}
+                node_data = graph.nodes[current_node]
+                new_bombs += int(max(1, node_data.get("bomb_count", 1)))
+            if current_node not in collected and current_node in boss_key_nodes:
+                new_collected = new_collected | {current_node}
+                new_boss_key = True
+            if current_node not in collected and current_node in item_nodes:
+                new_collected = new_collected | {current_node}
+                new_has_item = True
             
             # Explore edges
             for neighbor in graph.neighbors(current_node):
-                edge_data = graph.get_edge_data(current_node, neighbor)
-                edge_type = edge_data.get('type', 'open') if edge_data else 'open'
-                edge_key = (min(current_node, neighbor), max(current_node, neighbor))
+                edge_data = graph.get_edge_data(current_node, neighbor) or {}
+                edge_type = edge_type_from_data(edge_data)
+                edge_key = tuple(sorted((current_node, neighbor), key=lambda value: (type(value).__name__, str(value))))
                 
                 can_traverse = False
                 new_opened = opened
                 use_key = False
+                use_bomb = False
                 
-                if edge_type == 'open' or edge_type == '':
+                if edge_type in {'open', '', 'path', 'stair'}:
                     can_traverse = True
-                elif edge_type == 'locked':
+                elif edge_type in {'locked', 'key_locked'}:
                     if new_keys > 0 or edge_key in opened:
                         can_traverse = True
                         if edge_key not in opened:
                             new_opened = opened | {edge_key}
                             use_key = True
-                elif edge_type == 'soft_locked':
+                elif edge_type in {'soft_locked', 'one_way'}:
                     can_traverse = True  # One-way but passable
-                elif edge_type == 'bombable':
-                    # Would need bombs - skip for now unless we have them
-                    can_traverse = edge_key in opened
+                elif edge_type in {'bomb', 'bombable'}:
+                    if new_bombs > 0 or edge_key in opened:
+                        can_traverse = True
+                        if edge_key not in opened:
+                            new_opened = opened | {edge_key}
+                            use_bomb = True
+                elif edge_type in {'boss', 'boss_locked'}:
+                    can_traverse = bool(new_boss_key)
+                elif edge_type in {'item_locked', 'item_gate'}:
+                    can_traverse = bool(new_has_item)
+                elif edge_type == 'switch':
+                    can_traverse = True
                 else:
-                    can_traverse = True  # Default: allow passage
+                    # This graph-only validator does not model the resource or
+                    # state needed by the remaining constraints. Fail closed.
+                    can_traverse = False
                 
                 if can_traverse:
                     final_keys = new_keys - 1 if use_key else new_keys
                     final_keys = max(0, final_keys)
+                    final_bombs = new_bombs - 1 if use_bomb else new_bombs
+                    final_bombs = max(0, final_bombs)
                     
-                    new_state = (neighbor, new_collected, new_opened, final_keys)
+                    new_state = (
+                        neighbor,
+                        new_collected,
+                        new_opened,
+                        final_keys,
+                        final_bombs,
+                        new_boss_key,
+                        new_has_item,
+                    )
                     if new_state not in visited:
                         visited.add(new_state)
                         parents[new_state] = state

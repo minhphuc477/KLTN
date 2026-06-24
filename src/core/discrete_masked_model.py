@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import logging
 import math
-import warnings
 from typing import Any, Dict, Optional, Sequence, Tuple
 
 import torch
@@ -325,11 +324,10 @@ class DiscreteMaskedRoomModel(nn.Module):
             if value != default
         ]
         if changed_legacy_args:
-            warnings.warn(
-                "DiscreteMaskedRoomModel now uses MaskedTokenTransformerBackbone; "
-                f"legacy U-Net arguments have no effect: {', '.join(changed_legacy_args)}.",
-                DeprecationWarning,
-                stacklevel=2,
+            raise ValueError(
+                "DiscreteMaskedRoomModel uses MaskedTokenTransformerBackbone; "
+                "the following legacy U-Net controls are not valid masked-room "
+                f"ablations: {', '.join(changed_legacy_args)}."
             )
         self.backbone = MaskedTokenTransformerBackbone(
             hidden_dim=self.hidden_dim,

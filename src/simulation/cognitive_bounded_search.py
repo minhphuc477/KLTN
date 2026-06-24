@@ -2381,19 +2381,33 @@ class CognitiveBoundedSearch:
             if self._estimate_focus_commitment_bonus(cog_state, best_pos) > 0.0:
                 self._focus_guided_steps += 1
             if self.env.goal_pos:
-                current_dist = abs(current_pos[0] - self.env.goal_pos[0]) + \
-                              abs(current_pos[1] - self.env.goal_pos[1])
-                new_dist = abs(best_pos[0] - self.env.goal_pos[0]) + \
-                          abs(best_pos[1] - self.env.goal_pos[1])
+                current_dist = self._navigation_distance(current_pos, self.env.goal_pos)
+                new_dist = self._navigation_distance(best_pos, self.env.goal_pos)
                 if new_dist > current_dist:
                     self._suboptimal_decisions += 1
             
             # 5. EXECUTE: Resolve the chosen action against the actual environment.
             # Decision-making above is belief-driven; execution is grounded.
             actual_tile = int(grid[best_pos[0], best_pos[1]])
-            moved, new_game_state = self._try_move(
-                cog_state.game_state, best_pos, actual_tile
-            )
+            execution_state = cog_state.game_state
+            graph_edge_type = getattr(self, "_pending_graph_transition_types", {}).get(tuple(best_pos))
+            if graph_edge_type not in {None, "stair"}:
+                graph_ok, execution_state = self._transition_helper.apply_graph_edge_transition(
+                    execution_state,
+                    current_pos,
+                    best_pos,
+                    str(graph_edge_type),
+                )
+                if not graph_ok:
+                    moved, new_game_state = False, cog_state.game_state
+                else:
+                    moved, new_game_state = self._try_move(
+                        execution_state, best_pos, actual_tile
+                    )
+            else:
+                moved, new_game_state = self._try_move(
+                    execution_state, best_pos, actual_tile
+                )
             
             if not moved:
                 # Belief-driven planning can be wrong; learn from the contact
@@ -2689,6 +2703,7 @@ class CognitiveBoundedSearch:
             return []
 
         state = cog_state.game_state
+        self._pending_graph_transition_types = {}
         current_pos = tuple(int(v) for v in state.position)
         current_tile = int(grid[current_pos[0], current_pos[1]])
         is_stair = current_tile == int(SEMANTIC_PALETTE["STAIR"])
@@ -2710,31 +2725,35 @@ class CognitiveBoundedSearch:
             can_transition = is_stair or is_door or self._is_at_room_boundary(current_pos)
 
         transition_positions: List[Tuple[int, int]] = []
+        transition_types: Dict[Tuple[int, int], str] = {}
         if is_stair:
             try:
-                transition_positions.extend(self._transition_helper.get_stair_destinations(current_pos))
+                for pos in self._transition_helper.get_stair_destinations(current_pos):
+                    normalized = (int(pos[0]), int(pos[1]))
+                    transition_positions.append(normalized)
+                    transition_types[normalized] = "stair"
             except (AttributeError, RuntimeError, ValueError, TypeError):
                 pass
 
         if can_transition and not strict_original:
             try:
-                transition_positions.extend(
-                    pos
-                    for pos, _cost, _edge_type in self._transition_helper.get_controlled_virtual_destinations(
-                        current_pos,
-                        state,
-                    )
-                )
+                for pos, _cost, edge_type in self._transition_helper.get_controlled_virtual_destinations(
+                    current_pos,
+                    state,
+                ):
+                    normalized = (int(pos[0]), int(pos[1]))
+                    transition_positions.append(normalized)
+                    transition_types[normalized] = str(edge_type)
             except (AttributeError, RuntimeError, ValueError, TypeError):
                 pass
             try:
-                transition_positions.extend(
-                    pos
-                    for pos, _cost, _edge_type in self._transition_helper.get_graph_warp_destinations(
-                        current_pos,
-                        state,
-                    )
-                )
+                for pos, _cost, edge_type in self._transition_helper.get_graph_warp_destinations(
+                    current_pos,
+                    state,
+                ):
+                    normalized = (int(pos[0]), int(pos[1]))
+                    transition_positions.append(normalized)
+                    transition_types[normalized] = str(edge_type)
             except (AttributeError, RuntimeError, ValueError, TypeError):
                 pass
 
@@ -2759,6 +2778,7 @@ class CognitiveBoundedSearch:
                 continue
             seen.add(pos)
             candidates.append((pos, tile))
+            self._pending_graph_transition_types[pos] = transition_types.get(pos, "open")
 
         return candidates
 
@@ -3780,13 +3800,14 @@ class CognitiveBoundedSearch:
         Compute final cognitive metrics from the path.
         """
         unique_tiles = len(set(path))
-        total_steps = len(path)
+        trajectory_visits = len(path)
+        total_steps = max(0, trajectory_visits - 1)
         
         # Entropy-normalized confusion index. The old revisits/unique ratio
         # made large rooms and small rooms look equally confusing for the same
         # revisit multiplier. This denominator approximates random-walk revisit
         # pressure over the discovered support.
-        revisits = total_steps - unique_tiles
+        revisits = trajectory_visits - unique_tiles
         expected_revisits = float(unique_tiles) * math.log(float(max(2, unique_tiles)))
         confusion_index = float(revisits) / max(1.0, expected_revisits)
         
@@ -3938,8 +3959,8 @@ class CognitiveBoundedSearch:
             or getattr(getattr(self.env, "solver_options", None), "allow_diagonals", False)
         )
         lower_distance = max(dr, dc) if allow_diagonals else (dr + dc)
-        lower_bound = max(1, int(lower_distance) + 1)
-        return float(len(path)) / float(lower_bound)
+        lower_bound = max(1, int(lower_distance))
+        return float(max(0, len(path) - 1)) / float(lower_bound)
     
     def _count_replans(self, path: List[Tuple[int, int]]) -> int:
         """Count direction changes (replans) in the path."""

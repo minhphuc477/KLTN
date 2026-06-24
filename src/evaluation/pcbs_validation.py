@@ -601,11 +601,11 @@ def evaluate_astar_vs_pcbs(
         pcbs_status = "budget_exhausted" if int(pcbs_states) >= timeout_pcbs_i else "failed"
 
     pcbs_trajectory_length = int(len(pcbs_path))
-    pcbs_solution_length = pcbs_trajectory_length if bool(pcbs_success) else 0
+    pcbs_solution_length = max(0, pcbs_trajectory_length - 1) if bool(pcbs_success) else 0
     total_revisits = max(
         0,
-        safe_positive_int(getattr(pcbs_metrics, "total_steps", 0), default=0)
-        - safe_positive_int(getattr(pcbs_metrics, "unique_tiles_visited", 0), default=0),
+        pcbs_trajectory_length
+        - int(max(0, getattr(pcbs_metrics, "unique_tiles_visited", 0) or 0)),
     )
     puzzle_stall_steps = _count_puzzle_stall_steps(grid, pcbs_path, goal)
     confusion_ratio = confusion_ratio_vs_oracle(
@@ -662,6 +662,10 @@ def evaluate_astar_vs_pcbs(
             "unique_rooms_visited": int(getattr(pcbs_metrics, "unique_rooms_visited", 0) or 0),
             "total_revisits": int(total_revisits),
             "aha_latency": int(pcbs_metrics.aha_latency),
+            "goal_exploitation_latency": int(pcbs_metrics.aha_latency),
+            "goal_first_seen_step": int(getattr(pcbs_metrics, "goal_first_seen_step", -1)),
+            # Backward-compatible alias; this is see-to-reach latency, not the
+            # absolute step at which the goal was first sighted.
             "goal_sighting_latency": int(pcbs_metrics.aha_latency),
             "puzzle_stall_steps": int(puzzle_stall_steps),
             "confusion_index": float(pcbs_metrics.confusion_index),

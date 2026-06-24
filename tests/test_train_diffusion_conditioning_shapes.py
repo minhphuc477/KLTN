@@ -701,6 +701,45 @@ def test_wfc_pseudo_label_loss_scales_subset_by_repaired_samples(monkeypatch):
     assert scaled_loss.item() == pytest.approx(repaired_mean.item())
 
 
+def test_wfc_pseudo_label_loss_keeps_successful_sample_alignment(monkeypatch):
+    trainer = DiffusionTrainer.__new__(DiffusionTrainer)
+    trainer.device = torch.device("cpu")
+    trainer.global_step = 0
+    trainer.config = SimpleNamespace(
+        alpha_wfc_pseudo=1.0,
+        wfc_pseudo_max_samples=2,
+        wfc_pseudo_confidence_threshold=0.0,
+        num_classes=2,
+        seed=123,
+    )
+    logits = torch.full((2, 2, ROOM_HEIGHT, ROOM_WIDTH), -8.0, requires_grad=True)
+    with torch.no_grad():
+        logits[0, 0] = 8.0
+        logits[1, 1] = 8.0
+    real_maps = torch.zeros(2, 1, ROOM_HEIGHT, ROOM_WIDTH)
+    calls = {"count": 0}
+
+    def repair(*_args, **_kwargs):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise RuntimeError("first sample cannot be repaired")
+        return {"grid": np.ones((ROOM_HEIGHT, ROOM_WIDTH), dtype=np.int64)}
+
+    monkeypatch.setattr(
+        "src.train_diffusion.integrate_weighted_wfc_into_pipeline",
+        repair,
+    )
+
+    loss, sample_count, _repaired_mean = DiffusionTrainer._wfc_pseudo_label_loss(
+        trainer,
+        logits,
+        real_maps,
+    )
+
+    assert sample_count == pytest.approx(1.0)
+    assert loss.item() < 1e-4
+
+
 def test_diffusion_adamw_groups_exclude_bias_and_norm_from_weight_decay():
     module = torch.nn.Sequential(
         torch.nn.Linear(4, 4),
@@ -731,6 +770,7 @@ def test_train_epoch_node_sequence_conditioning_is_batched_and_padded():
 
     assert trainer.last_train_conditioning_shape == (2, 5, 8)
     _assert_batched_graph_sequence(trainer.last_train_diffusion_graph_data, graph_list)
+    assert trainer.epoch == 0
 
 
 def test_validate_node_sequence_conditioning_is_batched_and_padded():

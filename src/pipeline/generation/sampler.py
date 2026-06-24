@@ -644,7 +644,6 @@ def generate_room(
     """
     room_started_at = time.perf_counter()
     stage_times: Dict[str, float] = {}
-    local_np_rng = np.random.default_rng(seed) if seed is not None else np.random.default_rng()
     torch_rng_state = torch.random.get_rng_state() if seed is not None else None
     cuda_rng_states = (
         torch.cuda.get_rng_state_all()
@@ -717,7 +716,12 @@ def generate_room(
     )
 
     condition_started_at = time.perf_counter()
-    if precomputed_condition is not None:
+    if sampler_mode == "categorical" and effective_room_generator_mode != "discrete_masked":
+        # The categorical codebook-usage sampler is an explicit unconditional
+        # baseline. Do not compute or imply graph conditioning it cannot use.
+        condition = None
+        _record_stage_time(stage_times, "condition_time_sec", condition_started_at)
+    elif precomputed_condition is not None:
         condition = precomputed_condition.to(pipeline.device)
         _record_stage_time(stage_times, "precomputed_condition_time_sec", condition_started_at)
     else:
@@ -740,6 +744,7 @@ def generate_room(
 
     sampled_tokens: Optional[torch.Tensor] = None
     masked_sampling_metrics: Dict[str, float] = {}
+    fast_sampling_executed = False
 
     if precomputed_latent is not None and precomputed_logits is not None:
         precomputed_started_at = time.perf_counter()
@@ -878,6 +883,7 @@ def generate_room(
                 guidance_scale=float(guidance_scale),
                 seed=seed,
             )
+            fast_sampling_executed = True
             pipeline._bump_diagnostic("fast_sampling_used")
         elif use_ddim:
             if use_fast_sampling:
@@ -1463,7 +1469,7 @@ def generate_room(
     )
 
     if bool(pipeline.default_deterministic_graph_marker_overlay_enabled):
-        neural_grid, neural_marker_count, neural_marker_ids = pipeline._overlay_room_graph_markers(
+        neural_grid, neural_marker_count, _ = pipeline._overlay_room_graph_markers(
             neural_grid,
             graph=mission_graph_for_room,
             room_id=room_id,
@@ -1485,7 +1491,6 @@ def generate_room(
     else:
         neural_marker_count = 0
         final_marker_count = 0
-        neural_marker_ids = []
         final_marker_ids = []
         pipeline._bump_diagnostic("deterministic_graph_marker_overlay_disabled")
 
@@ -1635,7 +1640,8 @@ def generate_room(
         'wfc_feedback_rounds': float(repair_diag.get('feedback_rounds', 0)),
         'wfc_failures': float(repair_diag.get('wfc_failures', 0)),
         'planned_traversability_pixels': float(np.sum(room_plan_mask)) if isinstance(room_plan_mask, np.ndarray) else 0.0,
-        'used_fast_sampling': float(bool(use_fast_sampling)),
+        'fast_sampling_requested': float(bool(use_fast_sampling)),
+        'used_fast_sampling': float(bool(fast_sampling_executed)),
         'teacher_fallback_used': 0.0,
         'masked_room_sampling_temperature': float(pipeline.default_masked_room_sampling_temperature),
         'masked_room_sampling_stochastic': float(

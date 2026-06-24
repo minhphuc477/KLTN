@@ -52,7 +52,7 @@ def confusion_ratio_vs_oracle(
     candidate_success: bool,
 ) -> float:
     """
-    Compute candidate/oracle path ratio when the oracle actually solved.
+    Compute excess candidate path length relative to the solved oracle.
 
     Returns NaN when the ratio is undefined rather than polluting summaries with
     +/-inf sentinels.
@@ -162,7 +162,7 @@ def run_astar_oracle(env: Any, timeout: int, heuristic_mode: str = "balanced") -
     return {
         "success": bool(success),
         "path": path_list,
-        "path_length": int(len(path_list)),
+        "path_length": int(max(0, len(path_list) - 1)),
         "states_explored": int(diagnostics.states_explored or 0),
         "status": status,
         "failure_reason": str(diagnostics.failure_reason or ""),

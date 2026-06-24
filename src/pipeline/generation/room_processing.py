@@ -16,6 +16,7 @@ from src.core.definitions import DOOR_POSITIONS, TileID, parse_edge_type_tokens
 from src.core.vqvae import canonical_latent_shape
 from src.pipeline.block_contracts import BlockShapeContract, validate_feature_dims, validate_tensor_contract
 from src.pipeline.repair_feedback import build_latent_edit_mask, build_neighbor_boundary_inpaint_inputs, logicnet_guided_inpaint_room
+from src.pipeline.room_stitching import StitchedRoomLayout
 from src.pipeline.room_topology_conditioning import (
     apply_puzzle_structure_control_to_conditioning,
     build_room_semantic_anchor_points,
@@ -3531,22 +3532,6 @@ def _overlay_room_graph_markers(
         (ROOM_HEIGHT // 2, 0),
         (ROOM_HEIGHT // 2, ROOM_WIDTH - 1),
     )
-    role_flags = pipeline._room_role_flags(dict(graph.nodes[room_id])) if isinstance(graph, nx.Graph) and room_id in graph else {}
-    semantics = pipeline._extract_room_topology_semantics(graph, room_id) if isinstance(graph, nx.Graph) and room_id in graph else {
-        "required_doors": {},
-        "incoming_dirs": set(),
-        "outgoing_dirs": set(),
-    }
-    semantic_anchors = build_room_semantic_anchor_points(
-        room_shape=(ROOM_HEIGHT, ROOM_WIDTH),
-        start=start_coord,
-        goal=goal_coord,
-        required_doors=semantics["required_doors"],
-        incoming_dirs=semantics["incoming_dirs"],
-        outgoing_dirs=semantics["outgoing_dirs"],
-        room_role_flags=role_flags,
-        semantic_puzzle_offset=pipeline.default_semantic_puzzle_offset,
-    )
     preferred_positions = pipeline._build_room_graph_marker_preferences(
         graph=graph,
         room_id=room_id,
@@ -3597,22 +3582,6 @@ def _plan_room_graph_marker_layout(
     start_coord, goal_coord = start_goal if start_goal is not None else (
         (ROOM_HEIGHT // 2, 0),
         (ROOM_HEIGHT // 2, ROOM_WIDTH - 1),
-    )
-    role_flags = pipeline._room_role_flags(dict(graph.nodes[room_id])) if isinstance(graph, nx.Graph) and room_id in graph else {}
-    semantics = pipeline._extract_room_topology_semantics(graph, room_id) if isinstance(graph, nx.Graph) and room_id in graph else {
-        "required_doors": {},
-        "incoming_dirs": set(),
-        "outgoing_dirs": set(),
-    }
-    semantic_anchors = build_room_semantic_anchor_points(
-        room_shape=(ROOM_HEIGHT, ROOM_WIDTH),
-        start=start_coord,
-        goal=goal_coord,
-        required_doors=semantics["required_doors"],
-        incoming_dirs=semantics["incoming_dirs"],
-        outgoing_dirs=semantics["outgoing_dirs"],
-        room_role_flags=role_flags,
-        semantic_puzzle_offset=pipeline.default_semantic_puzzle_offset,
     )
     preferred_positions = pipeline._build_room_graph_marker_preferences(
         graph=graph,

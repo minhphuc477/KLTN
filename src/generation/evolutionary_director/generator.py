@@ -926,7 +926,6 @@ class EvolutionaryTopologyGenerator:
         for _ in range(max_repairs):
             best_candidate: Optional[MissionGraph] = None
             best_gap = current_gap
-            best_candidate_trim_changes = 0
             for rule in repair_rules:
                 if not rule.can_apply(copy.deepcopy(repaired), context):
                     continue

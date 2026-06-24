@@ -126,8 +126,9 @@ class StateSpaceDFS:
         """
         logger.debug(f'StateSpaceDFS: Starting IDDFS (max_depth={self.max_depth})')
         
-        # Start with shallow depth, double each iteration
-        depth_limit = 10
+        # Visit every allowed depth. Geometric jumps can skip the only valid
+        # caller-specified bound (for example max_depth=11).
+        depth_limit = 0
         total_states = 0
         
         while depth_limit <= self.max_depth and total_states < self.timeout:
@@ -152,8 +153,7 @@ class StateSpaceDFS:
                 logger.debug(f'IDDFS succeeded at depth {len(path)}, explored {total_states} states')
                 return True, path, total_states
             
-            # Double depth limit for next iteration
-            depth_limit *= 2
+            depth_limit += 1
         
         logger.debug(f'IDDFS exhausted: max_depth={self.max_depth}, states={total_states}')
         return False, [], total_states
@@ -174,10 +174,6 @@ class StateSpaceDFS:
         Returns:
             (success, path) tuple
         """
-        # Check termination conditions
-        if depth >= depth_limit:
-            return False, []
-        
         if self.states_explored >= self.timeout:
             return False, []
         
@@ -199,6 +195,9 @@ class StateSpaceDFS:
         # Goal check
         if state.position == self.env.goal_pos:
             return True, list(path)
+
+        if depth >= depth_limit:
+            return False, []
         
         # Generate successors
         successors = self._get_successors(state)
@@ -389,7 +388,7 @@ class StateSpaceDFS:
             max_queue_size=0,  # DFS uses stack, not priority queue
             time_taken_ms=elapsed_ms,
             failure_reason="" if success else "DFS exhausted search space",
-            path_length=len(path) if success else 0,
+            path_length=max(0, len(path) - 1) if success else 0,
             final_inventory=None
         )
         

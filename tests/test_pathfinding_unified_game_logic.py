@@ -136,8 +136,8 @@ class TestUnifiedGameLogic:
     def test_block_pushing_required(self):
         """Test: Block MUST be pushed to clear path."""
         # Single corridor - block blocks the only path
-        grid = np.full((5, 7), SEMANTIC_PALETTE['WALL'], dtype=np.int64)
-        grid[2, 1:6] = SEMANTIC_PALETTE['FLOOR']
+        grid = np.full((5, 8), SEMANTIC_PALETTE['WALL'], dtype=np.int64)
+        grid[2, 1:7] = SEMANTIC_PALETTE['FLOOR']
         
         grid[2, 1] = SEMANTIC_PALETTE['START']
         grid[2, 5] = SEMANTIC_PALETTE['TRIFORCE']
@@ -230,8 +230,8 @@ class TestUnifiedGameLogic:
     def test_block_chain_pushing(self):
         """Test: Blocks pushed multiple times track original positions correctly."""
         # Longer corridor for multiple pushes
-        grid = np.full((5, 9), SEMANTIC_PALETTE['WALL'], dtype=np.int64)
-        grid[2, 1:8] = SEMANTIC_PALETTE['FLOOR']
+        grid = np.full((5, 10), SEMANTIC_PALETTE['WALL'], dtype=np.int64)
+        grid[2, 1:9] = SEMANTIC_PALETTE['FLOOR']
         
         grid[2, 1] = SEMANTIC_PALETTE['START']
         grid[2, 7] = SEMANTIC_PALETTE['TRIFORCE']

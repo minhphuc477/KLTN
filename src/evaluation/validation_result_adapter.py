@@ -56,7 +56,7 @@ def normalize_validation_result(result: Any) -> CanonicalValidationResult:
         path_length = 0
 
     if path_length <= 0 and solution_path:
-        path_length = len(solution_path)
+        path_length = max(0, len(solution_path) - 1)
 
     return CanonicalValidationResult(
         is_solvable=is_solvable,
