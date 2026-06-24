@@ -1205,7 +1205,11 @@ class LogicNet(nn.Module):
         self.initial_temperature = initial_temperature
         self.final_temperature = final_temperature
         self.register_buffer('current_temperature', torch.tensor(initial_temperature))
-        self.register_buffer("locked_edge_role_ids", torch.tensor([1, 4, 5], dtype=torch.long))
+        self.register_buffer(
+            "locked_edge_role_ids",
+            torch.tensor([1, 4, 5], dtype=torch.long),
+            persistent=False,
+        )
         
         # Tile classification
         self.tile_classifier = TileClassifier(

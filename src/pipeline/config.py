@@ -15,6 +15,21 @@ from src.pipeline.room_topology_conditioning import (
 from src.pipeline.types import PipelineComponentFactory, PipelineComponents
 
 
+def _first_existing_path(candidates: List[Path]) -> Path:
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
+def _checkpoint_search_roots(checkpoint_dir: Path) -> List[Path]:
+    roots = [checkpoint_dir]
+    nested = checkpoint_dir / "checkpoints"
+    if nested not in roots:
+        roots.append(nested)
+    return roots
+
+
 def _pop_dataclass_kwargs(config_type: type[Any], values: Dict[str, Any]) -> Dict[str, Any]:
     names = {field_info.name for field_info in fields(config_type)}
     selected: Dict[str, Any] = {}
@@ -45,6 +60,7 @@ class ModelConfig:
     condition_reference_tile_vocab_size: int = 44
     condition_reference_embedding_dim: int = 32
     condition_reference_hidden_dim: int = 64
+    condition_use_rrwp_edge_features: bool = True
     topology_refinement_mode: str = "gat2"
     diffusion_attention_mode: str = "softmax"
     diffusion_hedgehog_feature_dim: int = 32
@@ -191,19 +207,54 @@ class PipelineConfig:
         resolved_config: Optional[Dict[str, Any]] = None,
         **overrides: Any,
     ) -> "PipelineConfig":
-        """Build config using the historical checkpoint directory convention."""
+        """Build config from canonical nested or legacy flat checkpoint layouts."""
         checkpoint_path = Path(checkpoint_dir)
         kwargs: Dict[str, Any] = {}
         if isinstance(resolved_config, dict):
             from src.pipeline.config_bridge import pipeline_kwargs_from_resolved_config
 
             kwargs.update(pipeline_kwargs_from_resolved_config(resolved_config))
+        roots = _checkpoint_search_roots(checkpoint_path)
+        vqvae_checkpoint = _first_existing_path(
+            [
+                *(root / "vqvae" / "vqvae_pretrained.pth" for root in roots),
+                checkpoint_path / "vqvae_pretrained.pth",
+                checkpoint_path / "vqvae_best.pth",
+            ]
+        )
+        diffusion_checkpoint = _first_existing_path(
+            [
+                *(root / "diffusion" / "best_model.pth" for root in roots),
+                checkpoint_path / "best_model.pth",
+                checkpoint_path / "diffusion_best.pth",
+            ]
+        )
+        logic_checkpoint = _first_existing_path(
+            [checkpoint_path / "logic_net_best.pth", diffusion_checkpoint]
+        )
+        condition_checkpoint = _first_existing_path(
+            [checkpoint_path / "condition_encoder_best.pth", diffusion_checkpoint]
+        )
+        masked_checkpoint = _first_existing_path(
+            [
+                *(root / "masked_room" / "best_model.pth" for root in roots),
+                checkpoint_path / "masked_room_best.pth",
+            ]
+        )
+        fast_checkpoint = _first_existing_path(
+            [
+                *(root / "fast_sampler" / "best_model.pth" for root in roots),
+                checkpoint_path / "fast_sampler_best.pth",
+            ]
+        )
         kwargs.update(
             {
-                "vqvae_checkpoint": str(checkpoint_path / "vqvae_best.pth"),
-                "diffusion_checkpoint": str(checkpoint_path / "diffusion_best.pth"),
-                "logic_net_checkpoint": str(checkpoint_path / "logic_net_best.pth"),
-                "condition_encoder_checkpoint": str(checkpoint_path / "condition_encoder_best.pth"),
+                "vqvae_checkpoint": str(vqvae_checkpoint),
+                "diffusion_checkpoint": str(diffusion_checkpoint),
+                "logic_net_checkpoint": str(logic_checkpoint),
+                "condition_encoder_checkpoint": str(condition_checkpoint),
+                "masked_room_checkpoint": str(masked_checkpoint) if masked_checkpoint.exists() else None,
+                "fast_sampling_checkpoint": str(fast_checkpoint) if fast_checkpoint.exists() else None,
                 "device": device,
             }
         )

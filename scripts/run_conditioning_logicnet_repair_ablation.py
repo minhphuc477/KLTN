@@ -36,6 +36,7 @@ from src.pipeline.dungeon_pipeline import (  # noqa: E402
     pipeline_kwargs_from_resolved_config,
     topology_generation_kwargs_from_resolved_config,
 )
+from src.utils.checkpoint import safe_torch_load  # noqa: E402
 from src.zelda_data.vglc_utils import filter_virtual_nodes  # noqa: E402
 
 
@@ -168,11 +169,61 @@ def validate_execute_checkpoints(
             f"Missing: {details}. Pass explicit checkpoint paths or use --allow-random-fallback for a code-only smoke run."
         )
 
+    payload_cache: Dict[str, Any] = {}
+
+    def _payload(path: str) -> Any:
+        if path not in payload_cache:
+            payload_cache[path] = safe_torch_load(path, map_location="cpu")
+        return payload_cache[path]
+
+    component_keys = {
+        "vqvae_checkpoint": ("vqvae_state_dict",),
+        "diffusion_checkpoint": ("ema_diffusion_state_dict", "diffusion_state_dict"),
+        "logic_net_checkpoint": ("ema_logic_net_state_dict", "logic_net_state_dict"),
+    }
+    invalid: List[str] = []
+    for key in required:
+        path = str(checkpoints[key])
+        checkpoint = _payload(path)
+        candidates = component_keys[key]
+        if not isinstance(checkpoint, dict):
+            invalid.append(f"{key}={path!r} is not a checkpoint dictionary")
+            continue
+        if any(isinstance(checkpoint.get(candidate), dict) for candidate in candidates):
+            continue
+        if key == "vqvae_checkpoint":
+            is_composite = any(
+                isinstance(checkpoint.get(candidate), dict)
+                for candidate in (
+                    "diffusion_state_dict",
+                    "condition_encoder_state_dict",
+                    "logic_net_state_dict",
+                )
+            )
+            looks_like_raw_vqvae = any(
+                str(name).startswith(("encoder.", "decoder.", "quantizer.", "pre_quant."))
+                for name in checkpoint
+            )
+            if looks_like_raw_vqvae and not is_composite:
+                continue
+        invalid.append(
+            f"{key}={path!r} lacks any of {', '.join(candidates)}"
+        )
+    if invalid:
+        raise ValueError(
+            "Cannot execute a scientific ablation with unloadable component checkpoints: "
+            + "; ".join(invalid)
+            + ". Supply the correct artifacts or pass --allow-random-fallback "
+            "for a code-only smoke run."
+        )
+
 
 def pipeline_kwargs_for_variant(
     resolved_config: Mapping[str, Any],
     checkpoints: Mapping[str, Optional[str]],
     variant: VariantSpec,
+    *,
+    allow_random_fallback: bool = False,
 ) -> Dict[str, Any]:
     kwargs = pipeline_kwargs_from_resolved_config(dict(resolved_config))
     kwargs.update({key: value for key, value in checkpoints.items() if value is not None})
@@ -218,11 +269,17 @@ def get_or_create_pipeline(
     checkpoints: Mapping[str, Optional[str]],
     variant: VariantSpec,
     device: str,
+    allow_random_fallback: bool = False,
 ) -> NeuralSymbolicDungeonPipeline:
     key = pipeline_cache_key(variant, checkpoints, device=device)
     pipeline = cache.get(key)
     if pipeline is None:
-        kwargs = pipeline_kwargs_for_variant(resolved_config, checkpoints, variant)
+        kwargs = pipeline_kwargs_for_variant(
+            resolved_config,
+            checkpoints,
+            variant,
+            allow_random_fallback=allow_random_fallback,
+        )
         pipeline = NeuralSymbolicDungeonPipeline(device=str(device), **kwargs)
         cache[key] = pipeline
     return pipeline
@@ -651,6 +708,7 @@ def execute_protocol(
                 checkpoints=resolved_checkpoints,
                 variant=variant,
                 device=str(args.device),
+                allow_random_fallback=bool(getattr(args, "allow_random_fallback", False)),
             )
             pipeline.runtime_diagnostics = {}
             started = time.perf_counter()

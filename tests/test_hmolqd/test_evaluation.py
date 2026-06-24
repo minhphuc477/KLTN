@@ -1,5 +1,5 @@
 """
-Tests for H-MOLQD Block VI: External Validator & MAP-Elites
+Tests for H-MOLQD Block VII: External Validator & MAP-Elites
 ============================================================
 
 Tests for solvability validation and quality diversity.

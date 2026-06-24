@@ -77,6 +77,7 @@ def _initialize_pipeline_from_flat_kwargs(
     condition_reference_tile_vocab_size: int = 44,
     condition_reference_embedding_dim: int = 32,
     condition_reference_hidden_dim: int = 64,
+    condition_use_rrwp_edge_features: bool = True,
     topology_refinement_mode: str = "gat2",
     diffusion_attention_mode: str = "softmax",
     diffusion_hedgehog_feature_dim: int = 32,
@@ -413,6 +414,7 @@ def _initialize_pipeline_from_flat_kwargs(
     pipeline.condition_reference_tile_vocab_size = int(max(2, int(condition_reference_tile_vocab_size)))
     pipeline.condition_reference_embedding_dim = int(max(4, int(condition_reference_embedding_dim)))
     pipeline.condition_reference_hidden_dim = int(max(4, int(condition_reference_hidden_dim)))
+    pipeline.condition_use_rrwp_edge_features = bool(condition_use_rrwp_edge_features)
 
     # Runtime fallback diagnostics for auditability of best-effort paths.
     pipeline.runtime_diagnostics: Dict[str, int] = {}

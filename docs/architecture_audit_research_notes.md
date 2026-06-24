@@ -804,3 +804,161 @@ Verification:
 - Full `python -m pytest tests -q --maxfail=5` still times out in
   `tests/test_gui_demo_validated_level_artifact.py::test_gui_real_full_pipeline_pdrop035_demo_solves_live_with_pcbs_balanced`;
   this is a live GUI artifact test and remains outside the non-GUI audit scope.
+
+## 2026-06-24 Final Major Component Pass
+
+Confirmed status:
+
+- The seven-block reference was ASCII-normalized so the architecture diagram,
+  formulas, arrows, and block I/O tables no longer render as mojibake on
+  Windows consoles or exported Markdown viewers.
+- `docs/BLOCK_IO_REFERENCE.md` no longer carries stale source line-count
+  claims and now documents the real data-format split: VQ-VAE/diffusion use
+  normalized `[B,1,H,W]` tile IDs, while masked-room categorical training uses
+  raw integer tile IDs through `categorical_tokens=True`.
+- Placeholder auditing found no non-GUI empty implementation requiring removal.
+  Remaining non-GUI placeholder hits are abstract/base-class contracts or
+  guarded exception paths; GUI exception guards were deliberately left outside
+  this pass.
+
+Verification:
+
+- `python -m pytest tests/test_block_integration.py tests/test_advanced_architecture_ablations.py tests/test_ablation_scripts.py -q --maxfail=5`
+  passed with 59 tests.
+- `python -m pytest tests/test_round5_audit_fixes.py tests/test_protocol_reporting.py tests/test_pathfinding_unified_game_logic.py tests/test_validator_block_push_regressions.py -q --maxfail=5`
+  passed with 60 tests.
+- `python -m pytest tests/test_config_system.py tests/test_train_diffusion_conditioning_shapes.py -q --maxfail=5`
+  passed with 95 tests.
+- `python -m pytest tests/test_zelda_loader_graph_conditioning.py tests/test_hmolqd/test_data_adapter.py tests/test_training_data_loading_utils.py tests/test_zelda_dataset_fixed_split.py -q --maxfail=5`
+  passed with 45 tests.
+- `python -m pytest tests/test_neural_pipeline.py tests/test_pipeline_reliability_surfaces.py tests/test_runtime_logic_guidance_strategy.py tests/test_fast_sampler_integration.py -q --maxfail=5`
+  passed with 65 tests.
+- `python -m pytest tests/test_experimental_baselines.py tests/test_evaluation_benchmark_suite.py tests/test_statistical_validation_analysis.py tests/test_matched_budget_topology_benchmark.py -q --maxfail=5`
+  passed with 23 tests.
+- `python -m compileall src` passed.
+
+Remaining scientific boundary:
+
+- No new algorithmic blocker was found in the audited non-GUI code paths.
+  Remaining gaps are empirical: execute the ablation manifests with fixed seeds,
+  archive pre-repair and post-repair hard-oracle rates, run paired-seed
+  significance tests, and validate AMP/Accelerate/checkpointing claims on the
+  target GPU setup before making throughput or SOTA claims.
+
+## 2026-06-24 Progression, Alignment, and Experiment Integrity Pass
+
+Confirmed fixes:
+
+- Final node-cap pruning now preserves directed reachability from a START node
+  to every progression-critical anchor, including keys, switches, tokens,
+  multi-lock nodes, boss-chain nodes, and required item providers. It no longer
+  reduces the graph to an undirected START-to-GOAL connectivity check.
+- `PhaseAligner` now translates semantic and character grids with bounded wall
+  fill rather than `np.roll`, so content cannot wrap across room edges. Door
+  direction mappings remain mappings, while coordinate-bearing content
+  metadata is shifted safely.
+- Learned A* heuristic features no longer contain `remaining_cost`, which is
+  the supervision target. Admissibility calibration now compares predicted and
+  true costs in the same absolute units before converting the correction back
+  to the network's normalized output scale.
+- `InventoryAwareLogicNet` tracks cumulative per-cell key collection
+  probability and sums that state each stage. Previously reached keys are no
+  longer counted again at every relaxation stage.
+- RRWP edge-feature configuration is now wired through `PipelineConfig`, the
+  runtime initializer, and condition-encoder reconstruction. Legacy
+  checkpoints without RRWP metadata reconstruct with RRWP disabled.
+- LogicNet's constant locked-edge role IDs are non-persistent checkpoint state.
+  The loader accepts legacy/new constant-buffer differences but still rejects
+  missing learned parameters.
+- Scientific conditioning/LogicNet/repair runs now inspect checkpoint payloads
+  before execution. A diffusion-only bundle can no longer pass as a VQ-VAE
+  checkpoint and silently leave the tokenizer randomly initialized.
+
+Experiment status:
+
+- `scripts/random_baseline.py` completed the configured 96 samples for each of
+  seeds 42, 43, and 44. Results are stored under
+  `results/random_baseline/random_baseline_results.json`.
+- The Round-5 manifest and CSV were generated under
+  `results/round5_scientific_gaps/`; these are plans, not completed training
+  evidence.
+- The quick conditioning/LogicNet/repair execution is blocked by the configured
+  artifact: `outputs/zelda_hmolqd/checkpoints/vqvae/vqvae_pretrained.pth` is a
+  diffusion bundle and has no `vqvae_state_dict`. A correct trained VQ-VAE
+  checkpoint is required before this ablation can produce valid evidence.
+
+Verification:
+
+- `tests/test_round5_audit_fixes.py`: 32 passed.
+- `tests/test_hmolqd/test_data_adapter.py`: 9 passed.
+- `tests/test_ml_components.py`: 77 passed.
+- Evolutionary director/topology regression group: 92 passed.
+- LogicNet/optimizer/ML regression group: 95 passed.
+- Config and graph-conditioning regression group: 74 passed.
+- Neural pipeline/reliability/graph-conditioning group: 78 passed.
+- Protocol and ablation-script group: 21 passed.
+
+## 2026-06-24 Block-by-Block Connection Audit
+
+Research-backed architecture boundary:
+
+- Block II remains a discrete semantic tokenizer. VQ-VAE supports learned
+  discrete representations, but codebook size, hierarchy, FSQ, and Gaussian
+  alternatives remain ablations.
+- Block III should combine structural encoding, local message passing, and
+  global mixing. GPS/RRWP and reference-room conditioning are supported
+  options, not assumed improvements.
+- Block IV remains a latent generator because latent diffusion separates
+  representation cost from denoising cost. SPADE, additive topology maps,
+  DiT, masked-room generation, and the fast sampler remain matched-budget
+  ablations.
+- Block V may provide differentiable feasibility pressure, but it is not a
+  substitute for the hard Block VII oracle. LogicNet claims must use
+  pre-repair metrics so Block VI cannot hide weak guidance.
+- Block VI is a constraint-preserving repair layer. WFC/overlay/scaffold
+  contributions must be reported separately from raw neural output.
+- Block VII must report quality, diversity, and controllability separately,
+  with hard solvability and P-CBS behavior reported as distinct evidence.
+
+Confirmed implementation fixes:
+
+- Canonical numbering is now consistent: Block 0 is data parsing/alignment,
+  Block I is directed mission-graph generation, Block VI is symbolic repair,
+  and Block VII is validation/QD.
+- The block reference now uses the actual room orientation
+  `[H=16, W=11]` instead of the stale transposed `[11,16]` description.
+- The block integration suite now includes Block 0 and Block I. Its Block-I
+  test exports a directed mission graph, converts node and edge attributes
+  through the canonical graph-feature schema, and feeds those tensors into
+  the Block-III condition encoder.
+- `PipelineConfig.from_checkpoint_dir()` now resolves current nested training
+  artifacts:
+  - `checkpoints/vqvae/vqvae_pretrained.pth`
+  - `checkpoints/diffusion/best_model.pth`
+  - optional masked-room and fast-sampler checkpoints
+  It retains legacy flat-file discovery for exported bundles.
+- Composite diffusion checkpoints are used for their bundled Block-III
+  condition encoder and Block-V LogicNet states.
+- An existing path explicitly supplied as a VQ-VAE checkpoint must contain a
+  loadable VQ-VAE state. The pipeline now refuses to continue with a random
+  Block-II tokenizer when the artifact is actually a diffusion bundle.
+
+Per-block status:
+
+| Block | Code status | Remaining evidence or addition |
+|---|---|---|
+| 0 | Parser/alignment contract connected and tested | Run final data-card/provenance audit |
+| I | Directed graph export connected to Block III | Execute controllability and 100/500-room stress protocols |
+| II | Encode/decode and checkpoint contract tested | Supply a valid trained VQ-VAE artifact; consolidate utilization and sample efficiency |
+| III | Generated graph features reach the condition encoder | Execute RRWP/GPS/reference-room and target-response ablations |
+| IV | Training and DDPM/DDIM paths tested | Rerun branch quality/latency comparisons on final checkpoints |
+| V | Guidance and inventory/path gradients tested | Execute paired LogicNet ON/OFF pre-repair evaluation |
+| VI | Repair order and naming corrected | Execute repair/overlay/WFC contribution and runtime-cost ablations |
+| VII | Validation/QD naming and order corrected | Run final fixed-seed, persona, significance, and human-calibration protocols |
+
+Current hard blocker:
+
+- `outputs/zelda_hmolqd/checkpoints/vqvae/vqvae_pretrained.pth` contains a
+  diffusion bundle rather than VQ-VAE weights. Downstream conditioning,
+  LogicNet, repair, and evaluation experiments must not be treated as valid
+  until a real Block-II checkpoint is supplied or retrained.

@@ -3,6 +3,7 @@ import json
 import pytest
 import networkx as nx
 import numpy as np
+import torch
 
 from scripts.run_ablation_study import (
     AblationStudy,
@@ -92,6 +93,39 @@ def test_round5_manifest_passes_lcm_checkpoint_to_fast_sampler_command(tmp_path)
     assert fast_runs
     assert "--lcm-checkpoint" in fast_runs[0]["command"]
     assert str(checkpoint) in fast_runs[0]["command"]
+
+
+def test_logicnet_repair_ablation_rejects_diffusion_bundle_as_vqvae(tmp_path):
+    from scripts.run_conditioning_logicnet_repair_ablation import (
+        VariantSpec,
+        validate_execute_checkpoints,
+    )
+
+    diffusion = tmp_path / "diffusion.pth"
+    torch.save(
+        {
+            "diffusion_state_dict": {"weight": torch.tensor(1.0)},
+            "logic_net_state_dict": {"weight": torch.tensor(1.0)},
+        },
+        diffusion,
+    )
+    variant = VariantSpec(
+        name="logic",
+        conditioning="full",
+        repair_enabled=False,
+        logic_enabled=True,
+        notes="test",
+    )
+
+    with pytest.raises(ValueError, match="lacks any of vqvae_state_dict"):
+        validate_execute_checkpoints(
+            {
+                "vqvae_checkpoint": str(diffusion),
+                "diffusion_checkpoint": str(diffusion),
+                "logic_net_checkpoint": str(diffusion),
+            },
+            [variant],
+        )
 
 
 def test_ablation_json_sanitize_outputs_strict_json_values():

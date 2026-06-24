@@ -690,12 +690,30 @@ class EvolutionaryTopologyGenerator:
             degree = int(repaired.to_undirected().degree(node_id))
             return (removal_priority.get(node_type, 20), degree, str(node_id))
 
-        def _anchors_connected(candidate: nx.Graph) -> bool:
-            undirected = candidate.to_undirected()
-            start_nodes = [node for node, attrs in candidate.nodes(data=True) if str(attrs.get("type", "")).upper() == "START"]
-            goal_nodes = [node for node, attrs in candidate.nodes(data=True) if str(attrs.get("type", "")).upper() == "GOAL"]
-            if start_nodes and goal_nodes and not nx.has_path(undirected, start_nodes[0], goal_nodes[0]):
+        progression_anchors = {
+            node_id
+            for node_id in repaired.nodes
+            if _node_type(node_id) in protected_types
+            or node_id in required_item_provider_nodes
+        }
+
+        def _progression_reachable(candidate: nx.Graph) -> bool:
+            """Keep every progression anchor reachable without erasing directionality."""
+            starts = [
+                node_id
+                for node_id in candidate.nodes
+                if _node_type(node_id) == "START"
+            ]
+            if not starts:
                 return False
+
+            for anchor in progression_anchors:
+                if anchor not in candidate:
+                    return False
+                if anchor in starts:
+                    continue
+                if not any(nx.has_path(candidate, start, anchor) for start in starts):
+                    return False
             return True
 
         removed_nodes = 0
@@ -713,7 +731,7 @@ class EvolutionaryTopologyGenerator:
             for node_id in sorted(candidates, key=_sort_key):
                 candidate = repaired.copy()
                 candidate.remove_node(node_id)
-                if candidate.number_of_nodes() > 1 and not _anchors_connected(candidate):
+                if candidate.number_of_nodes() > 1 and not _progression_reachable(candidate):
                     continue
                 repaired = candidate
                 removed_nodes += 1

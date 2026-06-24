@@ -212,9 +212,38 @@ def test_heuristic_admissibility_calibration_subtracts_observed_overestimate():
     )
 
     with torch.no_grad():
-        preds = trainer.model(torch.as_tensor(features)).squeeze(-1).numpy()
+        preds = (
+            trainer.model(torch.as_tensor(features)).squeeze(-1).numpy()
+            * trainer.target_scale
+        )
 
     assert np.all(preds <= true_costs + 1e-6)
+
+
+def test_heuristic_features_do_not_include_remaining_cost_label():
+    from types import SimpleNamespace
+    from src.ml.heuristic_learning import HeuristicTrainer, TrainingExample
+
+    trainer = HeuristicTrainer(map_height=8, map_width=8)
+    env = SimpleNamespace(
+        start_pos=(0, 0),
+        goal_pos=(7, 7),
+        grid=np.zeros((8, 8), dtype=np.int64),
+    )
+    common = dict(
+        position=(3, 2),
+        keys=1,
+        has_bomb=False,
+        has_boss_key=False,
+        has_item=True,
+    )
+    near_label = TrainingExample(remaining_cost=1, **common)
+    far_label = TrainingExample(remaining_cost=50, **common)
+
+    np.testing.assert_array_equal(
+        trainer.featurize_state(near_label, env),
+        trainer.featurize_state(far_label, env),
+    )
 
 
 # ============================================================================

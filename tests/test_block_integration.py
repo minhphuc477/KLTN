@@ -4,7 +4,7 @@
 H-MOLQD Block Integration Test
 ================================
 
-Validates that all 7 blocks can be instantiated and connected
+Validates Block 0 and all 7 architecture blocks end-to-end
 end-to-end without import errors, signature mismatches, or crashes.
 
 Run:
@@ -33,6 +33,102 @@ from src.core.definitions import (
 )
 
 
+def test_block_0_data_adapter_contract():
+    """Block 0: room tensors preserve semantic and character-grid orientation."""
+    from src.data_processing.data_adapter import RoomTensor
+
+    semantic = np.zeros((ROOM_HEIGHT, ROOM_WIDTH), dtype=np.int64)
+    chars = np.full((ROOM_HEIGHT, ROOM_WIDTH), "W", dtype="<U1")
+    room = RoomTensor(
+        room_id=1,
+        position=(0, 0),
+        semantic_grid=semantic,
+        char_grid=chars,
+        doors={"N": "open"},
+    )
+
+    encoded = room.to_tensor(num_classes=44)
+
+    assert encoded.shape == (ROOM_HEIGHT, ROOM_WIDTH, 44)
+    assert room.doors == {"N": "open"}
+
+
+def test_block_i_topology_generator_exports_directed_mission_graph():
+    """Block I: topology search exports a directed graph consumable by Block III."""
+    import networkx as nx
+    from src.core.condition_encoder import create_condition_encoder
+    from src.generation.evolutionary_director import EvolutionaryTopologyGenerator
+    from src.pipeline.graph_features import (
+        encode_edge_feature_vector,
+        extract_node_feature_vector,
+    )
+
+    graph = EvolutionaryTopologyGenerator(
+        target_curve=[0.2, 0.6, 1.0],
+        population_size=2,
+        generations=1,
+        genome_length=3,
+        max_nodes=8,
+        rule_space="core",
+        seed=7,
+    ).evolve(directed_output=True)
+
+    node_types = {str(attrs.get("type", "")).upper() for _, attrs in graph.nodes(data=True)}
+    assert isinstance(graph, nx.DiGraph)
+    assert "START" in node_types
+    assert "GOAL" in node_types
+    assert graph.number_of_edges() > 0
+
+    node_order = list(graph.nodes())
+    node_to_idx = {node_id: idx for idx, node_id in enumerate(node_order)}
+
+    def _parse_tokens(value):
+        return {
+            token.strip().lower()
+            for token in str(value or "").replace(",", " ").split()
+            if token.strip()
+        }
+
+    node_features = torch.stack(
+        [
+            extract_node_feature_vector(
+                dict(graph.nodes[node_id]),
+                node_dim=GRAPH_NODE_FEATURE_DIM,
+                device=torch.device("cpu"),
+                parse_label_tokens=_parse_tokens,
+                coerce_bool=bool,
+                coerce_difficulty=lambda value: float(value or 0.0),
+            )
+            for node_id in node_order
+        ],
+        dim=0,
+    )
+    edges = list(graph.edges(data=True))
+    edge_index = torch.tensor(
+        [
+            [node_to_idx[src] for src, _dst, _attrs in edges],
+            [node_to_idx[dst] for _src, dst, _attrs in edges],
+        ],
+        dtype=torch.long,
+    )
+    edge_features = torch.tensor(
+        [
+            encode_edge_feature_vector(dict(attrs), edge_dim=GRAPH_EDGE_FEATURE_DIM)
+            for _src, _dst, attrs in edges
+        ],
+        dtype=torch.float32,
+    )
+    encoder = create_condition_encoder(latent_dim=16, output_dim=32)
+    context = encoder.encode_global_only(
+        node_features=node_features,
+        edge_index=edge_index,
+        edge_features=edge_features,
+    )
+
+    assert context.shape == (graph.number_of_nodes(), 32)
+    assert torch.isfinite(context).all()
+
+
 def test_block_ii_vqvae():
     """Block II: SemanticVQVAE instantiation, encode/decode round-trip."""
     from src.core.vqvae import create_vqvae
@@ -55,7 +151,7 @@ def test_block_ii_vqvae():
     # full forward returns (recon, indices, losses_dict)
     recon, indices, losses = model(x)
     assert 'total_loss' in losses
-    print("  ✓ Block II (VQ-VAE): encode/decode/forward OK")
+    print("  [OK] Block II (VQ-VAE): encode/decode/forward OK")
 
 
 def test_block_iii_condition_encoder():
@@ -82,7 +178,7 @@ def test_block_iii_condition_encoder():
     # Test without edge features (backward compatible)
     c_global_no_edge = encoder.encode_global_only(node_features, edge_index)
     assert c_global_no_edge.shape == c_global.shape
-    print("  ✓ Block III (ConditionEncoder): global encoding with/without edge features OK")
+    print("  [OK] Block III (ConditionEncoder): global encoding with/without edge features OK")
 
 
 @pytest.mark.parametrize("gnn_type", ["sage", "gps"])
@@ -156,7 +252,7 @@ def test_block_iv_latent_diffusion():
     with torch.no_grad():
         z_ddim = model.ddim_sample(context, shape=(2, 32, 3, 4), num_steps=5)
     assert z_ddim.shape == (2, 32, 3, 4)
-    print("  ✓ Block IV (LatentDiffusion): loss, DDPM, DDIM sampling OK")
+    print("  [OK] Block IV (LatentDiffusion): loss, DDPM, DDIM sampling OK")
 
 
 def test_block_iv_ddim_sample_clamps_when_num_steps_exceeds_num_timesteps():
@@ -553,7 +649,7 @@ def test_block_iv_topology_aware_cross_attention_sequence_context():
 
     assert z_ddim.shape == (1, 16, 8, 8)
     assert torch.isfinite(z_ddim).all()
-    print("  ✓ Block IV (Topology-Aware CrossAttention): sequence context path OK")
+    print("  [OK] Block IV (Topology-Aware CrossAttention): sequence context path OK")
 
 
 def test_block_iv_topology_aware_cross_attention_mask_broadcast_and_sparse_valid_tokens():
@@ -587,7 +683,7 @@ def test_block_iv_topology_aware_cross_attention_mask_broadcast_and_sparse_valid
 
     assert z_ddim.shape == (2, 16, 8, 8)
     assert torch.isfinite(z_ddim).all()
-    print("  ✓ Block IV (Topology-Aware CrossAttention): node_mask broadcast + sparse valid tokens OK")
+    print("  [OK] Block IV (Topology-Aware CrossAttention): node_mask broadcast + sparse valid tokens OK")
 
 
 def test_block_iv_topology_refinement_mode_switch_runs_all_modes():
@@ -627,7 +723,7 @@ def test_block_iv_topology_refinement_mode_switch_runs_all_modes():
     # Ensure mode changes are not degenerate no-ops for all outputs.
     diff_light_vs_up = float((outputs[1] - outputs[2]).abs().mean().item())
     assert diff_light_vs_up >= 0.0
-    print("  ✓ Block IV (Topology Modes): none/lightweight/sparse_edge/sparse_directed_semantic/upgraded/graphormer execution OK")
+    print("  [OK] Block IV (Topology Modes): none/lightweight/sparse_edge/sparse_directed_semantic/upgraded/graphormer execution OK")
 
 
 def test_block_iv_attention_mode_switch_runs_softmax_and_linear_hedgehog():
@@ -727,11 +823,11 @@ def test_block_v_logic_net():
     assert abs(logic.current_temperature.item() - 1.0) < 0.01
     logic.update_temperature(1.0)
     assert logic.current_temperature.item() < 0.1
-    print("  ✓ Block V (LogicNet): forward + temperature annealing OK")
+    print("  [OK] Block V (LogicNet): forward + temperature annealing OK")
 
 
-def test_block_vi_map_elites():
-    """Block VI: MAP-Elites archive and feature extractors."""
+def test_block_vii_map_elites():
+    """Block VII: MAP-Elites archive and feature extractors."""
     from src.evaluation.map_elites import (
         EliteArchive, CVTEliteArchive,
         CombinedFeatureExtractor, CBSFeatureExtractor, FullFeatureExtractor,
@@ -759,11 +855,11 @@ def test_block_vi_map_elites():
     # create_map_elites convenience
     me = create_map_elites(feature_type='combined', archive_type='grid')
     assert me is not None
-    print("  ✓ Block VI (MAP-Elites): archives + extractors OK")
+    print("  [OK] Block VII (MAP-Elites): archives + extractors OK")
 
 
-def test_block_vii_symbolic_refiner():
-    """Block VII: SymbolicRefiner with LearnedTileStatistics."""
+def test_block_vi_symbolic_refiner():
+    """Block VI: SymbolicRefiner with LearnedTileStatistics."""
     from src.core.symbolic_refiner import (
         create_symbolic_refiner,
         LearnedTileStatistics, FailurePoint,
@@ -799,7 +895,7 @@ def test_block_vii_symbolic_refiner():
     grid[5, :] = 2  # wall barrier
     repaired, _success = refiner.repair_room(grid, start=(2, 8), goal=(8, 8))
     assert repaired.shape == (ROOM_HEIGHT, ROOM_WIDTH)
-    print("  ✓ Block VII (SymbolicRefiner): LearnedTileStatistics + repair OK")
+    print("  [OK] Block VI (SymbolicRefiner): LearnedTileStatistics + repair OK")
 
 
 def test_pipeline_vqvae_to_diffusion():
@@ -836,7 +932,7 @@ def test_pipeline_vqvae_to_diffusion():
         z_gen = diffusion.ddim_sample(conditioning, shape=z_q.shape, num_steps=5)
         recon = vqvae.decode(z_gen, target_size=(ROOM_HEIGHT, ROOM_WIDTH))
     assert recon.shape == (2, 44, ROOM_HEIGHT, ROOM_WIDTH)
-    print("  ✓ Pipeline: VQ-VAE -> Diffusion -> VQ-VAE decode OK")
+    print("  [OK] Pipeline: VQ-VAE -> Diffusion -> VQ-VAE decode OK")
 
 
 def test_trainer_instantiation():
@@ -862,7 +958,7 @@ def test_trainer_instantiation():
     # Check Block V LogicNet (not legacy)
     assert hasattr(trainer.logic_net, 'update_temperature'), \
         "Should be Block V LogicNet with temperature annealing, not legacy"
-    print("  ✓ DiffusionTrainer: instantiation OK (all blocks connected)")
+    print("  [OK] DiffusionTrainer: instantiation OK (all blocks connected)")
 
 
 if __name__ == '__main__':
@@ -871,12 +967,14 @@ if __name__ == '__main__':
     print("=" * 60 + "\n")
 
     tests = [
+        test_block_0_data_adapter_contract,
+        test_block_i_topology_generator_exports_directed_mission_graph,
         test_block_ii_vqvae,
         test_block_iii_condition_encoder,
         test_block_iv_latent_diffusion,
         test_block_v_logic_net,
-        test_block_vi_map_elites,
-        test_block_vii_symbolic_refiner,
+        test_block_vi_symbolic_refiner,
+        test_block_vii_map_elites,
         test_pipeline_vqvae_to_diffusion,
         test_trainer_instantiation,
     ]
@@ -888,7 +986,7 @@ if __name__ == '__main__':
             test()
             passed += 1
         except Exception as e:
-            print(f"  ✗ {test.__name__}: {e}")
+            print(f"  [FAIL] {test.__name__}: {e}")
             import traceback
             traceback.print_exc()
             failed += 1

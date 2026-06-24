@@ -2204,7 +2204,41 @@ def test_pipeline_vqvae_loader_accepts_embedded_vqvae_from_composite_checkpoint(
     assert loaded_vqvae.encoder.conv_in.__class__.__name__ == "Conv2d"
 
 
-def test_pipeline_vqvae_loader_skips_composite_checkpoint_without_vqvae_state_dict(tmp_path):
+def test_pipeline_logic_net_loader_accepts_checkpoint_before_constant_buffer(tmp_path):
+    pipeline = NeuralSymbolicDungeonPipeline.create_symbolic_repair_pipeline(
+        device="cpu",
+        enable_logging=False,
+    )
+    logic_net = LogicNet(latent_dim=4, num_classes=44, num_iterations=3)
+    state = dict(logic_net.state_dict())
+    state.pop("locked_edge_role_ids", None)
+    ckpt_path = tmp_path / "legacy_logic_net.pth"
+    torch.save(
+        {
+            "logic_net_state_dict": state,
+            "config": {
+                "latent_dim": 4,
+                "num_classes": 44,
+                "num_logic_iterations": 3,
+            },
+        },
+        ckpt_path,
+    )
+    ckpt_path.with_suffix(".pth.meta.json").write_text(
+        json.dumps({"format_version": "1.0", "model_type": "diffusion"}),
+        encoding="utf-8",
+    )
+
+    loaded = pipeline._load_logic_net(str(ckpt_path))
+
+    assert loaded.latent_dim == 4
+    assert torch.equal(
+        loaded.locked_edge_role_ids,
+        torch.tensor([1, 4, 5], dtype=torch.long),
+    )
+
+
+def test_pipeline_vqvae_loader_rejects_composite_checkpoint_without_vqvae_state_dict(tmp_path):
     pipeline = NeuralSymbolicDungeonPipeline.create_symbolic_repair_pipeline(
         device="cpu",
         enable_logging=False,
@@ -2239,11 +2273,31 @@ def test_pipeline_vqvae_loader_skips_composite_checkpoint_without_vqvae_state_di
         encoding="utf-8",
     )
 
-    loaded_vqvae = pipeline._load_vqvae(str(ckpt_path))
+    with pytest.raises(ValueError, match="Refusing to continue with a random Block-II tokenizer"):
+        pipeline._load_vqvae(str(ckpt_path))
 
-    assert loaded_vqvae.num_classes == 44
-    assert loaded_vqvae.latent_dim == 16
-    assert loaded_vqvae.codebook_size == 32
+
+def test_strict_pipeline_vqvae_loader_rejects_composite_without_vqvae_state(tmp_path):
+    pipeline = NeuralSymbolicDungeonPipeline.create_symbolic_repair_pipeline(
+        device="cpu",
+        enable_logging=False,
+        strict_checkpoint_mode=True,
+    )
+    ckpt_path = tmp_path / "diffusion_only_bundle.pth"
+    torch.save(
+        {
+            "diffusion_state_dict": {"dummy": torch.tensor(1.0)},
+            "config": {"latent_dim": 16, "num_classes": 44},
+        },
+        ckpt_path,
+    )
+    ckpt_path.with_suffix(".pth.meta.json").write_text(
+        json.dumps({"format_version": "1.0", "model_type": "diffusion"}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="does not contain a loadable VQ-VAE state_dict"):
+        pipeline._load_vqvae(str(ckpt_path))
 
 
 def test_pipeline_diffusion_loader_rejects_checkpoint_without_diffusion_state_dict(tmp_path):

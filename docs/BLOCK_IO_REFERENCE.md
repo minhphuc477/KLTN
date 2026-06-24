@@ -1,6 +1,6 @@
 # H-MOLQD Block I/O Reference
 
-> **Complete input/output specification for all 7 blocks and key algorithms.**
+> **Complete input/output specification for Block 0 and all 7 architecture blocks.**
 > Generated after integration audit and verification (all blocks tested end-to-end).
 > Verified against source code (all class names, signatures, and shapes confirmed).
 
@@ -9,91 +9,92 @@
 ## Architecture Overview
 
 ```
-VGLC Files ──→ [Block I] ──→ Rooms + Graph
-                                 │
-                   ┌─────────────┼─────────────┐
-                   ↓             ↓             ↓
+VGLC Files ---> [Block 0] ---> Aligned Rooms + Reference Graph
+Designer Targets ---> [Block I] ---> Mission Graph
+                                 |
+                   +-------------+-------------+
+                   v             v             v
              [Block II]    [Block III]    [Block V]
              VQ-VAE        CondEncoder   LogicNet
-                │             │             │
-                ↓             ↓             ↓
+                |             |             |
+                v             v             v
              Latent z      Context c    Logic Loss
-                │             │
-                └──────┬──────┘
-                       ↓
+                |             |
+                +------+------+
+                       v
                   [Block IV]
               Latent Diffusion
-                       │
-                       ↓
+                       |
+                       v
                 Generated z_gen
-                       │
-               ┌───────┴───────┐
-               ↓               ↓
+                       |
+               +-------+-------+
+               v               v
           [Block II]      [Block VI]
            Decode        SymbolicRefiner
-               │               │
-               └───────┬───────┘
-                       ↓
+               |               |
+               +-------+-------+
+                       v
                Refined Room Grid
-                       │
-                       ↓
+                       |
+                       v
                   [Block VII]
              Validation / MAP-Elites
-                       │
-                       ↓
+                       |
+                       v
               Diverse Elite Archive
 ```
 
 ---
 
-## Block I — Data Adapter
+## Block 0 - Data Adapter
 
-**File:** `src/data_processing/data_adapter.py` (1238 lines)
+**File:** `src/data_processing/data_adapter.py`
 **Purpose:** Parse VGLC text files into structured tensors and mission graphs.
 
 ### Key Classes
 
 | Class | Line | Purpose |
 |-------|------|---------|
-| `VGLCParser` | — | Parses VGLC `.txt` files → character grids |
-| `GraphvizParser` | 375 | Parses `.dot` topology files → `nx.DiGraph` |
+| `VGLCParser` | - | Parses VGLC `.txt` files -> character grids |
+| `GraphvizParser` | 375 | Parses `.dot` topology files -> `nx.DiGraph` |
 | `PhaseAligner` | 506 | Auto-aligns room boundaries for proper stitching |
 | `GraphFingerprinter` | 626 | Matches rooms to graph nodes via content matching |
 | `MLFeatureExtractor` | 845 | Computes TPE, node features, P-matrix |
-| `IntelligentDataAdapter` | 1004 | **Main orchestrator** — loads, parses, aligns all data |
+| `IntelligentDataAdapter` | 1004 | **Main orchestrator** - loads, parses, aligns all data |
 
 > **Note:** The main entry point is `IntelligentDataAdapter`, not `DataAdapter`.
 
 #### `VGLCParser`
 | | Description |
 |---|---|
-| **Input** | VGLC `.txt` file path (Zelda dungeon layout, H=11 rows × W=16 columns per room) |
+| **Input** | VGLC `.txt` file path (Zelda dungeon layout, H=16 rows x W=11 columns per room) |
 | **Output** | `np.ndarray` character grid |
-| **Key Methods** | `load_grid(filepath) → np.ndarray`, `extract_rooms(grid) → Dict[(r,c), np.ndarray]` |
+| **Key Methods** | `load_grid(filepath) -> np.ndarray`, `extract_rooms(grid) -> Dict[(r,c), np.ndarray]` |
 
 #### `IntelligentDataAdapter` (main entry point)
 | | Description |
 |---|---|
-| **Input** | `data_dir: str` — directory containing VGLC text + `.dot` graph files |
-| **Output** | `List[DungeonTensor]` — fully aligned rooms + graphs |
-| **Key Methods** | `process_all() → List[DungeonTensor]`, `process_single(txt_path, dot_path) → DungeonTensor` |
+| **Input** | `data_dir: str` - directory containing VGLC text + `.dot` graph files |
+| **Output** | `List[DungeonTensor]` - fully aligned rooms + graphs |
+| **Key Methods** | `process_all() -> List[DungeonTensor]`, `process_single(txt_path, dot_path) -> DungeonTensor` |
 
 ### Data Structures
 
 #### `RoomTensor`
 ```
 Fields:
-  room_id       : int               — Unique ID (row*100 + col)
-  position      : (int, int)        — Grid position (row, col)
-  semantic_grid : np.ndarray [H=11, W=16] int   — Tile IDs (0–43)
-  char_grid     : np.ndarray [H=11, W=16] str   — Original characters
-  graph_node_id : Optional[int]     — Matched graph node
-  contents      : List[str]         — Items/entities in room
-  doors         : Dict[str, str]    — {direction: door_type}
-  features      : Dict[str, Any]    — Additional features
+  room_id       : int               - Unique ID (row*100 + col)
+  position      : (int, int)        - Grid position (row, col)
+  semantic_grid : np.ndarray [H=16, W=11] int   - Tile IDs (0-43)
+  char_grid     : np.ndarray [H=16, W=11] str   - Original characters
+  graph_node_id : Optional[int]     - Matched graph node
+  contents      : List[str]         - Items/entities in room
+  doors         : Dict[str, str]    - {direction: door_type}
+  features      : Dict[str, Any]    - Additional features
 
 Methods:
-  to_tensor(num_classes=44) → np.ndarray [H, W, C]  — One-hot encoded
+  to_tensor(num_classes=44) -> np.ndarray [H, W, C]  - One-hot encoded
 ```
 
 #### `DungeonTensor`
@@ -101,18 +102,18 @@ Methods:
 Fields:
   dungeon_id     : str
   rooms          : Dict[(row,col), RoomTensor]
-  graph          : nx.DiGraph           — Mission graph
-  layout_grid    : np.ndarray [R, C]    — Room positions
-  global_semantic: Optional[np.ndarray] — Stitched semantic grid (if computed)
-  tpe_vectors    : np.ndarray [N, 8]    — Topological Positional Encoding
-  p_matrix       : np.ndarray [N, N, 3] — Dependency matrix
-  node_features  : np.ndarray [N, 5]    — Node feature vectors
+  graph          : nx.DiGraph           - Mission graph
+  layout_grid    : np.ndarray [R, C]    - Room positions
+  global_semantic: Optional[np.ndarray] - Stitched semantic grid (if computed)
+  tpe_vectors    : np.ndarray [N, 8]    - Topological Positional Encoding
+  p_matrix       : np.ndarray [N, N, 3] - Dependency matrix
+  node_features  : np.ndarray [N, 5]    - Node feature vectors
   node_to_room   : Dict[int, (row,col)]
 
 Methods:
-  get_room_tensors(num_classes=44) → np.ndarray [N, H, W, C]
-  num_rooms → int
-  num_nodes → int
+  get_room_tensors(num_classes=44) -> np.ndarray [N, H, W, C]
+  num_rooms -> int
+  num_nodes -> int
 ```
 
 ### Tile Vocabulary (44 classes)
@@ -135,34 +136,59 @@ Defined in `src/core/definitions.py` via `TileID` IntEnum and `SEMANTIC_PALETTE`
 
 ---
 
-## Block II — Semantic VQ-VAE
+## Block I - Mission/Topology Generator
 
-**File:** `src/core/vqvae.py` (858 lines)
+**Files:** `src/generation/evolutionary_director/`, `src/generation/grammar/`
+**Purpose:** Generate or validate a directed mission graph before room synthesis.
+
+### Main Entry Point
+
+```python
+EvolutionaryTopologyGenerator(...).evolve(directed_output=True) -> nx.DiGraph
+```
+
+### Contract
+
+| | Description |
+|---|---|
+| **Input** | Designer targets, tension curve, search budget, and grammar configuration |
+| **Output** | Directed mission graph with START, GOAL, progression roles, typed edges, positions, and generation statistics |
+| **Consumers** | Block III conditioning, Block VI overlay/stitching, and Block VII validation/QD |
+
+Directionality is part of the contract. One-way traversal and progression edges
+must not be reduced to an undirected connectivity graph during generation or
+validation.
+
+---
+
+## Block II - Semantic VQ-VAE
+
+**File:** `src/core/vqvae.py`
 **Purpose:** Compress room layouts into discrete latent codes.
 
 ### `SemanticVQVAE`
 
 | Method | Input | Output |
 |--------|-------|--------|
-| `encode(x)` | `x: [B, C=44, H=11, W=16]` | `(z_q: [B, D, H', W'], indices: [B, H', W'])` |
+| `encode(x)` | `x: [B, C=44, H=16, W=11]` | `(z_q: [B, D, H', W'], indices: [B, H', W'])` |
 | `decode(z_q, target_size)` | `z_q: [B, D, H', W']`, `target_size: (H, W)` (opt) | `recon: [B, C=44, H, W]` |
 | `decode_indices(indices)` | `indices: [B, H', W']` | `recon: [B, C=44, H, W]` |
-| `forward(x)` | `x: [B, C=44, H=11, W=16]` | `(recon, indices, losses_dict)` |
+| `forward(x)` | `x: [B, C=44, H=16, W=11]` | `(recon, indices, losses_dict)` |
 | `compute_loss(x, recon, vq_losses)` | tensors + dict | `Dict` w/ `total_loss`, `recon_loss`, `vq_loss`, `commit_loss`, `perplexity` |
-| `get_codebook_usage()` | — | `Dict` w/ `total`, `used`, `utilization`, `dead_codes` |
-| `reset_dead_codes()` | — | None (resets unused codebook entries) |
+| `get_codebook_usage()` | - | `Dict` w/ `total`, `used`, `utilization`, `dead_codes` |
+| `reset_dead_codes()` | - | None (resets unused codebook entries) |
 
-> **Important:** `indices` shape is `[B, H', W']` (spatial), NOT `[B, H'×W']` (flattened).
+> **Important:** `indices` shape is `[B, H', W']` (spatial), NOT `[B, H'xW']` (flattened).
 
 ### Constructor
 ```python
 SemanticVQVAE(
     num_classes: int = 44,          # Tile vocabulary size (= input channels)
-    codebook_size: int = 512,       # K — number of codebook entries
-    latent_dim: int = 64,           # D — latent channel dimension
+    codebook_size: int = 512,       # K - number of codebook entries
+    latent_dim: int = 64,           # D - latent channel dimension
     hidden_dim: int = 128,          # Encoder/decoder hidden channels
     num_res_blocks: int = 2,        # ResBlocks per encoder/decoder stage
-    commitment_cost: float = 0.25,  # β for commitment loss
+    commitment_cost: float = 0.25,  # beta for commitment loss
     rare_tile_weight: float = 5.0,  # Loss multiplier for rare tiles
     use_ema: bool = True,           # Use EMA codebook updates
 )
@@ -175,26 +201,27 @@ create_vqvae(
     codebook_size: int = 512,
     latent_dim: int = 64,
     **kwargs,  # Forwarded to SemanticVQVAE constructor
-) → SemanticVQVAE
+) -> SemanticVQVAE
 ```
 
 ### Key Parameters
 - **Codebook size K:** 512 (default). Each spatial position maps to one of K codes.
 - **Latent dim D:** 64. Channel dimension of latent space.
-- **Spatial reduction:** Input `[B, 44, 11, 16]` → Latent `[B, 64, H', W']` where `H' ≈ H/4, W' ≈ W/4`.
+- **Spatial reduction:** Input `[B, 44, 11, 16]` -> Latent `[B, 64, H', W']` where `H' ~= H/4, W' ~= W/4`.
 
 ### Internal Components
 | Component | Purpose |
 |-----------|---------|
-| `Encoder` | `in_channels=num_classes(44)` → ResBlocks → Downsample (channel_mult `(1,2,4)`) |
+| `Encoder` | `in_channels=num_classes(44)` -> ResBlocks -> Downsample (channel_mult `(1,2,4)`) |
 | `VectorQuantizer` | Codebook lookup, EMA updates, dead code reset (Phase 1B) |
-| `Decoder` | Upsample → ResBlocks → `out_channels=num_classes(44)` (channel_mult `(4,2,1)`) |
+| `Decoder` | Upsample -> ResBlocks -> `out_channels=num_classes(44)` (channel_mult `(4,2,1)`) |
 | `ResBlock` | Residual block with GroupNorm + SiLU |
 
 ### Data Format Note
 
-The data loader (`ZeldaDungeonDataset`) returns `[1, H, W]` normalized tile IDs.
-The training pipeline converts this to `[C=44, H, W]` one-hot before calling `encode()`:
+For VQ-VAE/diffusion training, the room loaders return `[1, H, W]` normalized tile IDs when `normalize=True`.
+For discrete MaskGIT-style training, callers pass `categorical_tokens=True`, which preserves raw integer tile IDs.
+The diffusion/VQ-VAE path converts normalized IDs to `[C=44, H, W]` one-hot before calling `encode()`:
 ```python
 # In DiffusionTrainer.encode_to_latent():
 tile_ids = (x.squeeze(1) * 43).round().long().clamp(0, 43)
@@ -204,9 +231,9 @@ z_q, indices = vqvae.encode(x_onehot)
 
 ---
 
-## Block III — Dual-Stream Condition Encoder
+## Block III - Dual-Stream Condition Encoder
 
-**File:** `src/core/condition_encoder.py` (801 lines)
+**File:** `src/core/condition_encoder.py`
 **Purpose:** Encode local (neighbor) + global (graph) context for conditioning the diffusion model.
 
 ### `DualStreamConditionEncoder`
@@ -222,24 +249,24 @@ z_q, indices = vqvae.encode(x_onehot)
 
 #### `encode_global_only` Parameters (most-used path)
 ```
-node_features : Tensor [N, 5]           — Per-node features
-edge_index    : Tensor [2, E]           — Edge connectivity
-edge_features : Tensor [E, edge_dim]    — (Optional) Edge type features (Phase 3A: GATv2Conv)
-tpe           : Tensor [N, 8]           — (Optional) Topological Positional Encoding
+node_features : Tensor [N, 5]           - Per-node features
+edge_index    : Tensor [2, E]           - Edge connectivity
+edge_features : Tensor [E, edge_dim]    - (Optional) Edge type features (Phase 3A: GATv2Conv)
+tpe           : Tensor [N, 8]           - (Optional) Topological Positional Encoding
 
 Returns: Tensor [N, output_dim]
 ```
 
 #### `forward` Full Parameters
 ```
-neighbor_latents     : Dict[str, Optional[Tensor]]  — N/S/E/W neighbor codes
-boundary_constraints : Tensor [B, 8]    — Door requirements
-position             : Tensor [B, 2]    — Grid position
-node_features        : Tensor [N, 5]    — Graph node features
-edge_index           : Tensor [2, E]    — Graph edges
-edge_features        : Tensor [E, F] or None   — Edge type encodings
-tpe                  : Tensor [N, 8] or None   — Topological PE
-current_node_idx     : Optional[int]    — Return specific node's embedding
+neighbor_latents     : Dict[str, Optional[Tensor]]  - N/S/E/W neighbor codes
+boundary_constraints : Tensor [B, 8]    - Door requirements
+position             : Tensor [B, 2]    - Grid position
+node_features        : Tensor [N, 5]    - Graph node features
+edge_index           : Tensor [2, E]    - Graph edges
+edge_features        : Tensor [E, F] or None   - Edge type encodings
+tpe                  : Tensor [N, 8] or None   - Topological PE
+current_node_idx     : Optional[int]    - Return specific node's embedding
 
 Returns: Tensor [B, output_dim]
 ```
@@ -263,14 +290,14 @@ create_condition_encoder(
     latent_dim: int = 64,
     output_dim: int = 256,
     **kwargs,
-) → DualStreamConditionEncoder
+) -> DualStreamConditionEncoder
 ```
 
 ### Architecture
 ```
-Local Stream:    neighbors + boundaries + position → MLP → c_local
-Global Stream:   node_features + edge_index → GNN (GATv2Conv or FallbackGNN) → c_global
-Fusion:          CrossAttentionFusion(c_local, c_global) → c_fused → output_proj → c
+Local Stream:    neighbors + boundaries + position -> MLP -> c_local
+Global Stream:   node_features + edge_index -> GNN (GATv2Conv or FallbackGNN) -> c_global
+Fusion:          CrossAttentionFusion(c_local, c_global) -> c_fused -> output_proj -> c
 ```
 
 ### Internal Components
@@ -283,9 +310,9 @@ Fusion:          CrossAttentionFusion(c_local, c_global) → c_fused → output_
 
 ---
 
-## Block IV — Latent Diffusion Model
+## Block IV - Latent Diffusion Model
 
-**File:** `src/core/latent_diffusion.py` (1132 lines)
+**File:** `src/core/latent_diffusion.py`
 **Purpose:** Generate new latent codes via denoising diffusion in VQ-VAE's latent space.
 
 ### `LatentDiffusionModel`
@@ -307,13 +334,13 @@ create_latent_diffusion(
     prediction_type: str = 'epsilon', # 'epsilon' or 'v' (Phase 1C)
     cfg_dropout_prob: float = 0.1,    # Conditioning dropout for CFG training
     cfg_scale: float = 3.0,          # Classifier-Free Guidance scale (Phase 1A)
-    min_snr_gamma: float = 5.0,       # Min-SNR-γ loss weighting (Phase 4B)
+    min_snr_gamma: float = 5.0,       # Min-SNR-gamma loss weighting (Phase 4B)
     **kwargs,                         # model_channels etc. passed through
-) → LatentDiffusionModel
+) -> LatentDiffusionModel
 ```
 
-> **Note:** `cfg_scale` default is **3.0** (not 2.0). `model_channels` is NOT a named parameter —
-> it's passed via `**kwargs`. Min-SNR-γ is **Phase 4B** (not 4C).
+> **Note:** `cfg_scale` default is **3.0** (not 2.0). `model_channels` is NOT a named parameter -
+> it's passed via `**kwargs`. Min-SNR-gamma is **Phase 4B** (not 4C).
 
 ### Key Components
 
@@ -322,7 +349,7 @@ create_latent_diffusion(
 Input:  x_t [B, D, H', W'], timestep t [B], context c [B, ctx_dim]
 Output: predicted_noise [B, D, H', W']
 
-Architecture: Encoder → Bottleneck → Decoder with skip connections
+Architecture: Encoder -> Bottleneck -> Decoder with skip connections
 Channel multipliers: (1, 2, 4) by default
 Attention at resolutions: (1, 2)
 Skip connections: Each UpBlock pops num_res_blocks skips from encoder
@@ -330,22 +357,22 @@ Skip connections: Each UpBlock pops num_res_blocks skips from encoder
 
 #### Diffusion Process
 ```
-Forward:   z_0 → z_t = √ᾱ_t · z_0 + √(1-ᾱ_t) · ε     (add noise)
-Reverse:   z_t → z_{t-1}  (predict & remove noise)
+Forward:   z_0 -> z_t = sqrt(alpha_bar_t) * z_0 + sqrt(1-alpha_bar_t) * epsilon     (add noise)
+Reverse:   z_t -> z_{t-1}  (predict & remove noise)
 
 Schedules: 'linear', 'cosine', 'quadratic'
 Sampling:  DDPM (T steps), DDIM (<<T steps, deterministic when eta=0)
 ```
 
 #### Enhancements
-- **CFG (Phase 1A):** Trains with 10% unconditional dropout (`cfg_dropout_prob=0.1`); at inference, `ε_guided = ε_uncond + s·(ε_cond - ε_uncond)` where `s = cfg_scale = 3.0`.
-- **v-prediction (Phase 1C):** Predicts velocity `v = √ᾱ_t·ε - √(1-ᾱ_t)·z_0` instead of noise.
-- **Min-SNR-γ (Phase 4B):** Clips loss weights at high SNR timesteps to reduce gradient variance.
+- **CFG (Phase 1A):** Trains with 10% unconditional dropout (`cfg_dropout_prob=0.1`); at inference, `epsilon_guided = epsilon_uncond + s*(epsilon_cond - epsilon_uncond)` where `s = cfg_scale = 3.0`.
+- **v-prediction (Phase 1C):** Predicts velocity `v = sqrt(alpha_bar_t)*epsilon - sqrt(1-alpha_bar_t)*z_0` instead of noise.
+- **Min-SNR-gamma (Phase 4B):** Clips loss weights at high SNR timesteps to reduce gradient variance.
 
 ### Internal Components
 | Component | Purpose |
 |-----------|---------|
-| `TimestepEmbedding` | Sinusoidal timestep → MLP embedding |
+| `TimestepEmbedding` | Sinusoidal timestep -> MLP embedding |
 | `ResBlock` | GroupNorm + Conv2d + time conditioning |
 | `AttentionBlock` | Self-attention + cross-attention + FFN |
 | `GraphToGridCrossAttention` | Per-grid position cross-attention to mission graph nodes |
@@ -356,9 +383,9 @@ Sampling:  DDPM (T steps), DDIM (<<T steps, deterministic when eta=0)
 
 ---
 
-## Block V — LogicNet
+## Block V - LogicNet
 
-**File:** `src/core/logic_net.py` (828 lines)
+**File:** `src/core/logic_net.py`
 **Purpose:** Differentiable constraint checker ensuring dungeon solvability.
 
 ### `LogicNet`
@@ -366,7 +393,7 @@ Sampling:  DDPM (T steps), DDIM (<<T steps, deterministic when eta=0)
 | Method | Input | Output |
 |--------|-------|--------|
 | `forward(z, graph_data=None)` | `z: [B, D, H', W']` (latent codes), `graph_data: Optional[Dict]` | `(loss: Tensor, info: Dict)` |
-| `update_temperature(progress)` | `progress: float` ∈ [0, 1] | None (updates internal temperature) |
+| `update_temperature(progress)` | `progress: float` in [0, 1] | None (updates internal temperature) |
 
 ### Constructor
 ```python
@@ -399,10 +426,10 @@ LogicNet(
 
 ### Temperature Annealing (Phase 1D)
 ```
-Formula: τ = τ_start × (τ_end / τ_start) ^ progress
+Formula: tau = tau_start x (tau_end / tau_start) ^ progress
 
-progress = 0.0 → τ = 1.0    (soft, exploratory)
-progress = 1.0 → τ = 0.05   (hard, strict)
+progress = 0.0 -> tau = 1.0    (soft, exploratory)
+progress = 1.0 -> tau = 0.05   (hard, strict)
 
 This is EXPONENTIAL INTERPOLATION (not exponential decay).
 Effect: Gradients from logic constraints become sharper over training.
@@ -415,8 +442,8 @@ Effect: Gradients from logic constraints become sharper over training.
 | `GridPathfinder` | CNN-based soft grid pathfinding |
 | `ReachabilityChecker` | Soft reachability scoring from distances |
 | `KeyLockChecker` | Verifies key found before lock reached |
-| `TileClassifier` | Latent z → tile logits via Conv network |
-| `WalkabilityPredictor` | Tile logits → binary walkability mask |
+| `TileClassifier` | Latent z -> tile logits via Conv network |
+| `WalkabilityPredictor` | Tile logits -> binary walkability mask |
 
 ### Integration
 - **Training:** `logic_loss, info = logic_net(z_q)` added to diffusion loss.
@@ -425,9 +452,9 @@ Effect: Gradients from logic constraints become sharper over training.
 
 ---
 
-## Block VII — MAP-Elites (Quality-Diversity)
+## Block VII - MAP-Elites (Quality-Diversity)
 
-**File:** `src/evaluation/map_elites.py` (994 lines)
+**File:** `src/evaluation/map_elites.py`
 **Purpose:** Maintain a diverse archive of high-quality dungeon solutions.
 
 ### `MAPElites`
@@ -438,7 +465,7 @@ Effect: Gradients from logic constraints become sharper over training.
 | `add_batch(dungeons)` | `List[dungeon]` | `(num_added: int, num_total: int)` |
 | `get_diverse_set(n)` | `n: int` | `List[Elite]` |
 | `get_best(n)` | `n: int` | `List[Elite]` (top-n by fitness) |
-| `get_diversity_metrics()` | — | `Dict[str, float]` |
+| `get_diversity_metrics()` | - | `Dict[str, float]` |
 | `get_novelty_score(features)` | `features: Tuple[float,...]` | `float` |
 | `save(path)` / `load(path)` | `str` | Persistence |
 
@@ -463,7 +490,7 @@ create_map_elites(
     cells_per_dim: int = 10,
     archive_type: str = 'grid',    # 'grid' or 'cvt'
     num_cells: int = 100,          # For CVT archive
-) → MAPElites
+) -> MAPElites
 ```
 
 ### Archives
@@ -471,7 +498,7 @@ create_map_elites(
 #### `EliteArchive` (Grid)
 ```
 Constructor: EliteArchive(feature_dims=2, cells_per_dim=10, feature_ranges=None)
-Storage:     Dict[Tuple[int,...], Elite]   — cell coords → best solution
+Storage:     Dict[Tuple[int,...], Elite]   - cell coords -> best solution
 Capacity:    cells_per_dim ^ feature_dims
 Methods:     add(), get(), get_all_elites(), get_random(), clear(), coverage(), qd_score()
 ```
@@ -480,8 +507,8 @@ Methods:     add(), get(), get_all_elites(), get_random(), clear(), coverage(), 
 ```
 Constructor: CVTEliteArchive(num_cells=100, feature_dims=2,
                              feature_ranges=None, num_cvt_samples=10000)
-Storage:     Dict[int, Elite]   — centroid ID → best solution
-Method:      k-means on uniform samples → Voronoi cells
+Storage:     Dict[int, Elite]   - centroid ID -> best solution
+Method:      k-means on uniform samples -> Voronoi cells
 ```
 
 ### Feature Extractors
@@ -496,7 +523,7 @@ Method:      k-means on uniform samples → Voronoi cells
 
 > **Note:** Dim 6 of `FullFeatureExtractor` is `room_entropy`, NOT "symmetry score".
 
-All extractors implement: `extract(graph: nx.DiGraph) → Tuple[float, ...]`
+All extractors implement: `extract(graph: nx.DiGraph) -> Tuple[float, ...]`
 
 ### `Elite` Data Structure
 ```python
@@ -524,9 +551,9 @@ class DiversityMetrics:
 
 ---
 
-## Block VI — Symbolic Refiner (WFC Repair)
+## Block VI - Symbolic Refiner (WFC Repair)
 
-**File:** `src/core/symbolic_refiner.py` (1233 lines)
+**File:** `src/core/symbolic_refiner.py`
 **Purpose:** Fix structural violations in generated rooms using Wave Function Collapse.
 
 ### `SymbolicRefiner`
@@ -560,7 +587,7 @@ create_symbolic_refiner(
     tile_types: Optional[List] = None,
     max_repair_attempts: int = 5,          # NOT max_iterations
     learned_stats: Optional[LearnedTileStatistics] = None,
-) → SymbolicRefiner
+) -> SymbolicRefiner
 ```
 
 ### `LearnedTileStatistics` (Phase 3B)
@@ -568,9 +595,9 @@ create_symbolic_refiner(
 Purpose: Learn adjacency rules and tile weights from real dungeon data.
 
 Methods:
-  observe(room: np.ndarray)                    — Accumulate statistics from one room
-  get_adjacency_rules(threshold=0.01)          → Dict  — Learned neighbor rules
-  get_tile_weights()                           → Dict[int, float]  — Per-tile frequency weights
+  observe(room: np.ndarray)                    - Accumulate statistics from one room
+  get_adjacency_rules(threshold=0.01)          -> Dict  - Learned neighbor rules
+  get_tile_weights()                           -> Dict[int, float]  - Per-tile frequency weights
 ```
 
 ### `FailurePoint`
@@ -608,7 +635,7 @@ class FailurePoint:
 
 ## Training Pipeline
 
-**File:** `src/train_diffusion.py` (713 lines)
+**File:** `src/train_diffusion.py`
 **Purpose:** Orchestrate training of VQ-VAE + Diffusion + LogicNet with conditioning.
 
 ### `DiffusionTrainingConfig`
@@ -656,13 +683,14 @@ DiffusionTrainingConfig(
 | `validate(dataloader, num_samples)` | Validation using EMA weights |
 | `save_checkpoint(path, metrics)` | Save all model states |
 | `load_checkpoint(path)` | Restore from checkpoint |
-| `encode_to_latent(x)` | **Converts [B,1,H,W] → [B,44,H,W] one-hot → VQ-VAE encode** |
+| `encode_to_latent(x)` | **Converts [B,1,H,W] -> [B,44,H,W] one-hot -> VQ-VAE encode** |
 | `get_dummy_conditioning(batch_size)` | Curriculum-based synthetic conditioning |
 
 ### Data Format Conversion (CRITICAL)
 ```
-Data loader output:   [B, 1, H, W]  — normalized tile IDs in [0, 1]
-VQ-VAE expects:       [B, 44, H, W] — one-hot encoded tiles
+VQ-VAE/diffusion loader output: [B, 1, H, W]  - normalized tile IDs in [0, 1]
+Masked-room categorical output: [B, 1, H, W]  - raw integer tile IDs when categorical_tokens=True
+VQ-VAE expects:                  [B, 44, H, W] - one-hot encoded tiles
 
 encode_to_latent() handles this conversion:
   1. Denormalize: tile_ids = (x * 43).round().long().clamp(0, 43)
@@ -679,23 +707,23 @@ encode_to_latent() handles this conversion:
                          edge_features=...)               [Block III]
 4. Diffusion loss:   L_diff = diffusion.training_loss(z_q, c)   [Block IV]
 5. Logic loss:       L_logic, info = logic_net(z_sample)        [Block V]
-6. Total loss:       L = α_vis · L_diff + α_logic · L_logic
-7. Update EMA:       ema_diffusion ← exponential moving average (decay=0.9999)
+6. Total loss:       L = alpha_vis * L_diff + alpha_logic * L_logic
+7. Update EMA:       ema_diffusion <- exponential moving average (decay=0.9999)
 8. Anneal temperature: logic_net.update_temperature(progress)
 ```
 
 ### Curriculum Conditioning
 ```
 Phase 1 (< warmup_epochs):      Random noise (unconditional)
-Phase 2 (warmup..2×warmup):     Simple 3-node linear graphs
-Phase 3 (> 2×warmup):           Complex 5-12 node graphs with branching
+Phase 2 (warmup..2xwarmup):     Simple 3-node linear graphs
+Phase 3 (> 2xwarmup):           Complex 5-12 node graphs with branching
 ```
 
 ---
 
 ## Generation Pipeline
 
-**File:** `src/generate.py` (531 lines)
+**File:** `src/generate.py`
 **Purpose:** Sample new dungeon rooms from trained models.
 
 ### Key Classes
@@ -724,7 +752,7 @@ Flow:
 2. Build conditioning c                          [Block III]
 3. Sample z_gen via DDIM (50 steps)              [Block IV]
 4. Decode to tile logits via VQ-VAE              [Block II]
-5. Argmax → room_grid [B, H, W]
+5. Argmax -> room_grid [B, H, W]
 6. Validate with LogicNet                        [Block V]
 7. Repair if needed via SymbolicRefiner          [Block VI]
 8. Add to MAP-Elites archive                     [Block VII]
@@ -738,8 +766,8 @@ Flow:
 |--------|---------|-------------|
 | `B` | varies | Batch size |
 | `C` | 44 | Tile classes (semantic vocabulary) |
-| `H` | 11 | Room height (rows) |
-| `W` | 16 | Room width (columns) |
+| `H` | 16 | Room height (rows) |
+| `W` | 11 | Room width (columns) |
 | `D` | 64 | Latent dimension (VQ-VAE) |
 | `K` | 512 | Codebook size (VQ-VAE) |
 | `H'` | ~3 | Latent spatial height (H/4) |
@@ -756,13 +784,14 @@ Flow:
 
 | Block | Main File | Factory / Entry Point |
 |-------|-----------|----------------------|
-| I — DataAdapter | `src/data_processing/data_adapter.py` | `IntelligentDataAdapter(data_dir)` |
-| II — VQ-VAE | `src/core/vqvae.py` | `create_vqvae(num_classes, codebook_size, latent_dim)` |
-| III — CondEncoder | `src/core/condition_encoder.py` | `create_condition_encoder(latent_dim, output_dim)` |
-| IV — Diffusion | `src/core/latent_diffusion.py` | `create_latent_diffusion(latent_dim, context_dim, ...)` |
-| V — LogicNet | `src/core/logic_net.py` | `LogicNet(latent_dim, num_classes, num_iterations)` |
-| VI — Refiner | `src/core/symbolic_refiner.py` | `create_symbolic_refiner(tile_types, max_repair_attempts, learned_stats)` |
-| VII — MAP-Elites / validation | `src/evaluation/map_elites.py`, `src/simulation/*` | `create_map_elites(feature_type, fitness_fn, ...)` |
+| 0 - DataAdapter | `src/data_processing/data_adapter.py` | `IntelligentDataAdapter(data_dir)` |
+| I - Topology Generator | `src/generation/evolutionary_director/` | `EvolutionaryTopologyGenerator(...).evolve()` |
+| II - VQ-VAE | `src/core/vqvae.py` | `create_vqvae(num_classes, codebook_size, latent_dim)` |
+| III - CondEncoder | `src/core/condition_encoder.py` | `create_condition_encoder(latent_dim, output_dim)` |
+| IV - Diffusion | `src/core/latent_diffusion.py` | `create_latent_diffusion(latent_dim, context_dim, ...)` |
+| V - LogicNet | `src/core/logic_net.py` | `LogicNet(latent_dim, num_classes, num_iterations)` |
+| VI - Refiner | `src/core/symbolic_refiner.py` | `create_symbolic_refiner(tile_types, max_repair_attempts, learned_stats)` |
+| VII - MAP-Elites / validation | `src/evaluation/map_elites.py`, `src/simulation/*` | `create_map_elites(feature_type, fitness_fn, ...)` |
 
 ### Supporting Files
 | File | Purpose |

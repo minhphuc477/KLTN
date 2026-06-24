@@ -196,6 +196,34 @@ class TestPhaseAligner:
 
         assert boundary_wall_hits(corrected) >= boundary_wall_hits(misaligned)
 
+    def test_boundary_correction_does_not_wrap_chars_or_corrupt_door_mapping(self):
+        from src.data_processing.data_adapter import PhaseAligner, RoomTensor
+        from src.core.definitions import TileID
+
+        aligner = PhaseAligner(tolerance=2)
+        wall = int(TileID.WALL)
+        floor = int(TileID.FLOOR)
+        semantic = np.full((7, 11), floor, dtype=np.int32)
+        semantic[1:, :] = wall
+        chars = np.full((7, 11), ".", dtype="<U1")
+        chars[1:, :] = "W"
+        chars[-1, -1] = "X"
+        room = RoomTensor(
+            room_id=1,
+            position=(0, 0),
+            semantic_grid=semantic,
+            char_grid=chars,
+            doors={"N": "open"},
+            contents=[(2, 3, "key"), "enemy"],
+        )
+
+        corrected = aligner.correct_boundaries([room])[0]
+
+        assert corrected.doors == {"N": "open"}
+        assert corrected.char_grid[0, -1] != "X"
+        assert corrected.contents[0][:2] != (2, 3)
+        assert corrected.contents[1] == "enemy"
+
 
 class TestMLFeatureExtractor:
     """Tests for ML feature extraction."""

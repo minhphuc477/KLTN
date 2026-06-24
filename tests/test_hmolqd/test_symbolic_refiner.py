@@ -1,7 +1,7 @@
 # pyright: reportPrivateUsage=false
 
 """
-Tests for H-MOLQD Block VII: Symbolic Refiner
+Tests for H-MOLQD Block VI: Symbolic Refiner
 ==============================================
 
 Tests for WFC-based dungeon repair.

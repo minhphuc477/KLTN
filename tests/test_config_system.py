@@ -1384,6 +1384,8 @@ def test_topology_helper_preserves_yaml_generation_knobs(tmp_path: Path):
 
 
 def test_pipeline_config_kwargs_match_pipeline_constructor_surface():
+    from src.pipeline.runtime import _initialize_pipeline_from_flat_kwargs
+
     resolved = merge_config(yaml_path=None, cli_overrides=None)
     kwargs = pipeline_kwargs_from_resolved_config(resolved)
     signature = inspect.signature(NeuralSymbolicDungeonPipeline.__init__)
@@ -1394,7 +1396,53 @@ def test_pipeline_config_kwargs_match_pipeline_constructor_surface():
     flattened = config.to_runtime_kwargs()
     unknown = sorted(set(kwargs) - set(flattened))
     assert unknown == []
+    runtime_params = set(inspect.signature(_initialize_pipeline_from_flat_kwargs).parameters)
+    assert sorted(set(flattened) - runtime_params) == []
     assert len(kwargs) >= 80
+
+
+def test_pipeline_config_groups_rrwp_edge_feature_switch():
+    config = PipelineConfig.from_kwargs(condition_use_rrwp_edge_features=False)
+
+    assert config.model.condition_use_rrwp_edge_features is False
+    assert config.to_runtime_kwargs()["condition_use_rrwp_edge_features"] is False
+
+
+def test_pipeline_config_discovers_canonical_nested_checkpoint_layout(tmp_path: Path):
+    checkpoint_root = tmp_path / "run"
+    vqvae = checkpoint_root / "checkpoints" / "vqvae" / "vqvae_pretrained.pth"
+    diffusion = checkpoint_root / "checkpoints" / "diffusion" / "best_model.pth"
+    masked = checkpoint_root / "checkpoints" / "masked_room" / "best_model.pth"
+    fast = checkpoint_root / "checkpoints" / "fast_sampler" / "best_model.pth"
+    for path in (vqvae, diffusion, masked, fast):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"checkpoint")
+
+    config = PipelineConfig.from_checkpoint_dir(checkpoint_root, device="cpu")
+
+    assert config.model.vqvae_checkpoint == str(vqvae)
+    assert config.model.diffusion_checkpoint == str(diffusion)
+    assert config.model.logic_net_checkpoint == str(diffusion)
+    assert config.model.condition_encoder_checkpoint == str(diffusion)
+    assert config.model.masked_room_checkpoint == str(masked)
+    assert config.model.fast_sampling_checkpoint == str(fast)
+
+
+def test_pipeline_config_preserves_legacy_flat_checkpoint_layout(tmp_path: Path):
+    for filename in (
+        "vqvae_best.pth",
+        "diffusion_best.pth",
+        "logic_net_best.pth",
+        "condition_encoder_best.pth",
+    ):
+        (tmp_path / filename).write_bytes(b"checkpoint")
+
+    config = PipelineConfig.from_checkpoint_dir(tmp_path)
+
+    assert config.model.vqvae_checkpoint == str(tmp_path / "vqvae_best.pth")
+    assert config.model.diffusion_checkpoint == str(tmp_path / "diffusion_best.pth")
+    assert config.model.logic_net_checkpoint == str(tmp_path / "logic_net_best.pth")
+    assert config.model.condition_encoder_checkpoint == str(tmp_path / "condition_encoder_best.pth")
 
 
 def test_pipeline_config_legacy_aliases_delegate_to_runtime_names():

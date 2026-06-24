@@ -4,7 +4,7 @@ ZELDA VALIDATION PIPELINE
 Main orchestration script for validating original Zelda dungeon data.
 
 This script:
-1. Processes raw VGLC data using Block I (Data Adapter)
+1. Processes raw VGLC data using Block 0 (Data Adapter)
 2. Validates processed maps using Block VI (Validator)
 3. Generates comprehensive metrics and reports
 
@@ -101,7 +101,7 @@ class ZeldaValidationPipeline:
         Run the complete validation pipeline.
         
         Steps:
-        1. Process raw data (Block I)
+        1. Process raw data (Block 0)
         2. Validate all maps (Block VI)
         3. Generate metrics and report
         
@@ -163,7 +163,7 @@ class ZeldaValidationPipeline:
     
     def _process_data(self, verbose: bool = True):
         """
-        Process raw VGLC data using Block I adapter.
+        Process raw VGLC data using Block 0 adapter.
         """
         self.adapter = ZeldaDungeonAdapter(str(self.data_root))
         

@@ -655,30 +655,44 @@ class PhaseAligner:
             if left_walls < 5 or right_walls < 5:
                 new_grid, col_offset = self._shift_grid_with_offset(new_grid, direction='horizontal')
 
-            # Shift char_grid by the same offset.
+            # Shift char_grid by the same offset without wrapping opposite
+            # edges into the room.
             new_char_grid = room.char_grid
             if new_char_grid is not None and (row_offset != 0 or col_offset != 0):
-                new_char_grid = np.roll(new_char_grid, row_offset, axis=0)
-                new_char_grid = np.roll(new_char_grid, col_offset, axis=1)
+                new_char_grid = self._translate_with_fill(
+                    new_char_grid,
+                    row_shift=row_offset,
+                    col_shift=col_offset,
+                    fill_value="W",
+                )
 
-            # Shift door and content positions by the same offset.
-            def _shift_pos(pos_seq):
-                if not pos_seq:
-                    return pos_seq
-                shifted = []
-                for item in pos_seq:
-                    if isinstance(item, (tuple, list)) and len(item) >= 2:
-                        shifted.append((
-                            int(item[0]) + row_offset,
-                            int(item[1]) + col_offset,
-                            *item[2:],
-                        ))
-                    else:
-                        shifted.append(item)
-                return type(pos_seq)(shifted) if not isinstance(pos_seq, list) else shifted
+            # Door metadata is a direction -> type mapping, not a coordinate
+            # sequence. Only shift metadata entries that are actual positions.
+            def _shift_positions(value):
+                if not value:
+                    return value
+                if isinstance(value, dict):
+                    return {
+                        key: _shift_positions(item)
+                        if isinstance(item, (tuple, list))
+                        else item
+                        for key, item in value.items()
+                    }
+                if isinstance(value, tuple) and len(value) >= 2:
+                    if all(isinstance(coord, (int, np.integer)) for coord in value[:2]):
+                        return (
+                            int(value[0]) + row_offset,
+                            int(value[1]) + col_offset,
+                            *value[2:],
+                        )
+                    return value
+                if isinstance(value, list):
+                    return [_shift_positions(item) for item in value]
+                return value
 
-            new_doors = _shift_pos(room.doors) if (row_offset != 0 or col_offset != 0) else room.doors
-            new_contents = _shift_pos(room.contents) if (row_offset != 0 or col_offset != 0) else room.contents
+            shifted = row_offset != 0 or col_offset != 0
+            new_doors = _shift_positions(room.doors) if shifted else room.doors
+            new_contents = _shift_positions(room.contents) if shifted else room.contents
 
             corrected_room = RoomTensor(
                 room_id=room.room_id,
@@ -698,24 +712,31 @@ class PhaseAligner:
         self, grid: np.ndarray, direction: str
     ) -> tuple:
         """Shift a grid to fix alignment; returns (shifted_grid, offset)."""
-        new_grid = self._shift_grid(grid, direction)
-        # Infer offset by comparing first rows/cols.
-        if np.array_equal(new_grid, grid):
-            return new_grid, 0
-        # Estimate offset via np.roll reversal: check shifts in [-tol, tol].
-        axis = 0 if direction == 'vertical' else 1
+        if grid.ndim != 2 or grid.size == 0:
+            return grid, 0
+        if direction not in ('vertical', 'horizontal'):
+            logger.debug("Unknown shift direction '%s'; returning original grid", direction)
+            return grid, 0
+
         wall_id = int(TileID.WALL)
+        best_grid = grid
         best_score = self._boundary_alignment_score(grid)
         best_offset = 0
         for offset in range(-self.tolerance, self.tolerance + 1):
             if offset == 0:
                 continue
-            candidate = np.roll(grid, offset, axis=axis)
+            candidate = self._translate_with_fill(
+                grid,
+                row_shift=offset if direction == 'vertical' else 0,
+                col_shift=offset if direction == 'horizontal' else 0,
+                fill_value=wall_id,
+            )
             score = self._boundary_alignment_score(candidate)
-            if score > best_score:
+            if (score > best_score) or (score == best_score and abs(offset) < abs(best_offset)):
+                best_grid = candidate
                 best_score = score
                 best_offset = offset
-        return new_grid, best_offset
+        return best_grid, best_offset
     
     def _shift_grid(self, grid: np.ndarray, direction: str) -> np.ndarray:
         """
@@ -731,30 +752,7 @@ class PhaseAligner:
             logger.debug("Unknown shift direction '%s'; returning original grid", direction)
             return grid
 
-        axis_vertical = direction == 'vertical'
-        wall_id = int(TileID.WALL)
-        best_grid = grid
-        best_score = self._boundary_alignment_score(grid)
-        best_offset = 0
-
-        for offset in range(-self.tolerance, self.tolerance + 1):
-            if offset == 0:
-                continue
-
-            row_shift = offset if axis_vertical else 0
-            col_shift = 0 if axis_vertical else offset
-            candidate = self._translate_with_fill(
-                grid,
-                row_shift=row_shift,
-                col_shift=col_shift,
-                fill_value=wall_id,
-            )
-            score = self._boundary_alignment_score(candidate)
-
-            if (score > best_score) or (score == best_score and abs(offset) < abs(best_offset)):
-                best_grid = candidate
-                best_score = score
-                best_offset = offset
+        best_grid, best_offset = self._shift_grid_with_offset(grid, direction)
 
         if best_offset != 0:
             logger.debug(
@@ -762,7 +760,7 @@ class PhaseAligner:
                 direction,
                 best_offset,
                 self._boundary_alignment_score(grid),
-                best_score,
+                self._boundary_alignment_score(best_grid),
             )
         return best_grid
 
@@ -796,7 +794,7 @@ class PhaseAligner:
         grid: np.ndarray,
         row_shift: int,
         col_shift: int,
-        fill_value: int,
+        fill_value: Any,
     ) -> np.ndarray:
         """
         Translate a 2D grid without wrap-around; uncovered cells are filled.

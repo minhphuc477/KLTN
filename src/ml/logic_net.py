@@ -423,6 +423,7 @@ class InventoryAwareLogicNet(nn.Module):
         # Initialised to a large sentinel; start cell set to 0.
         D = torch.full_like(floor_prob, large)
         keys_collected = torch.zeros(B, device=device)
+        collected_key_probability = torch.zeros_like(key_locations)
 
         for i in range(B):
             sr, sc = start_coords[i]
@@ -457,7 +458,14 @@ class InventoryAwareLogicNet(nn.Module):
 
             # Convert distances to reachability scores in [0, 1] for key collection.
             R = torch.exp(-D.clamp(max=large))
-            keys_collected = keys_collected + (R * key_locations).sum(dim=(1, 2, 3))
+            stage_key_probability = (
+                R * key_locations.clamp(min=0.0, max=1.0)
+            ).clamp(min=0.0, max=1.0)
+            collected_key_probability = 1.0 - (
+                (1.0 - collected_key_probability)
+                * (1.0 - stage_key_probability)
+            )
+            keys_collected = collected_key_probability.sum(dim=(1, 2, 3))
 
         # Final reachability at goal: soft-minimum via negative-exponential.
         goal_values = []

@@ -13,7 +13,7 @@ from src.evaluation.map_elites import LinearityLeniencyExtractor
 from src.evaluation.benchmark_suite import extract_graph_descriptor
 from src.evaluation.search_benchmark_utils import confusion_ratio_vs_oracle, normalized_confusion_ratio
 from src.generation.evolutionary_director import EvolutionaryTopologyGenerator
-from src.ml.logic_net import DifferentiableTortuosity, SoftBellmanFord
+from src.ml.logic_net import DifferentiableTortuosity, InventoryAwareLogicNet, SoftBellmanFord
 from src.core.logic_net import DifferentiablePathfinder
 from src.pipeline.room_stitching import carve_room_connection_between_bboxes
 from src.simulation.validator import GameState, SEMANTIC_PALETTE, StateSpaceAStar, ZeldaLogicEnv
@@ -106,6 +106,37 @@ def test_output_node_cap_keeps_token_provider_for_multi_lock():
     capped = gen._enforce_output_node_cap(graph)
 
     assert "token" in capped.nodes
+
+
+def test_output_node_cap_preserves_directed_reachability_to_progression_nodes():
+    gen = EvolutionaryTopologyGenerator(
+        target_curve=[0.2, 0.6, 1.0],
+        population_size=2,
+        generations=1,
+        max_nodes=2,
+        seed=1,
+    )
+    graph = nx.DiGraph()
+    graph.add_node("start", type="START")
+    graph.add_node("bridge", type="EMPTY")
+    graph.add_node("key", type="KEY")
+    graph.add_node("goal", type="GOAL")
+    graph.add_node("extra_1", type="TREASURE")
+    graph.add_node("extra_2", type="TREASURE")
+    graph.add_edges_from(
+        [
+            ("start", "bridge", {"edge_type": "PATH"}),
+            ("bridge", "key", {"edge_type": "PATH"}),
+            ("start", "goal", {"edge_type": "PATH"}),
+            ("start", "extra_1", {"edge_type": "PATH"}),
+            ("start", "extra_2", {"edge_type": "PATH"}),
+        ]
+    )
+
+    capped = gen._enforce_output_node_cap(graph)
+
+    assert "bridge" in capped
+    assert nx.has_path(capped, "start", "key")
 
 
 def test_output_connectivity_repairs_goal_only_component():
@@ -244,6 +275,23 @@ def test_differentiable_pathfinder_accepts_batched_graph_inputs():
     assert tuple(distances.shape) == (2, 3)
     assert float(distances[0, 2].item()) < 3.0
     assert float(distances[1, 2].item()) < 2.0
+
+
+def test_inventory_logic_net_does_not_recount_the_same_key_each_stage():
+    floor = torch.ones(1, 1, 1, 3)
+    keys = torch.zeros_like(floor)
+    keys[0, 0, 0, 0] = 1.0
+    locked = torch.zeros_like(floor)
+    locked[0, 0, 0, 2] = 1.0
+
+    two_stage = InventoryAwareLogicNet(num_iterations=3, num_key_stages=2)
+    four_stage = InventoryAwareLogicNet(num_iterations=3, num_key_stages=4)
+    four_stage.load_state_dict(two_stage.state_dict())
+
+    score_two = two_stage(floor, keys, locked, [(0, 0)], [(0, 2)])
+    score_four = four_stage(floor, keys, locked, [(0, 0)], [(0, 2)])
+
+    assert torch.allclose(score_two, score_four, atol=1e-6)
 
 
 def test_state_space_astar_pareto_frontier_keeps_incomparable_inventory_states():

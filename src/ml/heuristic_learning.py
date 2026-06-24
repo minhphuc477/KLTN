@@ -197,7 +197,7 @@ class HeuristicTrainer:
         7. Manhattan distance to goal (normalized)
         8. Number of locked doors in dungeon
         9. Number of items collected
-        10. Exploration progress (0-1)
+        10. Geometric progress from the start (0-1)
         """
         features = np.zeros(10, dtype=np.float32)
         
@@ -224,8 +224,18 @@ class HeuristicTrainer:
         # Items collected (simplified - assume max 10 items)
         features[8] = example.keys / 10.0
         
-        # Exploration progress (heuristic)
-        features[9] = 1.0 - (example.remaining_cost / (self.map_height * self.map_width))
+        # Observable geometric progress. The ground-truth remaining cost is a
+        # training label and must never enter the feature vector.
+        start_pos = getattr(env, "start_pos", None)
+        if start_pos is not None:
+            progress = (
+                abs(example.position[0] - start_pos[0])
+                + abs(example.position[1] - start_pos[1])
+            )
+            features[9] = min(
+                float(progress) / float(max(1, self.map_height + self.map_width)),
+                1.0,
+            )
         
         return features
     
@@ -329,10 +339,21 @@ class HeuristicTrainer:
                 raise ValueError("validation_features and true_costs must have the same first dimension.")
             self.model.eval()
             with torch.no_grad():
-                preds = self.model(features) * float(scaling_factor)
-                overestimate = torch.clamp(preds - costs, min=0.0)
-                bias_shift = float(overestimate.max().item()) + float(max(0.0, safety_margin))
-            logger.info("Observed calibration overestimate margin: %.6f", bias_shift)
+                pred_costs = (
+                    self.model(features)
+                    * float(scaling_factor)
+                    * float(self.target_scale)
+                )
+                overestimate = torch.clamp(pred_costs - costs, min=0.0)
+                absolute_shift = (
+                    float(overestimate.max().item())
+                    + float(max(0.0, safety_margin))
+                )
+                bias_shift = absolute_shift / float(self.target_scale)
+            logger.info(
+                "Observed calibration overestimate margin: %.6f cost units",
+                absolute_shift,
+            )
 
         with torch.no_grad():
             self.model.fc4.weight.mul_(scaling_factor)

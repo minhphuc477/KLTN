@@ -146,10 +146,10 @@ def load_vqvae(pipeline, checkpoint_path: Optional[str]) -> torch.nn.Module:
                     unexpected,
                 )
         elif isinstance(checkpoint, dict):
-            logger.warning(
-                "VQ-VAE checkpoint %s does not contain a loadable VQ-VAE state; "
-                "leaving the VQ-VAE randomly initialized.",
-                checkpoint_path,
+            raise ValueError(
+                f"VQ-VAE checkpoint at {checkpoint_path!r} does not contain "
+                "a loadable VQ-VAE state_dict. Refusing to continue with a "
+                "random Block-II tokenizer."
             )
         else:
             model.load_state_dict(checkpoint)
@@ -204,6 +204,20 @@ def load_condition_encoder(
             if isinstance(edge_weight, torch.Tensor) and edge_weight.dim() == 2:
                 edge_feature_dim = int(max(1, int(edge_weight.shape[1])))
 
+    if "condition_use_rrwp_edge_features" in checkpoint_config:
+        use_rrwp_edge_features = bool(checkpoint_config["condition_use_rrwp_edge_features"])
+    elif isinstance(checkpoint_state, dict):
+        # Checkpoints created before RRWP edge conditioning existed have no
+        # RRWP projection weights and must reconstruct the legacy architecture.
+        use_rrwp_edge_features = False
+    else:
+        use_rrwp_edge_features = bool(
+            fallback_config.get(
+                "condition_use_rrwp_edge_features",
+                pipeline.condition_use_rrwp_edge_features,
+            )
+        )
+
     model = DualStreamConditionEncoder(
         latent_dim=int(checkpoint_config.get("latent_dim", fallback_config.get("latent_dim", default_latent_dim))),
         node_feature_dim=node_feature_dim,
@@ -244,6 +258,7 @@ def load_condition_encoder(
                 fallback_config.get("condition_reference_hidden_dim", pipeline.condition_reference_hidden_dim),
             )
         ),
+        use_rrwp_edge_features=use_rrwp_edge_features,
     ).to(pipeline.device)
 
     if checkpoint_state is not None:
@@ -549,7 +564,27 @@ def load_logic_net(pipeline, checkpoint_path: Optional[str]) -> LogicNet:
             global_room_weight=float(checkpoint_config.get("logic_global_room_weight", 0.25)),
         ).to(pipeline.device)
         if isinstance(checkpoint_state, dict):
-            model.load_state_dict(checkpoint_state)
+            incompatible = model.load_state_dict(checkpoint_state, strict=False)
+            missing = list(getattr(incompatible, "missing_keys", []))
+            unexpected = list(getattr(incompatible, "unexpected_keys", []))
+            parameter_names = {name for name, _param in model.named_parameters()}
+            missing_parameters = [name for name in missing if name in parameter_names]
+            if missing_parameters:
+                raise RuntimeError(
+                    "LogicNet checkpoint is missing learned parameters: "
+                    f"{summarize_missing_keys(missing_parameters)}"
+                )
+            compatibility_only = {"locked_edge_role_ids"}
+            unexpected = [name for name in unexpected if name not in compatibility_only]
+            if missing or unexpected:
+                msg = (
+                    "LogicNet checkpoint/schema mismatch: "
+                    f"missing={summarize_missing_keys(missing)} "
+                    f"unexpected={summarize_missing_keys(unexpected)}"
+                )
+                if pipeline.strict_checkpoint_mode:
+                    raise RuntimeError(msg)
+                logger.warning(msg)
         else:
             raise ValueError(
                 f"LogicNet checkpoint at {checkpoint_path!r} does not contain a loadable state_dict."
