@@ -4,13 +4,17 @@ import pytest
 import networkx as nx
 import numpy as np
 import torch
+import scripts.run_ablation_study as ablation_module
 
 from scripts.run_ablation_study import (
     AblationStudy,
     ExperimentConfig,
     _json_sanitize,
+    bind_topology_ablation_checkpoints,
     build_ablation_plan,
     build_experiment_set,
+    set_topology_refinement_mode_or_raise,
+    validate_loaded_topology_conditioning_mode,
 )
 from scripts.compare_protocol_to_baselines import build_report as build_protocol_baseline_report
 from scripts.compare_protocol_to_baselines import _render_markdown as render_protocol_baseline_markdown
@@ -68,6 +72,95 @@ def test_ablation_extended_plan_documents_logic_guidance_timing_sweep():
     assert experiments["DIFFUSION_TOPO_ADDITIVE"]["component"] == "diffusion topology conditioning"
     assert experiments["DIFFUSION_TOPO_ADDITIVE"]["config"]["diffusion_topology_conditioning_mode"] == "additive"
     assert experiments["DIFFUSION_TOPO_SPADE"]["config"]["diffusion_topology_conditioning_mode"] == "spade"
+
+
+def test_topology_ablation_requires_architecture_matched_checkpoints(tmp_path):
+    additive = tmp_path / "additive.pth"
+    additive.write_bytes(b"checkpoint")
+    configs = [
+        ExperimentConfig(name="DIFFUSION_TOPO_ADDITIVE", diffusion_topology_conditioning_mode="additive"),
+        ExperimentConfig(name="DIFFUSION_TOPO_SPADE", diffusion_topology_conditioning_mode="spade"),
+    ]
+
+    with pytest.raises(ValueError, match="DIFFUSION_TOPO_SPADE"):
+        bind_topology_ablation_checkpoints(
+            configs,
+            default_diffusion_checkpoint=str(additive),
+            additive_checkpoint=None,
+            spade_checkpoint=None,
+            require_existing=True,
+        )
+
+    spade = tmp_path / "spade.pth"
+    spade.write_bytes(b"checkpoint")
+    bind_topology_ablation_checkpoints(
+        configs,
+        default_diffusion_checkpoint=str(additive),
+        additive_checkpoint=None,
+        spade_checkpoint=str(spade),
+        require_existing=True,
+    )
+
+    assert configs[0].diffusion_checkpoint_override == str(additive)
+    assert configs[1].diffusion_checkpoint_override == str(spade)
+
+
+def test_topology_ablation_rejects_loaded_checkpoint_mode_mismatch():
+    pipeline = type("Pipeline", (), {"diffusion": type("Diffusion", (), {"topology_conditioning_mode": "additive"})()})()
+
+    with pytest.raises(ValueError, match="expected='spade', actual='additive'"):
+        validate_loaded_topology_conditioning_mode(
+            pipeline,
+            expected_mode="spade",
+            checkpoint_path="additive.pth",
+        )
+
+
+def test_topology_refinement_ablation_requires_successful_readback():
+    class Diffusion:
+        def __init__(self):
+            self.mode = "gat2"
+
+        def set_topology_refinement_mode(self, mode):
+            self.mode = mode
+
+        def get_topology_refinement_mode(self):
+            return self.mode
+
+    diffusion = Diffusion()
+    set_topology_refinement_mode_or_raise(diffusion, "sparse_directed")
+    assert diffusion.mode == "sparse_directed"
+
+    diffusion.set_topology_refinement_mode = lambda mode: None
+    with pytest.raises(RuntimeError, match="did not activate"):
+        set_topology_refinement_mode_or_raise(diffusion, "graphormer")
+
+
+def test_ablation_search_metrics_use_transition_counts_and_excess_ratio(monkeypatch):
+    study = AblationStudy.__new__(AblationStudy)
+    study.cbs_timeout = 100
+    monkeypatch.setattr(ablation_module, "ZeldaLogicEnv", lambda semantic_grid: object())
+    monkeypatch.setattr(
+        ablation_module,
+        "run_astar_oracle",
+        lambda env, timeout: {"success": True, "path_length": 3, "status": "solved"},
+    )
+    cbs_metrics = type("Metrics", (), {"confusion_index": 0.25})()
+    monkeypatch.setattr(
+        ablation_module,
+        "solve_with_cbs",
+        lambda *args, **kwargs: (True, [(0, index) for index in range(6)], None, cbs_metrics),
+    )
+
+    solved, confusion, path_optimal, confusion_index = study._optimal_and_cbs_metrics(
+        np.zeros((2, 2), dtype=np.int32),
+        seed=42,
+    )
+
+    assert solved
+    assert confusion == pytest.approx(2.0 / 3.0)
+    assert path_optimal == pytest.approx(3.0 / 5.0)
+    assert confusion_index == pytest.approx(0.25)
 
 
 def test_round5_manifest_passes_lcm_checkpoint_to_fast_sampler_command(tmp_path):

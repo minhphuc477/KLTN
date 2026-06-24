@@ -580,8 +580,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\scripts\\run_ablation_study.py": {
-    "mtime": 1782197322.2525764,
-    "ast_hash": "e94ed773e120667a08fb638681da841b",
+    "mtime": 1782296877.1115308,
+    "ast_hash": "a9ea1c6abce5e8f3e2d1496fb0c4149f",
     "semantic_hash": ""
   },
   "F:\\KLTN\\scripts\\run_baseline_comparison.py": {
@@ -1155,8 +1155,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\generation\\grammar\\mission_grammar.py": {
-    "mtime": 1782271570.2685242,
-    "ast_hash": "6c7d11a8e602775a326a7fc473e4202a",
+    "mtime": 1782293126.9954379,
+    "ast_hash": "4f44e93b079126d0c0b5b8ccac781f6e",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\generation\\grammar_torch_adapters.py": {
@@ -2940,8 +2940,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_advanced_rules_integration.py": {
-    "mtime": 1782208116.0358694,
-    "ast_hash": "e97cffaec4a60dba36231b49cc941c71",
+    "mtime": 1782293126.9974415,
+    "ast_hash": "d0f9213960cf84b86b568b1fffafe2ae",
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_architecture_audit_fixes.py": {
@@ -3050,8 +3050,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_evolutionary_director.py": {
-    "mtime": 1780689303.7231998,
-    "ast_hash": "e2796fe3e3a12f33a4cb31eff8b8c746",
+    "mtime": 1782293294.4523332,
+    "ast_hash": "8841e9862d0787999809fdea3ea224e7",
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_explainability_discrepancy.py": {
@@ -3535,8 +3535,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_protocol_reporting.py": {
-    "mtime": 1782286216.976926,
-    "ast_hash": "33a6d35957e7aa9c3f1f56e59e72abec",
+    "mtime": 1782296892.1460452,
+    "ast_hash": "e324266adf3e44e81334a8ed70625e4a",
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_puzzle_stage_semantics.py": {
@@ -4070,8 +4070,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\docs\\architecture_audit_research_notes.md": {
-    "mtime": 1782288390.6171715,
-    "ast_hash": "50f8010f11050d7321600682680e3c54",
+    "mtime": 1782296922.1133661,
+    "ast_hash": "dbbf238a1d4b19e270bf35871916f633",
     "semantic_hash": ""
   },
   "F:\\KLTN\\docs\\archive\\2026-q1\\ARCHITECTURE_RESEARCH_JUDGMENT_2026_02_24.md": {

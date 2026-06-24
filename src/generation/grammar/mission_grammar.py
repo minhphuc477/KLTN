@@ -516,10 +516,13 @@ class MissionGrammar:
                 )
             return False
 
-        goal_predecessors = list(dict.fromkeys(
-            edge.source for edge in graph.edges if edge.target == goal.id
-        ))
-        if len(goal_predecessors) != 1:
+        goal_incoming_edges = [edge for edge in graph.edges if edge.target == goal.id]
+        goal_predecessors = list(dict.fromkeys(edge.source for edge in goal_incoming_edges))
+        if (
+            len(goal_incoming_edges) != 1
+            or goal_predecessors != [boss_nodes[0].id]
+            or goal_incoming_edges[0].edge_type != EdgeType.PATH
+        ):
             if log_failures:
                 logger.warning(
                     "Goal gauntlet validation failed: GOAL %s has predecessors %s (expected exactly one boss predecessor)",
@@ -545,6 +548,10 @@ class MissionGrammar:
             return False
 
         boss_door_nodes = graph.get_nodes_by_type(NodeType.BOSS_DOOR)
+        if not boss_door_nodes:
+            if log_failures:
+                logger.warning("Goal gauntlet validation failed: missing BOSS_DOOR node")
+            return False
         if boss_door_nodes:
             if len(boss_door_nodes) != 1:
                 if log_failures:
@@ -555,8 +562,12 @@ class MissionGrammar:
                 return False
 
             boss_door = boss_door_nodes[0]
-            boss_predecessors = [edge.source for edge in graph.edges if edge.target == boss_id]
-            if boss_predecessors != [boss_door.id]:
+            boss_incoming_edges = [edge for edge in graph.edges if edge.target == boss_id]
+            boss_predecessors = [edge.source for edge in boss_incoming_edges]
+            if (
+                boss_predecessors != [boss_door.id]
+                or boss_incoming_edges[0].edge_type != EdgeType.PATH
+            ):
                 if log_failures:
                     logger.warning(
                         "Goal gauntlet validation failed: BOSS %s has predecessors %s (expected only BOSS_DOOR %s)",
@@ -566,8 +577,12 @@ class MissionGrammar:
                     )
                 return False
 
-            boss_successors = [edge.target for edge in graph.edges if edge.source == boss_id]
-            if boss_successors != [goal.id]:
+            boss_outgoing_edges = [edge for edge in graph.edges if edge.source == boss_id]
+            boss_successors = [edge.target for edge in boss_outgoing_edges]
+            if (
+                boss_successors != [goal.id]
+                or boss_outgoing_edges[0].edge_type != EdgeType.PATH
+            ):
                 if log_failures:
                     logger.warning(
                         "Goal gauntlet validation failed: BOSS %s has successors %s (expected only GOAL %s)",
@@ -577,8 +592,12 @@ class MissionGrammar:
                     )
                 return False
 
-            boss_door_successors = [edge.target for edge in graph.edges if edge.source == boss_door.id]
-            if boss_door_successors != [boss_id]:
+            boss_door_outgoing_edges = [edge for edge in graph.edges if edge.source == boss_door.id]
+            boss_door_successors = [edge.target for edge in boss_door_outgoing_edges]
+            if (
+                boss_door_successors != [boss_id]
+                or boss_door_outgoing_edges[0].edge_type != EdgeType.PATH
+            ):
                 if log_failures:
                     logger.warning(
                         "Goal gauntlet validation failed: BOSS_DOOR %s has successors %s (expected only BOSS %s)",
@@ -588,10 +607,13 @@ class MissionGrammar:
                     )
                 return False
 
-            boss_door_predecessors = [edge.source for edge in graph.edges if edge.target == boss_door.id]
-            if not boss_door_predecessors or any(
-                predecessor in {boss_door.id, boss_id, goal.id}
-                for predecessor in boss_door_predecessors
+            boss_door_incoming_edges = [edge for edge in graph.edges if edge.target == boss_door.id]
+            boss_door_predecessors = [edge.source for edge in boss_door_incoming_edges]
+            if (
+                len(boss_door_incoming_edges) != 1
+                or boss_door_predecessors[0] in {boss_door.id, boss_id, goal.id}
+                or boss_door_incoming_edges[0].edge_type != EdgeType.BOSS_LOCKED
+                or boss_door_incoming_edges[0].key_required != boss_door.key_id
             ):
                 if log_failures:
                     logger.warning(
@@ -620,6 +642,26 @@ class MissionGrammar:
                     )
                 return False
 
+        start = graph.get_start_node()
+        if start is None:
+            if log_failures:
+                logger.warning("Goal gauntlet validation failed: missing START node")
+            return False
+        progression_reachable = self._progression_reachable_nodes(
+            graph,
+            start.id,
+            exclude_nodes=set(),
+            exclude_edges=set(),
+        )
+        if goal.id not in progression_reachable:
+            if log_failures:
+                logger.warning(
+                    "Goal gauntlet validation failed: GOAL %s is not progression-reachable from START %s",
+                    goal.id,
+                    start.id,
+                )
+            return False
+
         return True
 
     def _repair_goal_gauntlet(self, graph: MissionGraph) -> MissionGraph:
@@ -638,17 +680,46 @@ class MissionGrammar:
         start = graph.get_start_node()
         repairs = 0
 
-        def _reachable_from_start() -> Set[int]:
-            if start is None or start.id not in graph.nodes:
-                return set()
-            return graph.get_reachable_nodes(start.id)
+        def _progression_distances(excluded: Set[int]) -> Dict[int, int]:
+            """Directed depths that do not route through the terminal gauntlet."""
+            if start is None or start.id not in graph.nodes or start.id in excluded:
+                return {}
+            outgoing = graph.get_forward_adjacency_map()
+            distances = {start.id: 0}
+            queue = deque([start.id])
+            while queue:
+                current = queue.popleft()
+                for neighbor in outgoing.get(current, []):
+                    if neighbor in excluded or neighbor in distances:
+                        continue
+                    distances[neighbor] = distances[current] + 1
+                    queue.append(neighbor)
+            return distances
 
-        def _prefer_reachable_node(candidates: List[int]) -> Optional[int]:
-            reachable = _reachable_from_start()
-            for candidate in candidates:
-                if candidate in reachable:
-                    return candidate
-            return candidates[0] if candidates else None
+        def _prefer_reachable_node(
+            candidates: List[int],
+            *,
+            excluded: Set[int],
+        ) -> Optional[int]:
+            distances = _progression_distances(excluded)
+            progression_reachable = (
+                self._progression_reachable_nodes(
+                    graph,
+                    start.id,
+                    exclude_nodes=set(excluded),
+                    exclude_edges=set(),
+                )
+                if start is not None
+                else set()
+            )
+            reachable_candidates = [
+                candidate
+                for candidate in candidates
+                if candidate in distances and candidate in progression_reachable
+            ]
+            if not reachable_candidates:
+                return None
+            return max(reachable_candidates, key=lambda node_id: (distances[node_id], -node_id))
 
         goal_incoming = [
             edge.source
@@ -667,10 +738,61 @@ class MissionGrammar:
         if boss_node is None:
             boss_node = boss_nodes[0] if boss_nodes else None
 
+        boss_predecessors = [
+            edge.source
+            for edge in graph.edges
+            if boss_node is not None
+            and edge.target == boss_node.id
+            and edge.source in graph.nodes
+        ]
+        existing_terminal_ids = {goal.id}
+        if boss_node is not None:
+            existing_terminal_ids.add(boss_node.id)
+        primary_candidates = [
+            source
+            for source in goal_incoming + boss_predecessors
+            if source not in existing_terminal_ids
+            and graph.nodes.get(source) is not None
+            and graph.nodes[source].node_type != NodeType.BOSS_DOOR
+        ]
+        terminal_ids = {
+            goal.id,
+            *(node.id for node in graph.get_nodes_by_type(NodeType.BOSS_DOOR)),
+        }
+        if boss_node is not None:
+            terminal_ids.add(boss_node.id)
+        primary_approach = _prefer_reachable_node(primary_candidates, excluded=terminal_ids)
+        if primary_approach is None:
+            non_reserved_nodes = sorted(
+                node_id
+                for node_id, node in graph.nodes.items()
+                if node_id not in existing_terminal_ids
+                and node.node_type != NodeType.BOSS_DOOR
+            )
+            if not non_reserved_nodes:
+                return graph
+            reachable_non_start = [
+                node_id
+                for node_id in non_reserved_nodes
+                if graph.nodes[node_id].node_type != NodeType.START
+            ]
+            primary_approach = _prefer_reachable_node(
+                reachable_non_start,
+                excluded=terminal_ids,
+            )
+            if primary_approach is None:
+                if reachable_non_start:
+                    return graph
+                primary_approach = _prefer_reachable_node(
+                    non_reserved_nodes,
+                    excluded=terminal_ids,
+                )
+            if primary_approach is None:
+                return graph
+
         if boss_node is None:
             boss_id = max(graph.nodes.keys(), default=-1) + 1
             goal_pos = goal.position
-            goal_z = goal_pos[2] if len(goal_pos) > 2 else 0
             boss_node = MissionNode(
                 id=boss_id,
                 node_type=NodeType.BOSS,
@@ -687,44 +809,10 @@ class MissionGrammar:
             repairs += 1
             boss_nodes = [boss_node]
 
-        boss_predecessors = [
-            edge.source
-            for edge in graph.edges
-            if edge.target == boss_node.id and edge.source in graph.nodes
-        ]
-        primary_candidates = [
-            source
-            for source in goal_incoming + boss_predecessors
-            if source not in {goal.id, boss_node.id}
-            and graph.nodes.get(source) is not None
-            and graph.nodes[source].node_type != NodeType.BOSS_DOOR
-        ]
-        primary_approach = _prefer_reachable_node(primary_candidates)
-        if primary_approach is None:
-            reachable_from_start = _reachable_from_start()
-            non_reserved_nodes = sorted(
-                node_id
-                for node_id, node in graph.nodes.items()
-                if node_id not in {goal.id, boss_node.id}
-                and node.node_type != NodeType.BOSS_DOOR
-            )
-            if not non_reserved_nodes:
-                return graph
-            primary_approach = next(
-                (
-                    node_id
-                    for node_id in non_reserved_nodes
-                    if node_id in reachable_from_start
-                    and graph.nodes[node_id].node_type != NodeType.START
-                ),
-                next((node_id for node_id in non_reserved_nodes if node_id in reachable_from_start), non_reserved_nodes[0]),
-            )
-
         boss_door_nodes = sorted(graph.get_nodes_by_type(NodeType.BOSS_DOOR), key=lambda node: node.id)
         boss_door = boss_door_nodes[0] if boss_door_nodes else None
         if boss_door is None:
             goal_pos = goal.position
-            goal_z = goal_pos[2] if len(goal_pos) > 2 else 0
             boss_door_id = max(graph.nodes.keys(), default=-1) + 1
             boss_door = MissionNode(
                 id=boss_door_id,
@@ -752,8 +840,11 @@ class MissionGrammar:
             and edge.source not in {goal.id, boss_node.id, boss_door.id}
             and graph.nodes.get(edge.source) is not None
         ]
-        preserved_reachable_approach = _prefer_reachable_node(preserved_door_approaches)
-        if preserved_reachable_approach is not None and preserved_reachable_approach in _reachable_from_start():
+        preserved_reachable_approach = _prefer_reachable_node(
+            preserved_door_approaches,
+            excluded={goal.id, boss_node.id, boss_door.id},
+        )
+        if preserved_reachable_approach is not None:
             primary_approach = preserved_reachable_approach
 
         for extra_boss in boss_nodes:
@@ -784,10 +875,7 @@ class MissionGrammar:
             if edge.source == boss_door.id:
                 repairs += 1
                 continue
-            if edge.target == boss_door.id and edge.source in {goal.id, boss_node.id, boss_door.id}:
-                repairs += 1
-                continue
-            if edge.target == boss_door.id and edge.source != primary_approach:
+            if edge.target == boss_door.id:
                 repairs += 1
                 continue
             retained_edges.append(edge)
@@ -798,20 +886,13 @@ class MissionGrammar:
         def _edge_exists(source: int, target: int) -> bool:
             return any(edge.source == source and edge.target == target for edge in graph.edges)
 
-        if start is not None and start.id in graph.nodes and primary_approach not in _reachable_from_start():
-            anchor_id = start.id
-            if anchor_id != primary_approach and not _edge_exists(anchor_id, primary_approach):
-                graph.add_edge(anchor_id, primary_approach, EdgeType.PATH)
-                repairs += 1
-
-        if not _edge_exists(primary_approach, boss_door.id):
-            graph.add_edge(
-                primary_approach,
-                boss_door.id,
-                EdgeType.BOSS_LOCKED,
-                key_required=boss_door.key_id,
-            )
-            repairs += 1
+        graph.add_edge(
+            primary_approach,
+            boss_door.id,
+            EdgeType.BOSS_LOCKED,
+            key_required=boss_door.key_id,
+        )
+        repairs += 1
 
         if not _edge_exists(boss_door.id, boss_node.id):
             graph.add_edge(boss_door.id, boss_node.id, EdgeType.PATH)
@@ -874,12 +955,15 @@ class MissionGrammar:
         graph._key_to_lock[boss_door.key_id] = boss_door.id
         graph.sanitize()
         if start is not None and start.id in graph.nodes:
-            reachable = graph.get_reachable_nodes(start.id)
+            reachable = set(_progression_distances(set()))
             protected_gauntlet_nodes = {goal.id, boss_node.id, boss_door.id}
+            rejected_approach_ids = set(primary_candidates) | set(preserved_door_approaches)
             orphan_ids = sorted(
                 node_id
-                for node_id in graph.nodes
-                if node_id not in reachable and node_id not in protected_gauntlet_nodes
+                for node_id in rejected_approach_ids
+                if node_id in graph.nodes
+                and node_id not in reachable
+                and node_id not in protected_gauntlet_nodes
             )
             if orphan_ids:
                 for node_id in orphan_ids:
@@ -1179,6 +1263,8 @@ class MissionGrammar:
             key_ids, items, small_keys, tokens = _available_resources()
             for edge in graph.edges:
                 if (edge.source, edge.target) in exclude_edges:
+                    continue
+                if edge.edge_type in graph.NON_TRAVERSABLE_EDGE_TYPES:
                     continue
                 if edge.source not in reachable or edge.target in reachable or edge.target in exclude_nodes:
                     continue

@@ -220,6 +220,7 @@ class TestAdvancedRulesIntegration:
         graph.add_edge(1, 2, EdgeType.PATH)
         graph.sanitize()
 
+        assert not grammar.validate_goal_gauntlet(graph, log_failures=False)
         repaired = grammar._repair_goal_gauntlet(graph)
         repaired.sanitize()
 
@@ -231,7 +232,7 @@ class TestAdvancedRulesIntegration:
         assert not any(edge.source == edge.target for edge in repaired.edges)
 
     def test_repair_goal_gauntlet_does_not_delete_goal_when_preserved_approach_is_orphaned(self):
-        """Orphan cleanup must not delete the repaired terminal chain."""
+        """Repair must discard an orphaned approach instead of bridging START to it."""
         grammar = MissionGrammar(seed=42)
         graph = MissionGraph()
         graph.add_node(MissionNode(id=0, node_type=NodeType.START, position=(0, 0, 0), difficulty=0.0))
@@ -255,7 +256,110 @@ class TestAdvancedRulesIntegration:
         start = repaired.get_start_node()
         goal = repaired.get_goal_node()
         assert start is not None and goal is not None
-        assert goal.id in repaired.get_reachable_nodes(start.id)
+        assert repaired.get_forward_shortest_path_length(start.id, goal.id) >= 0
+        boss_door = repaired.get_nodes_by_type(NodeType.BOSS_DOOR)[0]
+        assert not any(edge.source == 0 and edge.target == 2 for edge in repaired.edges)
+        assert any(edge.source == 1 and edge.target == boss_door.id for edge in repaired.edges)
+
+    def test_repair_goal_gauntlet_normalizes_unlocked_door_edge(self):
+        """The approach edge must enforce the boss-key gate after repair."""
+        grammar = MissionGrammar(seed=42)
+        graph = MissionGraph()
+        graph.add_node(MissionNode(id=0, node_type=NodeType.START, position=(0, 0, 0)))
+        graph.add_node(MissionNode(id=1, node_type=NodeType.ENEMY, position=(1, 0, 0)))
+        graph.add_node(MissionNode(id=2, node_type=NodeType.BOSS_DOOR, position=(2, 0, 0), key_id=2))
+        graph.add_node(MissionNode(id=3, node_type=NodeType.BOSS, position=(3, 0, 0)))
+        graph.add_node(MissionNode(id=4, node_type=NodeType.GOAL, position=(4, 0, 0)))
+        graph.add_node(MissionNode(id=5, node_type=NodeType.BIG_KEY, position=(0, 1, 0), key_id=2))
+        graph.add_edge(0, 1, EdgeType.PATH)
+        graph.add_edge(0, 5, EdgeType.PATH)
+        graph.add_edge(1, 2, EdgeType.PATH)
+        graph.add_edge(2, 3, EdgeType.PATH)
+        graph.add_edge(3, 4, EdgeType.PATH)
+        graph.sanitize()
+
+        assert not grammar.validate_goal_gauntlet(graph, log_failures=False)
+        repaired = grammar._repair_goal_gauntlet(graph)
+        incoming = [edge for edge in repaired.edges if edge.target == 2]
+
+        assert len(incoming) == 1
+        assert incoming[0].source == 1
+        assert incoming[0].edge_type == EdgeType.BOSS_LOCKED
+        assert incoming[0].key_required == 2
+        assert grammar.validate_goal_gauntlet(repaired)
+
+    def test_repair_goal_gauntlet_does_not_traverse_visual_links(self):
+        """A visual-only connection cannot justify a synthetic terminal chain."""
+        grammar = MissionGrammar(seed=42)
+        graph = MissionGraph()
+        graph.add_node(MissionNode(id=0, node_type=NodeType.START, position=(0, 0, 0)))
+        graph.add_node(MissionNode(id=1, node_type=NodeType.EMPTY, position=(1, 0, 0)))
+        graph.add_node(MissionNode(id=2, node_type=NodeType.BOSS_DOOR, position=(2, 0, 0), key_id=2))
+        graph.add_node(MissionNode(id=3, node_type=NodeType.BOSS, position=(3, 0, 0)))
+        graph.add_node(MissionNode(id=4, node_type=NodeType.GOAL, position=(4, 0, 0)))
+        graph.add_edge(0, 1, EdgeType.VISUAL_LINK)
+        graph.add_edge(1, 2, EdgeType.BOSS_LOCKED, key_required=2)
+        graph.add_edge(2, 3, EdgeType.PATH)
+        graph.add_edge(3, 4, EdgeType.PATH)
+        graph.sanitize()
+
+        repaired = grammar._repair_goal_gauntlet(graph)
+
+        assert repaired.get_forward_shortest_path_length(0, 4) == -1
+        assert not grammar._is_reachable_without_edges(repaired, 0, 1, set())
+        assert not any(
+            edge.source == 0
+            and edge.target in {1, 2}
+            and edge.edge_type != EdgeType.VISUAL_LINK
+            for edge in repaired.edges
+        )
+        assert not grammar.validate_goal_gauntlet(repaired, log_failures=False)
+
+    def test_validate_goal_gauntlet_rejects_visual_only_progression(self):
+        """A syntactically canonical chain must still be reachable in mission order."""
+        grammar = MissionGrammar(seed=42)
+        graph = MissionGraph()
+        graph.add_node(MissionNode(id=0, node_type=NodeType.START, position=(0, 0, 0)))
+        graph.add_node(MissionNode(id=1, node_type=NodeType.EMPTY, position=(1, 0, 0)))
+        graph.add_node(MissionNode(id=2, node_type=NodeType.BOSS_DOOR, position=(2, 0, 0), key_id=2))
+        graph.add_node(MissionNode(id=3, node_type=NodeType.BOSS, position=(3, 0, 0)))
+        graph.add_node(MissionNode(id=4, node_type=NodeType.GOAL, position=(4, 0, 0)))
+        graph.add_node(MissionNode(id=5, node_type=NodeType.BIG_KEY, position=(0, 1, 0), key_id=2))
+        graph.add_edge(0, 5, EdgeType.PATH)
+        graph.add_edge(0, 1, EdgeType.VISUAL_LINK)
+        graph.add_edge(1, 2, EdgeType.BOSS_LOCKED, key_required=2)
+        graph.add_edge(2, 3, EdgeType.PATH)
+        graph.add_edge(3, 4, EdgeType.PATH)
+        graph.sanitize()
+
+        assert graph.get_forward_shortest_path_length(0, 4) == -1
+        assert not grammar.validate_goal_gauntlet(graph, log_failures=False)
+
+    def test_repair_goal_gauntlet_preserves_unrelated_disconnected_components(self):
+        """Gauntlet repair must not act as global orphan garbage collection."""
+        grammar = MissionGrammar(seed=42)
+        graph = MissionGraph()
+        graph.add_node(MissionNode(id=0, node_type=NodeType.START, position=(0, 0, 0)))
+        graph.add_node(MissionNode(id=1, node_type=NodeType.EMPTY, position=(1, 0, 0)))
+        graph.add_node(MissionNode(id=2, node_type=NodeType.BOSS_DOOR, position=(2, 0, 0), key_id=2))
+        graph.add_node(MissionNode(id=3, node_type=NodeType.BOSS, position=(3, 0, 0)))
+        graph.add_node(MissionNode(id=4, node_type=NodeType.GOAL, position=(4, 0, 0)))
+        graph.add_node(MissionNode(id=5, node_type=NodeType.BIG_KEY, position=(0, 1, 0), key_id=2))
+        graph.add_node(MissionNode(id=6, node_type=NodeType.PUZZLE, position=(8, 8, 0)))
+        graph.add_node(MissionNode(id=7, node_type=NodeType.ITEM, position=(9, 8, 0)))
+        graph.add_edge(0, 1, EdgeType.PATH)
+        graph.add_edge(0, 5, EdgeType.PATH)
+        graph.add_edge(1, 2, EdgeType.BOSS_LOCKED, key_required=2)
+        graph.add_edge(2, 3, EdgeType.PATH)
+        graph.add_edge(3, 4, EdgeType.PATH)
+        graph.add_edge(6, 7, EdgeType.PATH)
+        graph.sanitize()
+
+        repaired = grammar._repair_goal_gauntlet(graph)
+
+        assert {6, 7}.issubset(repaired.nodes)
+        assert any(edge.source == 6 and edge.target == 7 for edge in repaired.edges)
+        assert grammar.validate_goal_gauntlet(repaired)
     
     def test_large_dungeon_generation(self):
         """Test generating large dungeon with all rules active."""

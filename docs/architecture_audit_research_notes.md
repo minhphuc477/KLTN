@@ -29,17 +29,20 @@ semantics.
 - Tests are evidence only when their asserted contract is independently valid.
 - Static checks include `compileall` and Ruff undefined-name/duplicate checks.
 - Research claims are checked against primary papers or canonical project
-  references. Network search was unavailable during the latest pass because
-  external requests returned access errors; no new web-only claim is treated as
-  verified.
+  references. Provider behavior is verified against the provider's current
+  first-party API documentation; inaccessible sources remain unverified.
 
 Graphify status:
 
 - `graphify-out/graph.json` and the local query/explain commands are active.
-- The Groq provider is configured through the user environment without storing
-  credentials in the repository.
-- Groq semantic enrichment is currently limited by the provider account's
-  request token budget. Local AST/community semantic search remains usable.
+- ApiFreeLLM is configured through a user-level environment variable and a
+  localhost OpenAI-protocol adapter; no credential is stored in the repository.
+- The free endpoint has a 32k-token context and a documented per-request delay.
+  Full-repository semantic extraction therefore requires bounded chunks and
+  serial execution. Local AST/community query and explain remain available
+  independently of the external provider.
+- The 200 largest communities were labeled successfully in 25-community
+  batches; remaining small communities retain deterministic placeholders.
 
 ## Evidence Taxonomy
 
@@ -124,6 +127,10 @@ better than the referenced methods.
   retain their actual base learning rates.
 - Masked-room legacy U-Net controls now fail explicitly when changed instead of
   creating fake no-op ablations.
+- Additive-versus-SPADE execution now requires separate architecture-matched
+  checkpoints and verifies the loaded model's conditioning mode before sampling.
+- Topology-refinement ablations verify set/readback state and fail instead of
+  silently retaining a checkpoint's default attention mode.
 - Fast-sampling telemetry separates requested from actually executed fast paths.
 - Advanced-pipeline global water state now reaches the existing state-aware
   room transformation instead of remaining unused graph metadata. This is a
@@ -131,6 +138,14 @@ better than the referenced methods.
 
 ### Solvers and metrics
 
+- Goal-gauntlet repair now discards unreachable preserved approaches and selects
+  the deepest directed traversable progression node. It no longer fabricates a
+  `START -> orphan` bridge that bypasses the generated dungeon.
+- The terminal chain validator now requires canonical `PATH` edges and one
+  correctly keyed `BOSS_LOCKED` approach edge. Visual-only and unlocked edges
+  cannot satisfy the gauntlet contract.
+- Gauntlet cleanup is scoped to rejected approach artifacts; it no longer
+  deletes unrelated disconnected components.
 - A pushed block occupying the goal no longer counts as a solution.
 - Graph-guided room validation checks traversability and fails closed on
   unsupported constraints.
@@ -149,6 +164,8 @@ better than the referenced methods.
   comparison, P-CBS, and benchmark adapters.
 - Confusion ratio is normalized as excess path overhead, where an oracle-match
   is `0.0`.
+- The main ablation runner now uses transition counts, the canonical
+  A*/Dijkstra oracle wrapper, and the same excess-path confusion definition.
 - A* timeout is reported as indeterminate rather than mislabeled unsolvable in
   CBS fitness.
 - P-CBS suboptimal-decision accounting uses the same graph-aware navigation
@@ -180,7 +197,12 @@ must not be described as graph conditioned.
 ### Executed but limited
 
 - `results/random_baseline/random_baseline_results.json`: 96 samples for each
-  of seeds 42, 43, and 44. This is topology baseline evidence only.
+  of seeds 42, 43, and 44. This is scientifically executed but scope-limited
+  topology-null evidence; it lacks a raw graph archive and full environment
+  manifest and cannot support model-quality comparisons.
+- `results/baselines/wfc_dryrun_codex/wfc_baseline_report.json` contains one
+  four-sample `wfc_overlapping_patterns` dry run with P-CBS disabled. It has no
+  flat-prior arm and is smoke-executed plumbing evidence, not an ablation result.
 - `results/matched_budget/`: executed on a small budget, but all reported
   feasible-search rates are zero. Treat as diagnostic.
 - `results/cognitive_objective_ab/`: four paired cases with zero constraint
@@ -195,11 +217,17 @@ must not be described as graph conditioned.
 ### Planned, not executed
 
 - `results/round5_scientific_gaps/` is a plan manifest.
-- SPADE versus additive conditioning.
+- SPADE versus additive conditioning has not been executed. A short SPADE run
+  (`epoch=3`, `global_step=32`) exists without a matched additive checkpoint or
+  comparison metrics, so it is not ablation evidence. The runner is now wired
+  to reject mismatched or missing arm-specific checkpoints.
 - model architecture and attention ablations.
 - LogicNet loss-component ablations.
-- diffusion versus LCM-LoRA fast sampling.
-- weighted versus flat-prior WFC.
+- diffusion versus the fast sampler has not been executed. The implemented path
+  identifies itself as repo-specific `consistency_lora` with DDIM semantics and
+  explicitly rejects paper `lcm_lora` artifacts; it must not be reported as a
+  paper-faithful LCM-LoRA baseline.
+- a scientifically powered weighted versus flat-prior WFC run.
 - full persona/component tables and paired significance tests.
 - target-response and large-dungeon controllability studies.
 
@@ -225,7 +253,7 @@ Currently defensible:
 
 Not currently defensible:
 
-- state-of-the-art or “surpasses publications” claims;
+- state-of-the-art or "surpasses publications" claims;
 - human-likeness claims without calibrated human traces;
 - standalone neural solvability claims based only on post-repair output;
 - fast-sampler quality claims without a trained LCM/consistency checkpoint;

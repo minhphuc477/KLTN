@@ -43,6 +43,7 @@ from src.evaluation.benchmark_suite import (
     load_vglc_reference_graphs,
     load_vglc_reference_rooms,
 )
+from src.evaluation.search_benchmark_utils import confusion_ratio_vs_oracle, run_astar_oracle
 from src.generation.evolutionary_director import mission_graph_to_networkx
 from src.generation.evolutionary_director import networkx_to_mission_graph
 from src.generation.evolutionary_director import EvolutionaryTopologyGenerator
@@ -60,7 +61,7 @@ from src.core.definitions import TileID
 from src.core.definitions import parse_edge_type_tokens
 from src.core.latent_diffusion import CrossAttention
 from src.simulation.cognitive_bounded_search import solve_with_cbs
-from src.simulation.validator import StateSpaceAStar, ZeldaLogicEnv
+from src.simulation.validator import ZeldaLogicEnv
 from src.pipeline.spatial_utils import first_free_position, get_node_grid_position
 from src.utils.stable_seed import stable_seed_offset
 
@@ -135,6 +136,74 @@ class ExperimentConfig:
     wfc_prior_mode: str = "weighted"  # weighted | flat
     diffusion_topology_conditioning_mode: Optional[str] = None  # additive | spade | None
     diffusion_checkpoint_override: Optional[str] = None
+
+
+def bind_topology_ablation_checkpoints(
+    configs: Sequence[ExperimentConfig],
+    *,
+    default_diffusion_checkpoint: Optional[str],
+    additive_checkpoint: Optional[str],
+    spade_checkpoint: Optional[str],
+    require_existing: bool,
+) -> None:
+    """Bind architecture-matched checkpoints to topology-conditioning arms."""
+    checkpoint_by_mode = {
+        "additive": additive_checkpoint or default_diffusion_checkpoint,
+        "spade": spade_checkpoint,
+    }
+    missing: List[str] = []
+    for cfg in configs:
+        mode = str(cfg.diffusion_topology_conditioning_mode or "").strip().lower()
+        if mode not in checkpoint_by_mode:
+            continue
+        checkpoint = checkpoint_by_mode[mode]
+        cfg.diffusion_checkpoint_override = str(checkpoint) if checkpoint else None
+        if require_existing and (not checkpoint or not Path(checkpoint).is_file()):
+            missing.append(f"{cfg.name} ({mode})")
+    if missing:
+        raise ValueError(
+            "Topology-conditioning ablations require separately trained, existing checkpoints for every arm. "
+            f"Missing: {', '.join(missing)}. Use --diffusion-additive-checkpoint and "
+            "--diffusion-spade-checkpoint."
+        )
+
+
+def validate_loaded_topology_conditioning_mode(
+    pipeline: NeuralSymbolicDungeonPipeline,
+    *,
+    expected_mode: Optional[str],
+    checkpoint_path: Optional[str],
+) -> None:
+    """Fail closed when checkpoint metadata defeats an ablation override."""
+    if expected_mode is None:
+        return
+    expected = str(expected_mode).strip().lower()
+    diffusion = getattr(pipeline, "diffusion", None)
+    actual = str(getattr(diffusion, "topology_conditioning_mode", "")).strip().lower()
+    if actual != expected:
+        raise ValueError(
+            "Loaded diffusion architecture does not match the requested topology-conditioning ablation: "
+            f"expected={expected!r}, actual={actual!r}, checkpoint={checkpoint_path!r}. "
+            "Use a checkpoint trained with the requested mode; constructor fallback overrides are not evidence."
+        )
+
+
+def set_topology_refinement_mode_or_raise(diffusion: Any, mode: str) -> None:
+    """Apply an attention-topology ablation and verify the active mode."""
+    normalized = str(mode).strip().lower()
+    setter = getattr(diffusion, "set_topology_refinement_mode", None)
+    getter = getattr(diffusion, "get_topology_refinement_mode", None)
+    if not callable(setter) or not callable(getter):
+        raise RuntimeError(
+            f"Diffusion model does not expose topology-refinement switching required for mode={normalized!r}."
+        )
+    setter(normalized)
+    actual = str(getter()).strip().lower()
+    if actual != normalized:
+        raise RuntimeError(
+            "Topology-refinement ablation did not activate the requested mode: "
+            f"expected={normalized!r}, actual={actual!r}."
+        )
 
 
 PRIMARY_ABLATION_METRICS: Tuple[str, ...] = (
@@ -915,9 +984,15 @@ class AblationStudy:
                 fallback_config = dict(pipeline_kwargs.get("diffusion_fallback_config") or {})
                 fallback_config["topology_conditioning_mode"] = topology_conditioning_mode
                 pipeline_kwargs["diffusion_fallback_config"] = fallback_config
-            self._pipeline_cache[cache_key] = NeuralSymbolicDungeonPipeline(
+            pipeline = NeuralSymbolicDungeonPipeline(
                 **pipeline_kwargs,
             )
+            validate_loaded_topology_conditioning_mode(
+                pipeline,
+                expected_mode=topology_conditioning_mode,
+                checkpoint_path=diffusion_checkpoint,
+            )
+            self._pipeline_cache[cache_key] = pipeline
         return self._pipeline_cache[cache_key]
 
     def _build_non_evolution_graph(self, seed: int) -> nx.Graph:
@@ -1064,17 +1139,20 @@ class AblationStudy:
     def _optimal_and_cbs_metrics(self, grid: np.ndarray, seed: int) -> Tuple[bool, float, float, float]:
         optimal_success = False
         optimal_len = 0
+        oracle_status = "failed"
         cbs_success = False
         cbs_len = 0
         confusion_index = float("nan")
         try:
             env = ZeldaLogicEnv(semantic_grid=grid)
-            astar = StateSpaceAStar(env, timeout=200000, search_mode="astar")
-            optimal_success, optimal_path, _ = astar.solve()
-            optimal_len = len(optimal_path or [])
+            oracle = run_astar_oracle(env, timeout=200000)
+            optimal_success = bool(oracle["success"])
+            optimal_len = int(oracle["path_length"])
+            oracle_status = str(oracle["status"])
         except Exception:
             optimal_success = False
             optimal_len = 0
+            oracle_status = "failed"
 
         try:
             cbs_success, cbs_path, _, cbs_metrics = solve_with_cbs(
@@ -1083,19 +1161,24 @@ class AblationStudy:
                 timeout=self.cbs_timeout,
                 seed=seed,
             )
-            cbs_len = len(cbs_path or [])
+            cbs_len = max(0, len(cbs_path or []) - 1)
             confusion_index = float(cbs_metrics.confusion_index)
             if not cbs_success:
                 cbs_len = 0
         except Exception:
             cbs_len = 0
 
-        confusion_ratio = float("nan")
-        if optimal_success and optimal_len > 0 and cbs_success and cbs_len > 0:
-            confusion_ratio = float(cbs_len / max(1, optimal_len))
+        confusion_ratio = confusion_ratio_vs_oracle(
+            optimal_len,
+            cbs_len,
+            oracle_status=oracle_status,
+            candidate_success=cbs_success,
+        )
 
-        if optimal_success and optimal_len > 0 and cbs_len > 0:
-            path_optimal = float(optimal_len / max(1, cbs_len))
+        if optimal_success and cbs_success and cbs_len == 0:
+            path_optimal = 1.0 if optimal_len == 0 else 0.0
+        elif optimal_success and cbs_success and cbs_len > 0:
+            path_optimal = float(max(0.0, min(1.0, optimal_len / cbs_len)))
         else:
             path_optimal = 0.0
         return bool(optimal_success), float(confusion_ratio), float(path_optimal), float(confusion_index)
@@ -1190,10 +1273,10 @@ class AblationStudy:
                         "but the loaded condition encoder has no reference encoder."
                     )
                 pipeline.condition_encoder.use_reference_room_maps = bool(cfg.use_reference_room_maps)
-            try:
-                pipeline.diffusion.set_topology_refinement_mode(cfg.topology_refinement_mode)
-            except (AttributeError, RuntimeError, ValueError, TypeError) as e:
-                logger.debug("Topology refinement mode switch unavailable, keeping default: %s", e)
+            set_topology_refinement_mode_or_raise(
+                pipeline.diffusion,
+                cfg.topology_refinement_mode,
+            )
             if cfg.logic_guidance_active_fraction is not None:
                 pipeline.diffusion.guidance.active_fraction = float(
                     max(0.05, min(1.0, float(cfg.logic_guidance_active_fraction)))
@@ -1228,10 +1311,10 @@ class AblationStudy:
             pipeline.use_graph_node_cross_attention = original_graph_token_flag
             if getattr(pipeline, "condition_encoder", None) is not None:
                 pipeline.condition_encoder.use_reference_room_maps = original_reference_flag
-            try:
-                pipeline.diffusion.set_topology_refinement_mode(original_topology_mode)
-            except (AttributeError, RuntimeError, ValueError, TypeError):
-                pass
+            set_topology_refinement_mode_or_raise(
+                pipeline.diffusion,
+                original_topology_mode,
+            )
             pipeline.diffusion.guidance.active_fraction = original_guidance_active_fraction
 
             grid = np.asarray(result.dungeon_grid, dtype=np.int32)
@@ -1341,9 +1424,18 @@ class AblationStudy:
                     if getattr(pipeline, "condition_encoder", None) is not None:
                         pipeline.condition_encoder.use_reference_room_maps = original_reference_flag
                     try:
-                        pipeline.diffusion.set_topology_refinement_mode(original_topology_mode)
-                    except (AttributeError, RuntimeError, ValueError, TypeError):
-                        pass
+                        set_topology_refinement_mode_or_raise(
+                            pipeline.diffusion,
+                            original_topology_mode,
+                        )
+                    except (AttributeError, RuntimeError, ValueError, TypeError) as restore_error:
+                        for key, cached in list(self._pipeline_cache.items()):
+                            if cached is pipeline:
+                                del self._pipeline_cache[key]
+                        logger.warning(
+                            "Discarded cached ablation pipeline after topology-mode restoration failed: %s",
+                            restore_error,
+                        )
                     pipeline.diffusion.guidance.active_fraction = original_guidance_active_fraction
             except (AttributeError, RuntimeError, ValueError, TypeError) as restore_error:
                 logger.debug("Failed to restore ablation runner state after error: %s", restore_error)
@@ -1677,6 +1769,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--evolution-generations", type=int, default=30)
     parser.add_argument("--vqvae-checkpoint", type=str, default=None)
     parser.add_argument("--diffusion-checkpoint", type=str, default=None)
+    parser.add_argument(
+        "--diffusion-additive-checkpoint",
+        type=str,
+        default=None,
+        help="Checkpoint trained with additive topology conditioning for the additive-vs-SPADE ablation.",
+    )
+    parser.add_argument(
+        "--diffusion-spade-checkpoint",
+        type=str,
+        default=None,
+        help="Checkpoint trained with SPADE topology conditioning for the additive-vs-SPADE ablation.",
+    )
     parser.add_argument("--masked-room-checkpoint", type=str, default=None)
     parser.add_argument("--logic-net-checkpoint", type=str, default=None)
     parser.add_argument("--condition-encoder-checkpoint", type=str, default=None)
@@ -1755,6 +1859,13 @@ def main() -> int:
         configs = [cfg for cfg in configs if cfg.name in selected]
         if not configs:
             raise ValueError("No matching configs after --configs filtering.")
+    bind_topology_ablation_checkpoints(
+        configs,
+        default_diffusion_checkpoint=args.diffusion_checkpoint,
+        additive_checkpoint=args.diffusion_additive_checkpoint,
+        spade_checkpoint=args.diffusion_spade_checkpoint,
+        require_existing=not args.plan_only,
+    )
 
     seeds = [int(args.seed) + i for i in range(int(args.num_samples))]
     if args.plan_only:
