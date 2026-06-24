@@ -1130,8 +1130,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\generation\\global_state.py": {
-    "mtime": 1780689303.640952,
-    "ast_hash": "cf0f54e494cd3f5a384a3cc6af04dbc0",
+    "mtime": 1782288379.3781447,
+    "ast_hash": "f8f63f05d6a05a393ad2e51670cc580b",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\generation\\grammar\\__init__.py": {
@@ -2330,8 +2330,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\pipeline\\advanced_pipeline.py": {
-    "mtime": 1782272496.669451,
-    "ast_hash": "698cbb973271ec28bdea9bf5b610fa12",
+    "mtime": 1782288379.3801386,
+    "ast_hash": "edd37e78e2b22e3489afd7e63c316dae",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\pipeline\\block_contracts.py": {
@@ -3530,8 +3530,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_pipeline_reliability_surfaces.py": {
-    "mtime": 1782286767.7650042,
-    "ast_hash": "ef29274f0ac1671a0d8ae8b1a409fb73",
+    "mtime": 1782288405.3679125,
+    "ast_hash": "457a27254d9d0cd908854fd573b5eb9c",
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_protocol_reporting.py": {
@@ -4070,8 +4070,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\docs\\architecture_audit_research_notes.md": {
-    "mtime": 1782287375.4989848,
-    "ast_hash": "6cf374289da9da7553c26cf6b7a922b8",
+    "mtime": 1782288390.6171715,
+    "ast_hash": "50f8010f11050d7321600682680e3c54",
     "semantic_hash": ""
   },
   "F:\\KLTN\\docs\\archive\\2026-q1\\ARCHITECTURE_RESEARCH_JUDGMENT_2026_02_24.md": {
