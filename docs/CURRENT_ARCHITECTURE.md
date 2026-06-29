@@ -265,10 +265,8 @@ not by private hardcoded script defaults.
   [`VQVAE2_LOGICNET_REPAIR_ABLATION_PROTOCOL_2026_05_23.md`](VQVAE2_LOGICNET_REPAIR_ABLATION_PROTOCOL_2026_05_23.md)
 - Current artifact / checkpoint status and retraining alerts:
   [`ARTIFACT_AND_CHECKPOINT_STATUS_2026_04_18.md`](ARTIFACT_AND_CHECKPOINT_STATUS_2026_04_18.md)
-- Final production/finalization review and remaining required runs:
-  [`PRODUCTION_FINALIZATION_REVIEW_2026_04_18.md`](PRODUCTION_FINALIZATION_REVIEW_2026_04_18.md)
-- Current chat handoff context:
-  [`NEXT_CHAT_CONTEXT_2026_04_18.md`](NEXT_CHAT_CONTEXT_2026_04_18.md)
+- Current audit ledger and remaining required evidence:
+  [`architecture_audit_research_notes.md`](architecture_audit_research_notes.md)
 - Archived auxiliary/neural-semantics and playability provenance notes:
   [`archive/2026-q2/AUXILIARY_BRANCH_AND_NEURAL_SEMANTICS_AUDIT_2026_04_15.md`](archive/2026-q2/AUXILIARY_BRANCH_AND_NEURAL_SEMANTICS_AUDIT_2026_04_15.md),
   [`archive/2026-q2/PLAYABILITY_EVALUATION_AND_CBS_RESEARCH_2026_04_16.md`](archive/2026-q2/PLAYABILITY_EVALUATION_AND_CBS_RESEARCH_2026_04_16.md)

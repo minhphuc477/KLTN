@@ -1635,6 +1635,7 @@ class AgentPersona(Enum):
     BALANCED = "balanced"         # Mix of all heuristics
     COMPLETIONIST = "completionist"  # Collects all items before goal
     NOVICE = "novice"             # Risk-averse, complexity-averse, weak memory
+    EXPERT = "expert"             # Strong but still bounded player model
     GREEDY = "greedy"             # Static persona: NO memory decay (lambda=1.0), proves decay is active ingredient
 
 
@@ -1933,6 +1934,45 @@ class PersonaConfig:
                 focus_commitment_bonus_weight=0.10,
                 task_switch_penalty_weight=0.12,
                 heuristic_utility_blend=0.75,
+            )
+
+        elif persona == AgentPersona.EXPERT:
+            return cls(
+                name="Expert",
+                memory_capacity=9,
+                memory_decay_rate=0.985,
+                vision_radius=7,
+                vision_accuracy=0.96,
+                vision_cone=360.0,
+                heuristic_weights={
+                    'goal_seeking': 1.45,
+                    'curiosity': 0.45,
+                    'safety': 0.45,
+                    'recency': 0.20,
+                    'item_seeking': 0.75,
+                },
+                satisficing_threshold=0.93,
+                random_tiebreaker=0.03,
+                goal_weight=0.70,
+                curiosity_weight=0.18,
+                risk_weight=0.12,
+                revisit_penalty_weight=0.32,
+                loot_weight=0.15,
+                combat_penalty_weight=0.08,
+                puzzle_complexity_weight=0.03,
+                conditional_uncertainty_penalty_weight=0.04,
+                frontier_bonus_weight=0.04,
+                affordance_memory_bonus_weight=0.26,
+                affordance_forgetting_penalty_weight=0.04,
+                affordance_reactivation_boost=0.34,
+                deliberation_budget=10.0,
+                deliberation_recovery=0.30,
+                deliberation_trigger=0.76,
+                deliberation_cost_weight=0.85,
+                frustration_sensitivity=0.08,
+                focus_commitment_bonus_weight=0.24,
+                task_switch_penalty_weight=0.10,
+                heuristic_utility_blend=0.20,
             )
         
         elif persona == AgentPersona.GREEDY:

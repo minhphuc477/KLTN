@@ -1,4 +1,5 @@
 import json
+import sys
 
 import pytest
 import networkx as nx
@@ -19,6 +20,7 @@ from scripts.run_ablation_study import (
 from scripts.compare_protocol_to_baselines import build_report as build_protocol_baseline_report
 from scripts.compare_protocol_to_baselines import _render_markdown as render_protocol_baseline_markdown
 from scripts.run_fixed_graph_multi_seed_audit import _aggregate_variant
+from scripts.run_fixed_graph_multi_seed_audit import build_diffusion_fast_paired_rows
 from scripts.run_fast_sampler_visual_audit import (
     _json_sanitize as _audit_json_sanitize,
     build_validation_context_from_generation_result,
@@ -48,7 +50,7 @@ def test_ablation_core_plan_documents_random_and_pure_wfc_baselines():
 
     assert experiments["RANDOM_TOPOLOGY"]["tier"] == "block_i"
     assert "strict topology null" in " ".join(plan["claim_boundaries"])
-    assert experiments["PURE_WFC"]["component"] == "standalone symbolic generator"
+    assert experiments["PURE_WFC"]["component"] == "standalone symbolic generator with graph-role scaffold"
     assert "topology_preservation_score" in plan["metrics"]
 
 
@@ -186,6 +188,134 @@ def test_round5_manifest_passes_lcm_checkpoint_to_fast_sampler_command(tmp_path)
     assert fast_runs
     assert "--lcm-checkpoint" in fast_runs[0]["command"]
     assert str(checkpoint) in fast_runs[0]["command"]
+
+
+def test_round5_manifest_builds_requested_paired_publication_matrix(tmp_path):
+    from scripts.generate_round5_scientific_gap_manifest import build_manifest, parse_args
+
+    args = parse_args(
+        [
+            "--output-dir",
+            str(tmp_path / "out"),
+            "--run-dir",
+            str(tmp_path / "run"),
+            "--vqvae-checkpoint",
+            str(tmp_path / "vqvae.pth"),
+            "--lcm-checkpoint",
+            str(tmp_path / "fast.pth"),
+        ]
+    )
+    manifest = build_manifest(args)
+    runs = {run["name"]: run for run in manifest["runs"]}
+
+    for seed in (42, 43, 44):
+        topology = runs[f"topology_spade_seed_{seed}"]
+        assert "DIFFUSION_TOPO_ADDITIVE,DIFFUSION_TOPO_SPADE" in topology["command"]
+        assert topology["output_paths"][0].endswith("ablation_summary.csv")
+
+        fast = runs[f"fixed_graph_diffusion_vs_fast_sampler_seed_{seed}"]
+        assert "--paired-diffusion-fast-only" in fast["command"]
+
+        wfc = runs[f"weighted_vs_flat_wfc_seed_{seed}"]
+        assert "PURE_WFC,PURE_WFC_FLAT_PRIOR" in wfc["command"]
+        assert "--quick" not in wfc["command"]
+
+        stress = runs[f"designer_controllability_100_500_stress_seed_{seed}"]
+        target_arg = stress["command"][stress["command"].index("--target-names") + 1]
+        assert target_arg == "p_large_stress_100,p_large_stress_250,p_large_stress_500"
+
+        for persona in ("novice", "balanced", "expert"):
+            assert f"pcbs_component_matched_budget_{persona}_seed_{seed}" in runs
+
+
+def test_fixed_graph_audit_builds_paired_quality_and_speed_rows():
+    def variant(seconds, ncd, entropy, solved, cbs):
+        return {
+            "metrics": {"generation_time_sec": seconds, "repair_rate": 0.1, "total_tiles_repaired": 2},
+            "end_to_end_evaluation": {
+                "room_pairwise_ncd": {"mean": ncd},
+                "room_symbol_entropy_mean": entropy,
+            },
+            "validation": {
+                "astar_grid": {"solvable": solved},
+                "cbs_balanced": {"success": cbs},
+            },
+        }
+
+    result = build_diffusion_fast_paired_rows(
+        [
+            {
+                "seed": 42,
+                "variants": {
+                    "diffusion_cfg3_logic0_steps50": variant(10.0, 0.4, 1.2, True, True),
+                    "fast_cfg3_logic0_steps4": variant(2.0, 0.35, 1.1, True, False),
+                },
+            }
+        ]
+    )
+
+    assert result["paired_n"] == 1
+    assert result["rows"][0]["diffusion_over_fast_speedup"] == pytest.approx(5.0)
+    assert result["rows"][0]["fast_minus_diffusion_room_pairwise_ncd_mean"] == pytest.approx(-0.05)
+    assert "not a paper-faithful" in result["distillation_claim_boundary"]
+
+
+def test_gap_manifest_execution_rejects_missing_required_metrics(tmp_path):
+    from scripts.generate_round5_scientific_gap_manifest import execute_manifest
+
+    output_path = tmp_path / "metrics.json"
+    payload = {
+        "runs": [
+            {
+                "name": "contract",
+                "family": "test",
+                "command": [
+                    sys.executable,
+                    "-c",
+                    (
+                        "from pathlib import Path; "
+                        f"Path(r'{output_path}').write_text('{{\"wrong_metric\": 1.0}}', encoding='utf-8')"
+                    ),
+                ],
+                "required_inputs": [],
+                "output_paths": [str(output_path)],
+                "required_metrics": ["score"],
+                "status": "planned",
+            }
+        ]
+    }
+
+    execute_manifest(payload)
+
+    assert payload["runs"][0]["status"] == "failed_missing_metrics"
+    assert payload["runs"][0]["missing_metrics"] == ["score"]
+
+
+def test_scaffolded_symbolic_wfc_generator_has_no_neural_pipeline_dependency():
+    from src.core.definitions import TileID
+
+    study = AblationStudy.__new__(AblationStudy)
+    study.reference_rooms = [np.zeros((11, 16), dtype=np.int32)]
+    study._wfc_tile_priors = None
+    graph = nx.DiGraph()
+    graph.add_node(0, type="start", position=(0, 0))
+    graph.add_node(1, type="goal", position=(0, 1))
+    graph.add_edge(0, 1, edge_type="open")
+
+    result = study._generate_dungeon_pure_wfc(
+        graph=graph,
+        seed=42,
+        prior_mode="flat",
+    )
+
+    assert result.metrics["wfc_only"] == 1.0
+    assert result.metrics["wfc_prior_mode"] == "flat"
+    assert result.dungeon_grid.size > 0
+    assert all(room.latent.shape[1] == 1 for room in result.rooms.values())
+    assert np.any(result.dungeon_grid == int(TileID.START))
+    assert np.any(result.dungeon_grid == int(TileID.TRIFORCE))
+    # This is intentionally scaffolded symbolic control, not unconstrained WFC evidence.
+    assert result.metrics["symbolic_scaffold_tiles"] > 0
 
 
 def test_logicnet_repair_ablation_rejects_diffusion_bundle_as_vqvae(tmp_path):

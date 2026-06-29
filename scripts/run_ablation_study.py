@@ -25,7 +25,7 @@ import time
 from dataclasses import dataclass, asdict, is_dataclass
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import networkx as nx
 import numpy as np
@@ -51,6 +51,7 @@ from src.generation.grammar import Difficulty, MissionGrammar
 from src.pipeline.dungeon_pipeline import NeuralSymbolicDungeonPipeline
 from src.pipeline.dungeon_pipeline import RoomGenerationResult
 from src.pipeline.dungeon_pipeline import pipeline_kwargs_from_resolved_config
+from src.pipeline.room_stitching import build_stitched_room_layout
 from src.generation.weighted_bayesian_wfc import (
     WeightedBayesianWFC,
     WeightedBayesianWFCConfig,
@@ -110,6 +111,51 @@ def _stitch_with_pipeline(
         except TypeError:
             return stitch_fn(rooms, graph)
     return pipeline._stitch_rooms(rooms, graph)
+
+
+def _stitch_symbolic_rooms(
+    rooms: Dict[Any, RoomGenerationResult],
+    graph: nx.Graph,
+) -> np.ndarray:
+    """Stitch a non-neural baseline without constructing model modules."""
+    return build_stitched_room_layout(
+        rooms=rooms,
+        graph=graph,
+        enforce_room_dimensions=(ROOM_HEIGHT, ROOM_WIDTH),
+    ).dungeon_grid
+
+
+def _apply_symbolic_room_scaffold(
+    room_grid: np.ndarray,
+    node_attrs: Mapping[str, Any],
+) -> Tuple[np.ndarray, int]:
+    """Add the minimal graph-role/corridor contract shared by both WFC priors."""
+    grid = np.asarray(room_grid, dtype=np.int32).copy()
+    before = grid.copy()
+    center_row = int(grid.shape[0] // 2)
+    center_col = int(grid.shape[1] // 2)
+    floor_id = int(TileID.FLOOR)
+    grid[center_row, 1:-1] = floor_id
+    grid[1:-1, center_col] = floor_id
+
+    node_type = str(node_attrs.get("type", node_attrs.get("node_type", ""))).strip().upper()
+    label = str(node_attrs.get("label", "")).strip().upper()
+    if bool(node_attrs.get("is_start")) or node_type == "START" or label == "START":
+        marker = int(TileID.START)
+    elif bool(node_attrs.get("is_goal")) or bool(node_attrs.get("is_triforce")) or node_type == "GOAL" or label == "GOAL":
+        marker = int(TileID.TRIFORCE)
+    elif node_type in {"BOSS", "MINI_BOSS"}:
+        marker = int(TileID.BOSS)
+    elif node_type == "BIG_KEY":
+        marker = int(TileID.KEY_BOSS)
+    elif node_type in {"KEY", "TOKEN"}:
+        marker = int(TileID.KEY_SMALL)
+    elif node_type in {"ITEM", "TREASURE"}:
+        marker = int(TileID.KEY_ITEM)
+    else:
+        marker = floor_id
+    grid[center_row, center_col] = marker
+    return grid, int(np.count_nonzero(grid != before))
 
 
 def _sanitized_exception_name(exc: BaseException) -> str:
@@ -299,10 +345,16 @@ ABLATION_DESIGN_NOTES: Dict[str, Dict[str, str]] = {
     },
     "PURE_WFC": {
         "tier": "block_vi",
-        "component": "standalone symbolic generator",
+        "component": "standalone symbolic generator with graph-role scaffold",
         "comparison": "FULL and NO_WFC",
-        "isolates": "weighted WFC rooms stitched over the same generated topology, bypassing neural priors",
-        "interpretation": "Heuristic-only baseline for showing that WFC repair is not a full replacement for the neural branch.",
+        "isolates": (
+            "weighted WFC rooms stitched over the same generated topology, bypassing neural priors; "
+            "a deterministic START/GOAL/key-role scaffold is applied so graph semantics are visible to validation"
+        ),
+        "interpretation": (
+            "Heuristic-only scaffolded baseline for testing learned pattern priors. "
+            "Do not report it as unconstrained pure WFC or as neural-room evidence."
+        ),
     },
     "LATENT_DIFFUSION": {
         "tier": "block_iv",
@@ -839,7 +891,7 @@ def build_ablation_plan(
         "experiments": [_design_notes_for_config(cfg) for cfg in configs],
         "claim_boundaries": [
             "RANDOM_TOPOLOGY is the strict topology null; NO_EVOLUTION is direct grammar generation.",
-            "PURE_WFC bypasses neural room priors and is a heuristic-only baseline, not a repair ablation.",
+            "PURE_WFC bypasses neural room priors but still applies a deterministic graph-role scaffold; it is a scaffolded symbolic control, not unconstrained pure WFC.",
             "Single-seed or quick-profile results are screening evidence; thesis claims should use paired multi-seed runs.",
         ],
     }
@@ -892,6 +944,7 @@ class AblationStudy:
         num_rooms: int,
         target_curve: Sequence[float],
         diffusion_steps: int,
+        astar_timeout: int = 200000,
         cbs_timeout: int,
         evolution_population: int,
         evolution_generations: int,
@@ -911,6 +964,7 @@ class AblationStudy:
         self.num_rooms = int(num_rooms)
         self.target_curve = list(float(v) for v in target_curve)
         self.diffusion_steps = int(diffusion_steps)
+        self.astar_timeout = int(astar_timeout)
         self.cbs_timeout = int(cbs_timeout)
         self.evolution_population = int(evolution_population)
         self.evolution_generations = int(evolution_generations)
@@ -1077,7 +1131,6 @@ class AblationStudy:
         *,
         graph: nx.Graph,
         seed: int,
-        pipeline: NeuralSymbolicDungeonPipeline,
         prior_mode: str = "weighted",
     ) -> Any:
         prior_mode = str(prior_mode or "weighted").strip().lower()
@@ -1105,8 +1158,11 @@ class AblationStudy:
                 seed=room_seed,
             )
             room_grid = wfc.generate(seed=room_seed)
-            latent_dim = int(getattr(getattr(pipeline, "vqvae", None), "latent_dim", 64))
-            latent = torch.zeros((1, latent_dim, latent_h, latent_w), dtype=torch.float32)
+            room_grid, scaffold_tiles = _apply_symbolic_room_scaffold(
+                room_grid,
+                dict(graph.nodes[room_id]),
+            )
+            latent = torch.zeros((1, 1, latent_h, latent_w), dtype=torch.float32)
             rooms[int(room_id) if isinstance(room_id, int) else room_id] = RoomGenerationResult(
                 room_id=int(room_id) if isinstance(room_id, int) else 0,
                 room_grid=np.asarray(room_grid, dtype=np.int32),
@@ -1114,10 +1170,14 @@ class AblationStudy:
                 neural_grid=np.asarray(room_grid, dtype=np.int32),
                 was_repaired=False,
                 repair_mask=None,
-                metrics={"wfc_only": 1.0, "wfc_prior_mode": prior_mode},
+                metrics={
+                    "wfc_only": 1.0,
+                    "wfc_prior_mode": prior_mode,
+                    "symbolic_scaffold_tiles": float(scaffold_tiles),
+                },
             )
 
-        dungeon_grid = _stitch_with_pipeline(pipeline, rooms, graph)
+        dungeon_grid = _stitch_symbolic_rooms(rooms, graph)
         metrics = {
             "num_rooms": len(rooms),
             "total_tiles_repaired": 0.0,
@@ -1126,6 +1186,9 @@ class AblationStudy:
             "generation_time_sec": float("nan"),
             "wfc_only": 1.0,
             "wfc_prior_mode": prior_mode,
+            "symbolic_scaffold_tiles": float(
+                sum(room.metrics.get("symbolic_scaffold_tiles", 0.0) for room in rooms.values())
+            ),
         }
         return SimpleNamespace(
             dungeon_grid=dungeon_grid,
@@ -1145,7 +1208,7 @@ class AblationStudy:
         confusion_index = float("nan")
         try:
             env = ZeldaLogicEnv(semantic_grid=grid)
-            oracle = run_astar_oracle(env, timeout=200000)
+            oracle = run_astar_oracle(env, timeout=int(getattr(self, "astar_timeout", 200000)))
             optimal_success = bool(oracle["success"])
             optimal_len = int(oracle["path_length"])
             oracle_status = str(oracle["status"])
@@ -1219,6 +1282,7 @@ class AblationStudy:
             "constraint_valid": np.nan,
             "room_repair_rate": np.nan,
             "tiles_repaired": np.nan,
+            "symbolic_scaffold_tiles": np.nan,
             "topology_representable_edge_rate": np.nan,
             "topology_edge_connection_recall": np.nan,
             "topology_phantom_connection_rate": np.nan,
@@ -1240,8 +1304,8 @@ class AblationStudy:
         }
 
         try:
-            pipeline = self._get_pipeline(cfg)
             mission_graph = self._build_mission_graph(cfg, seed=seed)
+            pipeline = None if bool(cfg.pure_wfc) else self._get_pipeline(cfg)
             topology_cost = CrossAttention.topology_refinement_metrics(
                 num_nodes=int(mission_graph.number_of_nodes()),
                 num_edges=int(mission_graph.number_of_edges()),
@@ -1258,38 +1322,37 @@ class AblationStudy:
                 }
             )
 
-            original_graph_token_flag = bool(getattr(pipeline, "use_graph_node_cross_attention", True))
-            original_topology_mode = str(getattr(pipeline.diffusion, "get_topology_refinement_mode", lambda: "gat2")())
-            original_reference_flag = bool(getattr(getattr(pipeline, "condition_encoder", None), "use_reference_room_maps", False))
-            original_guidance_active_fraction = float(
-                getattr(getattr(pipeline.diffusion, "guidance", object()), "active_fraction", 1.0)
-            )
-            pipeline.use_graph_node_cross_attention = not bool(cfg.disable_graph_node_cross_attention)
-            if cfg.use_reference_room_maps is not None and getattr(pipeline, "condition_encoder", None) is not None:
-                reference_encoder = getattr(pipeline.condition_encoder, "reference_room_encoder", None)
-                if bool(cfg.use_reference_room_maps) and reference_encoder is None:
-                    raise RuntimeError(
-                        "Room-branch benchmark requested reference-room conditioning, "
-                        "but the loaded condition encoder has no reference encoder."
-                    )
-                pipeline.condition_encoder.use_reference_room_maps = bool(cfg.use_reference_room_maps)
-            set_topology_refinement_mode_or_raise(
-                pipeline.diffusion,
-                cfg.topology_refinement_mode,
-            )
-            if cfg.logic_guidance_active_fraction is not None:
-                pipeline.diffusion.guidance.active_fraction = float(
-                    max(0.05, min(1.0, float(cfg.logic_guidance_active_fraction)))
-                )
-
             if bool(cfg.pure_wfc):
                 result = self._generate_dungeon_pure_wfc(
                     graph=mission_graph,
                     seed=seed,
-                    pipeline=pipeline,
                     prior_mode=cfg.wfc_prior_mode,
                 )
             else:
+                assert pipeline is not None
+                original_graph_token_flag = bool(getattr(pipeline, "use_graph_node_cross_attention", True))
+                original_topology_mode = str(getattr(pipeline.diffusion, "get_topology_refinement_mode", lambda: "gat2")())
+                original_reference_flag = bool(getattr(getattr(pipeline, "condition_encoder", None), "use_reference_room_maps", False))
+                original_guidance_active_fraction = float(
+                    getattr(getattr(pipeline.diffusion, "guidance", object()), "active_fraction", 1.0)
+                )
+                pipeline.use_graph_node_cross_attention = not bool(cfg.disable_graph_node_cross_attention)
+                if cfg.use_reference_room_maps is not None and getattr(pipeline, "condition_encoder", None) is not None:
+                    reference_encoder = getattr(pipeline.condition_encoder, "reference_room_encoder", None)
+                    if bool(cfg.use_reference_room_maps) and reference_encoder is None:
+                        raise RuntimeError(
+                            "Room-branch benchmark requested reference-room conditioning, "
+                            "but the loaded condition encoder has no reference encoder."
+                        )
+                    pipeline.condition_encoder.use_reference_room_maps = bool(cfg.use_reference_room_maps)
+                set_topology_refinement_mode_or_raise(
+                    pipeline.diffusion,
+                    cfg.topology_refinement_mode,
+                )
+                if cfg.logic_guidance_active_fraction is not None:
+                    pipeline.diffusion.guidance.active_fraction = float(
+                        max(0.05, min(1.0, float(cfg.logic_guidance_active_fraction)))
+                    )
                 result = pipeline.generate_dungeon(
                     mission_graph=mission_graph,
                     generate_topology=False,
@@ -1308,14 +1371,14 @@ class AblationStudy:
                     seed=seed,
                 )
 
-            pipeline.use_graph_node_cross_attention = original_graph_token_flag
-            if getattr(pipeline, "condition_encoder", None) is not None:
-                pipeline.condition_encoder.use_reference_room_maps = original_reference_flag
-            set_topology_refinement_mode_or_raise(
-                pipeline.diffusion,
-                original_topology_mode,
-            )
-            pipeline.diffusion.guidance.active_fraction = original_guidance_active_fraction
+                pipeline.use_graph_node_cross_attention = original_graph_token_flag
+                if getattr(pipeline, "condition_encoder", None) is not None:
+                    pipeline.condition_encoder.use_reference_room_maps = original_reference_flag
+                set_topology_refinement_mode_or_raise(
+                    pipeline.diffusion,
+                    original_topology_mode,
+                )
+                pipeline.diffusion.guidance.active_fraction = original_guidance_active_fraction
 
             grid = np.asarray(result.dungeon_grid, dtype=np.int32)
             graph = result.mission_graph
@@ -1334,7 +1397,9 @@ class AblationStudy:
                         metrics=(r.metrics if isinstance(r.metrics, dict) else {}),
                     )
                 neural_grid_global = np.asarray(
-                    _stitch_with_pipeline(pipeline, neural_rooms, graph),
+                    _stitch_symbolic_rooms(neural_rooms, graph)
+                    if pipeline is None
+                    else _stitch_with_pipeline(pipeline, neural_rooms, graph),
                     dtype=np.int32,
                 )
                 raw_topology_scorecard = _topology_information_scorecard(
@@ -1367,7 +1432,11 @@ class AblationStudy:
             solvable, confusion_ratio, path_optimal, confusion_index = self._optimal_and_cbs_metrics(grid, seed=seed)
 
             first_room = next(iter(result.rooms.values())).room_grid if result.rooms else grid
-            recon_error = self._vq_reconstruction_error(pipeline, np.asarray(first_room, dtype=np.int32))
+            recon_error = (
+                float("nan")
+                if pipeline is None
+                else self._vq_reconstruction_error(pipeline, np.asarray(first_room, dtype=np.int32))
+            )
             constraint_valid = float("nan")
             try:
                 mission = networkx_to_mission_graph(graph)
@@ -1381,10 +1450,17 @@ class AblationStudy:
 
             room_repair_rate = float(result.metrics.get("repair_rate", float("nan")))
             tiles_repaired = float(result.metrics.get("total_tiles_repaired", float("nan")))
+            symbolic_scaffold_tiles = float(result.metrics.get("symbolic_scaffold_tiles", float("nan")))
             topology_scorecard = _topology_information_scorecard(
                 graph=graph,
                 rooms=result.rooms,
                 dungeon_grid=grid,
+            )
+            diffusion_model = getattr(pipeline, "diffusion", None) if pipeline is not None else None
+            model_parameter_count = (
+                int(sum(parameter.numel() for parameter in diffusion_model.parameters()))
+                if diffusion_model is not None
+                else 0
             )
 
             row.update(
@@ -1402,6 +1478,8 @@ class AblationStudy:
                     "constraint_valid": float(constraint_valid),
                     "room_repair_rate": float(room_repair_rate),
                     "tiles_repaired": float(tiles_repaired),
+                    "symbolic_scaffold_tiles": symbolic_scaffold_tiles,
+                    "model_parameter_count": model_parameter_count,
                     "topology_representable_edge_rate": float(topology_scorecard["topology_representable_edge_rate"]),
                     "topology_edge_connection_recall": float(topology_scorecard["topology_edge_connection_recall"]),
                     "topology_phantom_connection_rate": float(topology_scorecard["topology_phantom_connection_rate"]),
@@ -1494,11 +1572,13 @@ class AblationStudy:
                     "tile_prior_kl": float(sub["tile_prior_kl"].mean(skipna=True)) if len(sub) > 0 else float("nan"),
                     "graph_edit_distance": float(sub["graph_edit_distance"].mean(skipna=True)) if len(sub) > 0 else float("nan"),
                     "generation_time_sec": float(sub["generation_time_sec"].mean(skipna=True)) if len(sub) > 0 else float("nan"),
+                    "model_parameter_count": _mean_col("model_parameter_count", default=0.0),
                     "novelty": float(sub["novelty"].mean(skipna=True)) if len(sub) > 0 else float("nan"),
                     "reconstruction_error": float(sub["reconstruction_error"].mean(skipna=True)) if len(sub) > 0 else float("nan"),
                     "constraint_valid_rate": float(sub["constraint_valid"].mean(skipna=True)) if len(sub) > 0 else float("nan"),
                     "room_repair_rate": float(sub["room_repair_rate"].mean(skipna=True)) if len(sub) > 0 else float("nan"),
                     "tiles_repaired": float(sub["tiles_repaired"].mean(skipna=True)) if len(sub) > 0 else float("nan"),
+                    "symbolic_scaffold_tiles": _mean_col("symbolic_scaffold_tiles"),
                     "topology_representable_edge_rate": float(sub["topology_representable_edge_rate"].mean(skipna=True)) if len(sub) > 0 else float("nan"),
                     "topology_edge_connection_recall": float(sub["topology_edge_connection_recall"].mean(skipna=True)) if len(sub) > 0 else float("nan"),
                     "topology_phantom_connection_rate": float(sub["topology_phantom_connection_rate"].mean(skipna=True)) if len(sub) > 0 else float("nan"),
@@ -1764,6 +1844,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-rooms", type=int, default=8)
     parser.add_argument("--target-curve", type=str, default="0.2,0.4,0.6,0.8,0.7,0.5,0.3,0.2")
     parser.add_argument("--diffusion-steps", type=int, default=25)
+    parser.add_argument("--astar-timeout", type=int, default=200000)
     parser.add_argument("--cbs-timeout", type=int, default=120000)
     parser.add_argument("--evolution-population", type=int, default=24)
     parser.add_argument("--evolution-generations", type=int, default=30)
@@ -1899,6 +1980,7 @@ def main() -> int:
         num_rooms=args.num_rooms,
         target_curve=target_curve,
         diffusion_steps=args.diffusion_steps,
+        astar_timeout=args.astar_timeout,
         cbs_timeout=args.cbs_timeout,
         evolution_population=args.evolution_population,
         evolution_generations=args.evolution_generations,

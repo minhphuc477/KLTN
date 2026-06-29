@@ -611,6 +611,16 @@ class TestPersonas:
         assert config.heuristic_weights['goal_seeking'] >= 1.5
         assert config.heuristic_weights['safety'] == 0  # Ignores danger
         assert config.memory_capacity >= 10
+
+    def test_expert_persona_is_bounded_but_stronger_than_balanced(self):
+        expert = PersonaConfig.get_persona(AgentPersona.EXPERT)
+        balanced = PersonaConfig.get_persona(AgentPersona.BALANCED)
+        speedrunner = PersonaConfig.get_persona(AgentPersona.SPEEDRUNNER)
+
+        assert expert.memory_capacity > balanced.memory_capacity
+        assert expert.random_tiebreaker < balanced.random_tiebreaker
+        assert expert.heuristic_utility_blend > speedrunner.heuristic_utility_blend
+        assert expert.name == "Expert"
     
     def test_forgetful_config(self):
         """Test forgetful has poor memory configuration."""

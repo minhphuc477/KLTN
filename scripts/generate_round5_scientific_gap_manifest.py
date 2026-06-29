@@ -29,7 +29,7 @@ import sys
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Sequence
+from typing import Any, Dict, Iterable, List, Mapping, Sequence
 
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
@@ -43,6 +43,8 @@ class GapExperiment:
     hypothesis: str
     required_metrics: Sequence[str]
     command: Sequence[str]
+    required_inputs: Sequence[str] = ()
+    output_paths: Sequence[str] = ()
 
 
 def _parse_seeds(raw: str) -> List[int]:
@@ -74,27 +76,26 @@ def build_experiments(args: argparse.Namespace) -> List[GapExperiment]:
     experiments: List[GapExperiment] = []
 
     topology_metrics = (
-        "validation_tile_kl",
-        "validation_graph_edit_distance",
-        "logicnet_dungeon_solvability",
-        "teacher_fallback_used",
-        "peak_memory_mb",
-        "wall_clock_time_per_step",
+        "solvability_rate",
+        "tile_prior_kl",
+        "graph_edit_distance",
+        "generation_time_sec",
+        "topology_preservation_score",
+        "constraint_valid_rate",
+        "model_parameter_count",
     )
-    for mode in ("additive", "spade"):
-        for seed in seeds:
+    for seed in seeds:
+        arm_checkpoints: Dict[str, Path] = {}
+        for mode in ("additive", "spade"):
             checkpoint_dir = output_dir / "topology_conditioning" / mode / f"seed_{seed}" / "checkpoints"
+            final_checkpoint = checkpoint_dir / "final_model.pth"
+            arm_checkpoints[mode] = final_checkpoint
             experiments.append(
                 GapExperiment(
-                    name=f"topology_{mode}_seed_{seed}",
-                    family="topology_conditioning",
-                    hypothesis=(
-                        "SPADE-style affine topology modulation should outperform or match additive maps "
-                        "on structural validity if topology conditioning is carrying semantic signal."
-                        if mode == "spade"
-                        else "Additive topology maps are the baseline conditioning path."
-                    ),
-                    required_metrics=topology_metrics,
+                    name=f"train_topology_{mode}_seed_{seed}",
+                    family="topology_conditioning_training",
+                    hypothesis="Train one architecture-matched topology-conditioning arm.",
+                    required_metrics=(),
                     command=[
                         args.python,
                         "src/train_diffusion.py",
@@ -115,24 +116,68 @@ def build_experiments(args: argparse.Namespace) -> List[GapExperiment]:
                         ),
                         *list(args.extra_train_args or []),
                     ],
+                    required_inputs=(str(args.config), str(args.vqvae_checkpoint or "")),
+                    output_paths=(str(final_checkpoint),),
                 )
             )
+        eval_dir = output_dir / "topology_conditioning" / "paired" / f"seed_{seed}"
+        experiments.append(
+            GapExperiment(
+                name=f"topology_spade_seed_{seed}",
+                family="topology_conditioning",
+                hypothesis=(
+                    "SPADE-style affine topology modulation should improve topology preservation "
+                    "relative to an architecture- and seed-matched additive arm."
+                ),
+                required_metrics=topology_metrics,
+                command=[
+                    args.python,
+                    "scripts/run_ablation_study.py",
+                    "--output",
+                    str(eval_dir),
+                    "--data-root",
+                    str(args.data_root),
+                    "--num-samples",
+                    str(int(args.topology_eval_samples)),
+                    "--seed",
+                    str(seed),
+                    "--configs",
+                    "DIFFUSION_TOPO_ADDITIVE,DIFFUSION_TOPO_SPADE",
+                    "--vqvae-checkpoint",
+                    str(args.vqvae_checkpoint or ""),
+                    "--diffusion-checkpoint",
+                    str(arm_checkpoints["additive"]),
+                    "--diffusion-additive-checkpoint",
+                    str(arm_checkpoints["additive"]),
+                    "--diffusion-spade-checkpoint",
+                    str(arm_checkpoints["spade"]),
+                ],
+                required_inputs=(
+                    str(args.data_root),
+                    str(args.vqvae_checkpoint or ""),
+                    str(arm_checkpoints["additive"]),
+                    str(arm_checkpoints["spade"]),
+                ),
+                output_paths=(str(eval_dir / "ablation_summary.csv"),),
+            )
+        )
 
     fast_metrics = (
-        "generation_time_sec",
-        "room_time_sec_mean",
-        "post_oracle_solved_rate",
-        "post_pcbs_valid_rate",
-        "teacher_fallback_used",
-        "ncd_diversity",
-        "tile_entropy",
+        "paired_n",
+        "diffusion_over_fast_speedup",
+        "fast_minus_diffusion_room_pairwise_ncd_mean",
+        "fast_minus_diffusion_room_symbol_entropy_mean",
+        "fast_minus_diffusion_astar_grid_solvable",
+        "fast_minus_diffusion_cbs_success",
     )
     for variant, extra_args in (
         ("paired_diffusion_fast_sampler", []),
     ):
         for seed in seeds:
             command = _base_fast_sampler_args(args, seed, output_dir, variant)
+            command.append("--paired-diffusion-fast-only")
             command.extend(extra_args)
+            fast_output = output_dir / "fast_sampler_latency_quality" / variant / f"seed_{seed}"
             experiments.append(
                 GapExperiment(
                     name=f"fixed_graph_diffusion_vs_fast_sampler_seed_{seed}",
@@ -143,49 +188,55 @@ def build_experiments(args: argparse.Namespace) -> List[GapExperiment]:
                     ),
                     required_metrics=fast_metrics,
                     command=command,
+                    required_inputs=(str(args.run_dir), str(args.lcm_checkpoint or "")),
+                    output_paths=(str(fast_output / "paired_diffusion_fast_sampler.json"),),
                 )
             )
 
     wfc_metrics = (
-        "oracle_solved_rate",
-        "pcbs_valid_rate",
-        "repair_count_mean",
-        "total_tiles_repaired_mean",
-        "tile_distribution_kl",
-        "contradiction_rate",
+        "solvability_rate",
+        "constraint_valid_rate",
+        "room_repair_rate",
+        "tiles_repaired",
+        "symbolic_scaffold_tiles",
+        "tile_prior_kl",
         "generation_time_sec",
+        "diversity",
     )
-    for variant, config_name in (
-        ("weighted_bayesian_wfc", "PURE_WFC"),
-        ("flat_prior_wfc", "PURE_WFC_FLAT_PRIOR"),
-    ):
-        for seed in seeds:
-            experiments.append(
-                GapExperiment(
-                    name=f"{variant}_seed_{seed}",
-                    family="wfc_prior",
-                    hypothesis=(
-                        "Weighted Bayesian WFC should preserve learned tile statistics better than flat priors "
-                        "without increasing contradiction rate."
-                        if variant == "weighted_bayesian_wfc"
-                        else "Flat-prior WFC is the symbolic control for checking whether learned priors matter."
-                    ),
-                    required_metrics=wfc_metrics,
-                    command=[
-                        args.python,
-                        "scripts/run_ablation_study.py",
-                        "--output",
-                        str(output_dir / "wfc_prior" / variant / f"seed_{seed}"),
-                        "--num-samples",
-                        "1",
-                        "--seed",
-                        str(seed),
-                        "--configs",
-                        config_name,
-                        "--quick",
-                    ],
-                )
+    for seed in seeds:
+        wfc_output = output_dir / "wfc_prior" / f"paired_seed_{seed}"
+        experiments.append(
+            GapExperiment(
+                name=f"weighted_vs_flat_wfc_seed_{seed}",
+                family="wfc_prior",
+                hypothesis=(
+                    "Weighted Bayesian WFC should preserve learned tile statistics better than "
+                    "a flat-prior control under identical seeds and generation budgets. "
+                    "Both arms are neural-free symbolic controls with the same deterministic graph-role scaffold."
+                ),
+                required_metrics=wfc_metrics,
+                command=[
+                    args.python,
+                    "scripts/run_ablation_study.py",
+                    "--output",
+                    str(wfc_output),
+                    "--data-root",
+                    str(args.data_root),
+                    "--num-samples",
+                    str(int(args.wfc_samples_per_seed)),
+                    "--seed",
+                    str(seed),
+                    "--configs",
+                    "PURE_WFC,PURE_WFC_FLAT_PRIOR",
+                    "--astar-timeout",
+                    str(int(args.timeout_astar)),
+                    "--cbs-timeout",
+                    str(int(args.timeout_pcbs)),
+                ],
+                required_inputs=(str(args.data_root),),
+                output_paths=(str(wfc_output / "ablation_summary.csv"),),
             )
+        )
 
     generated_branch_metrics = (
         "raw_oracle_solved_rate",
@@ -230,82 +281,93 @@ def build_experiments(args: argparse.Namespace) -> List[GapExperiment]:
         )
 
     controllability_metrics = (
-        "target_match_score",
-        "target_response_slope",
-        "room_count_error",
-        "linearity_error",
-        "gate_pressure_error",
-        "stress_100_success_rate",
-        "stress_500_success_rate",
-        "wall_clock_sec",
+        "macro_norm_error",
+        "pass_all_rate",
+        "actual_num_nodes_mean",
+        "pass_rate_num_nodes",
+        "generation_time_sec_mean",
     )
-    experiments.append(
-        GapExperiment(
-            name="designer_controllability_100_500_stress",
-            family="designer_controllability",
-            hypothesis=(
-                "Designer controllability claims require explicit target-response rows and "
-                "100-room/500-room stress targets, not only ordinary-size averages."
-            ),
-            required_metrics=controllability_metrics,
-            command=[
-                args.python,
-                "scripts/run_designer_controllability_proof.py",
-                "--execute",
-                "--output",
-                str(output_dir / "designer_controllability" / "stress_100_500"),
-                "--seed",
-                str(seeds[0]),
-                "--samples-per-target",
-                str(int(args.controllability_samples_per_target)),
-                "--population-size",
-                str(int(args.controllability_population_size)),
-                "--generations",
-                str(int(args.controllability_generations)),
-                "--write-graphs",
-            ],
-        )
-    )
-
-    pcbs_component_metrics = (
-        "pcbs_success_rate",
-        "astar_success_rate",
-        "pcbs_failure_driver",
-        "pcbs_outcome_class",
-        "component_delta_vs_full",
-        "matched_budget_runtime_sec",
-    )
-    for persona in [p.strip() for p in str(args.pcbs_personas).split(",") if p.strip()]:
+    for seed in seeds:
+        stress_output = output_dir / "designer_controllability" / f"stress_100_250_500_seed_{seed}"
         experiments.append(
             GapExperiment(
-                name=f"pcbs_component_matched_budget_{persona}",
-                family="pcbs_component_ablation",
+                name=f"designer_controllability_100_500_stress_seed_{seed}",
+                family="designer_controllability",
                 hypothesis=(
-                    "P-CBS component claims require matched-budget ablations by persona rather than "
-                    "aggregate full-model means."
+                    "Designer controllability claims require explicit target tracking at 100, 250, "
+                    "and 500 rooms rather than extrapolation from ordinary-size averages."
                 ),
-                required_metrics=pcbs_component_metrics,
+                required_metrics=controllability_metrics,
                 command=[
                     args.python,
-                    "scripts/run_pcbs_component_ablation.py",
-                    "--levels",
-                    str(args.pcbs_levels),
-                    "--variants",
-                    str(args.pcbs_variants),
-                    "--persona",
-                    persona,
-                    "--timeout-astar",
-                    str(int(args.timeout_astar)),
-                    "--timeout-pcbs",
-                    str(int(args.timeout_pcbs)),
+                    "scripts/run_designer_controllability_proof.py",
+                    "--execute",
+                    "--output",
+                    str(stress_output),
+                    "--data-root",
+                    str(args.data_root),
                     "--seed",
-                    str(seeds[0]),
-                    "--output-dir",
-                    str(output_dir / "pcbs_component_ablation" / persona),
-                    "--quiet",
+                    str(seed),
+                    "--samples-per-target",
+                    str(int(args.controllability_samples_per_target)),
+                    "--population-size",
+                    str(int(args.controllability_population_size)),
+                    "--generations",
+                    str(int(args.controllability_generations)),
+                    "--target-names",
+                    "p_large_stress_100,p_large_stress_250,p_large_stress_500",
+                    "--write-graphs",
                 ],
+                required_inputs=(str(args.data_root),),
+                output_paths=(str(stress_output / "designer_controllability_summary.csv"),),
             )
         )
+
+    pcbs_component_metrics = (
+        "experiment_valid",
+        "success_rate",
+        "success_rate_given_oracle_solved",
+        "outcome_class_counts",
+        "avg_time_ms",
+        "matched_budget_contract",
+    )
+    for persona in [p.strip() for p in str(args.pcbs_personas).split(",") if p.strip()]:
+        for seed in seeds:
+            pcbs_output = output_dir / "pcbs_component_ablation" / persona / f"seed_{seed}"
+            experiments.append(
+                GapExperiment(
+                    name=f"pcbs_component_matched_budget_{persona}_seed_{seed}",
+                    family="pcbs_component_ablation",
+                    hypothesis=(
+                        "P-CBS component claims require identical state budgets, maps, and seeds "
+                        "for full and ablated variants within each persona."
+                    ),
+                    required_metrics=pcbs_component_metrics,
+                    command=[
+                        args.python,
+                        "scripts/run_pcbs_component_ablation.py",
+                        "--levels",
+                        str(args.pcbs_levels),
+                        "--data-root",
+                        str(args.data_root),
+                        "--variants",
+                        str(args.pcbs_variants),
+                        "--persona",
+                        persona,
+                        "--timeout-astar",
+                        str(int(args.timeout_astar)),
+                        "--timeout-pcbs",
+                        str(int(args.timeout_pcbs)),
+                        "--seed",
+                        str(seed),
+                        "--output-dir",
+                        str(pcbs_output),
+                        "--quiet",
+                    ],
+                    required_inputs=(str(args.data_root),),
+                    output_paths=(str(pcbs_output / "summary.json"),),
+                )
+            )
 
     paired_significance_metrics = (
         "paired_n",
@@ -387,7 +449,16 @@ def build_experiments(args: argparse.Namespace) -> List[GapExperiment]:
             )
         )
 
-    return experiments
+    selected = {token.strip() for token in str(args.families).split(",") if token.strip()}
+    if not selected or "all" in selected:
+        return experiments
+    if "topology_conditioning" in selected:
+        selected.add("topology_conditioning_training")
+    available = {experiment.family for experiment in experiments}
+    unknown = sorted(selected - available)
+    if unknown:
+        raise ValueError(f"Unknown experiment families: {unknown}. Available: {sorted(available)}")
+    return [experiment for experiment in experiments if experiment.family in selected]
 
 
 def build_manifest(args: argparse.Namespace) -> Dict[str, Any]:
@@ -401,6 +472,41 @@ def build_manifest(args: argparse.Namespace) -> Dict[str, Any]:
             "These are ablations, not claims. Treat a row as evidence only when status is passed "
             "and its output metrics file is archived with the same seed/config."
         ),
+        "research_basis": [
+            {
+                "topic": "SPADE conditioning",
+                "source": "Semantic Image Synthesis with Spatially-Adaptive Normalization",
+                "url": "https://arxiv.org/abs/1903.07291",
+                "protocol_implication": "Compare learned spatial affine modulation against an additive conditioning control.",
+            },
+            {
+                "topic": "few-step latent consistency",
+                "source": "Latent Consistency Models",
+                "url": "https://arxiv.org/abs/2310.04378",
+                "protocol_implication": (
+                    "Use paired 50-step versus 4-step quality/latency tests, while labeling the "
+                    "repository artifact as consistency_lora rather than paper-faithful LCM-LoRA."
+                ),
+            },
+            {
+                "topic": "controllable graph generation",
+                "source": "G-PCGRL: Procedural Graph Data Generation via Reinforcement Learning",
+                "url": "https://arxiv.org/abs/2407.10483",
+                "protocol_implication": "Report target node-count error and pass rates, not only generation success.",
+            },
+            {
+                "topic": "out-of-distribution scale",
+                "source": "PCGRL+: Scaling, Control and Generalization in Reinforcement Learning Level Generators",
+                "url": "https://arxiv.org/abs/2408.12525",
+                "protocol_implication": "Evaluate explicit 100, 250, and 500 room targets as separate stress rows.",
+            },
+            {
+                "topic": "WFC control",
+                "source": "WaveFunctionCollapse is Constraint Solving in the Wild",
+                "url": "https://doi.org/10.1145/3102071.3110566",
+                "protocol_implication": "Hold constraints and seeds fixed while ablating learned pattern priors.",
+            },
+        ],
         "runs": [
             {
                 "name": exp.name,
@@ -408,6 +514,8 @@ def build_manifest(args: argparse.Namespace) -> Dict[str, Any]:
                 "hypothesis": exp.hypothesis,
                 "required_metrics": list(exp.required_metrics),
                 "command": list(exp.command),
+                "required_inputs": list(exp.required_inputs),
+                "output_paths": list(exp.output_paths),
                 "status": "planned",
                 "elapsed_sec": 0.0,
             }
@@ -422,7 +530,16 @@ def write_manifest(payload: Dict[str, Any], manifest_path: Path, csv_path: Path)
     with csv_path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(
             handle,
-            fieldnames=["name", "family", "status", "elapsed_sec", "command", "required_metrics"],
+            fieldnames=[
+                "name",
+                "family",
+                "status",
+                "elapsed_sec",
+                "command",
+                "required_inputs",
+                "output_paths",
+                "required_metrics",
+            ],
         )
         writer.writeheader()
         for run in payload["runs"]:
@@ -433,9 +550,38 @@ def write_manifest(payload: Dict[str, Any], manifest_path: Path, csv_path: Path)
                     "status": run["status"],
                     "elapsed_sec": run.get("elapsed_sec", 0.0),
                     "command": " ".join(str(part) for part in run["command"]),
+                    "required_inputs": ",".join(run.get("required_inputs", [])),
+                    "output_paths": ",".join(run.get("output_paths", [])),
                     "required_metrics": ",".join(run["required_metrics"]),
                 }
             )
+
+
+def _resolve_artifact_path(raw_path: str) -> Path:
+    path = Path(str(raw_path))
+    return path if path.is_absolute() else ROOT / path
+
+
+def _collect_metric_names(path: Path) -> set[str]:
+    if path.suffix.lower() == ".csv":
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            return set(next(csv.reader(handle), []))
+    if path.suffix.lower() == ".json":
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        names: set[str] = set()
+
+        def visit(value: Any) -> None:
+            if isinstance(value, Mapping):
+                for key, child in value.items():
+                    names.add(str(key))
+                    visit(child)
+            elif isinstance(value, list):
+                for child in value:
+                    visit(child)
+
+        visit(payload)
+        return names
+    return set()
 
 
 def execute_manifest(payload: Dict[str, Any]) -> None:
@@ -444,25 +590,73 @@ def execute_manifest(payload: Dict[str, Any]) -> None:
         if "--plan-only" in command:
             run["status"] = "planned_only"
             continue
+        missing_inputs = [
+            raw_path
+            for raw_path in run.get("required_inputs", [])
+            if not raw_path or not _resolve_artifact_path(raw_path).exists()
+        ]
+        if missing_inputs:
+            run["status"] = "blocked_missing_inputs"
+            run["missing_inputs"] = missing_inputs
+            continue
+        if run.get("family") == "fast_sampler_latency_quality":
+            try:
+                from src.optimization.lcm_lora import load_fast_sampler_checkpoint
+
+                checkpoint_arg = command[command.index("--lcm-checkpoint") + 1]
+                _, checkpoint_info = load_fast_sampler_checkpoint(checkpoint_arg)
+                run["fast_sampler_distillation_type"] = checkpoint_info.distillation_type
+            except (ImportError, ValueError, OSError, IndexError) as exc:
+                run["status"] = "blocked_invalid_fast_sampler_checkpoint"
+                run["input_error"] = f"{type(exc).__name__}: {exc}"
+                continue
         start = time.perf_counter()
         completed = subprocess.run(command, cwd=str(ROOT), check=False)
         run["elapsed_sec"] = float(time.perf_counter() - start)
-        run["status"] = (
-            "process_completed_unverified"
-            if completed.returncode == 0
-            else "failed"
-        )
         run["returncode"] = int(completed.returncode)
+        if completed.returncode != 0:
+            run["status"] = "failed_process"
+            continue
+        output_paths = [_resolve_artifact_path(path) for path in run.get("output_paths", [])]
+        missing_outputs = [str(path) for path in output_paths if not path.exists()]
+        if missing_outputs:
+            run["status"] = "failed_missing_outputs"
+            run["missing_outputs"] = missing_outputs
+            continue
+        if not output_paths:
+            run["status"] = "process_completed_unverified"
+            continue
+        metric_names: set[str] = set()
+        for output_path in output_paths:
+            metric_names.update(_collect_metric_names(output_path))
+        missing_metrics = sorted(set(run.get("required_metrics", [])) - metric_names)
+        if missing_metrics:
+            run["status"] = "failed_missing_metrics"
+            run["missing_metrics"] = missing_metrics
+            continue
+        run["status"] = "passed"
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate Round-5 scientific-gap ablation manifest.")
     parser.add_argument("--config", type=Path, default=Path("configs/zelda_hmolqd.yaml"))
+    parser.add_argument("--data-root", type=Path, default=Path("Data/The Legend of Zelda"))
     parser.add_argument("--output-dir", type=Path, default=Path("results/round5_scientific_gaps"))
     parser.add_argument("--manifest", type=Path, default=None)
     parser.add_argument("--csv", type=Path, default=None)
     parser.add_argument("--seeds", type=str, default="42,43,44")
+    parser.add_argument(
+        "--families",
+        type=str,
+        default=(
+            "topology_conditioning,fast_sampler_latency_quality,"
+            "pcbs_component_ablation,wfc_prior,designer_controllability"
+        ),
+        help="Comma-separated experiment families to plan or execute; use 'all' for legacy extras.",
+    )
     parser.add_argument("--epochs", type=int, default=1)
+    parser.add_argument("--topology-eval-samples", type=int, default=8)
+    parser.add_argument("--wfc-samples-per-seed", type=int, default=8)
     parser.add_argument("--diffusion-steps", type=int, default=25)
     parser.add_argument("--python", type=str, default=sys.executable)
     parser.add_argument("--run-dir", type=Path, default=Path("outputs/zelda_hmolqd_fulltrain_rerun"))
@@ -496,13 +690,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
+    selected_families = {token.strip() for token in str(args.families).split(",") if token.strip()}
     if args.execute:
-        if args.vqvae_checkpoint is None:
+        if ("all" in selected_families or "topology_conditioning" in selected_families) and args.vqvae_checkpoint is None:
             raise ValueError(
-                "--execute requires --vqvae-checkpoint so diffusion ablations "
+                "Executing topology conditioning requires --vqvae-checkpoint so diffusion ablations "
                 "cannot silently train against a random tokenizer."
             )
-        if not args.vqvae_checkpoint.exists():
+        if args.vqvae_checkpoint is not None and not args.vqvae_checkpoint.exists():
             raise FileNotFoundError(
                 f"VQ-VAE checkpoint does not exist: {args.vqvae_checkpoint}"
             )

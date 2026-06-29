@@ -236,7 +236,7 @@ Additional alert:
 For the thesis/report, cite these as current:
 
 - `docs/CURRENT_ARCHITECTURE.md`
-- `docs/FINAL_ABLATION_AND_ARCHITECTURE_VERDICT_2026_04_17.md`
+- `docs/architecture_audit_research_notes.md`
 - this file:
   `docs/ARTIFACT_AND_CHECKPOINT_STATUS_2026_04_18.md`
 - `outputs/zelda_hmolqd_downstream_codebook512_puzzle_subtype_v1/protocol_ablation_statefulmultistep_v23/summary.json`

@@ -351,7 +351,15 @@ def summarize(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
             "avg_inventory_change_events": float(np.mean([row["inventory_change_events"] for row in variant_rows])) if variant_rows else 0.0,
             "avg_focus_switches": float(np.mean([row["focus_switches"] for row in variant_rows])) if variant_rows else 0.0,
             "avg_focus_guided_steps": float(np.mean([row["focus_guided_steps"] for row in variant_rows])) if variant_rows else 0.0,
+            "avg_time_ms": float(np.mean([row["time_ms"] for row in variant_rows])) if variant_rows else 0.0,
+            "max_states_explored": int(max([row.get("states_explored", 0) for row in variant_rows], default=0)),
         }
+    summary["matched_budget_contract"] = {
+        "same_maps_across_ablations": True,
+        "same_seed_across_ablations": True,
+        "same_astar_timeout_across_ablations": True,
+        "same_pcbs_timeout_across_ablations": True,
+    }
     return summary
 
 

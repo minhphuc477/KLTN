@@ -12,6 +12,7 @@ def test_target_suite_contains_proxy_and_raw_count_controls():
     names = {spec.name for spec in specs}
     assert "p_balanced_keylock" in names
     assert "p_large_stress_100" in names
+    assert "p_large_stress_250" in names
     assert "p_large_stress_500" in names
 
     balanced = next(spec for spec in specs if spec.name == "p_balanced_keylock")
@@ -72,3 +73,17 @@ def test_target_response_rows_capture_monotonic_axes():
     size_rows = [row for row in target_response if row["target_family"] == "axis_size"]
     assert size_rows
     assert all("target_mean" in row and "actual_mean" in row for row in size_rows)
+
+
+def test_target_response_monotonicity_is_scoped_per_method():
+    rows = [
+        {"target_family": "axis_size", "target_name": "small", "method": "A", "target_num_nodes_mean": 10.0, "actual_num_nodes_mean": 9.0},
+        {"target_family": "axis_size", "target_name": "large", "method": "A", "target_num_nodes_mean": 20.0, "actual_num_nodes_mean": 18.0},
+        {"target_family": "axis_size", "target_name": "small", "method": "B", "target_num_nodes_mean": 10.0, "actual_num_nodes_mean": 5.0},
+        {"target_family": "axis_size", "target_name": "large", "method": "B", "target_num_nodes_mean": 20.0, "actual_num_nodes_mean": 15.0},
+    ]
+
+    result = build_target_response_rows(rows)
+
+    assert len(result) == 4
+    assert all(row["monotonic_non_decreasing_from_previous"] == 1 for row in result)

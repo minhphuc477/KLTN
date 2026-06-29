@@ -354,6 +354,29 @@ def build_target_suite(reference_means: Optional[Mapping[str, float]] = None) ->
             notes="Large stress row comparable to Pereira-style 100-room scalability discussion.",
         ),
         _target_spec(
+            name="p_large_stress_250",
+            family="pereira_style",
+            targets=common(
+                num_nodes=250,
+                num_edges=550,
+                path_length=115,
+                key_count=25,
+                lock_count=38,
+                linearity=0.41,
+                progression_complexity=0.85,
+                topology_complexity=0.76,
+                cycle_density=0.51,
+                shortcut_density=0.165,
+                gate_depth_ratio=0.535,
+                path_depth_ratio=0.46,
+                puzzle_density=0.26,
+                item_density=0.15,
+            ),
+            min_rooms=230,
+            max_rooms=270,
+            notes="Intermediate stress row between the 100-room and 500-room endpoints.",
+        ),
+        _target_spec(
             name="p_large_stress_500",
             family="pereira_style",
             targets=common(
@@ -588,36 +611,38 @@ def build_target_response_rows(summary_rows: Sequence[Mapping[str, Any]]) -> Lis
     rows: List[Dict[str, Any]] = []
     for family, metrics in families.items():
         family_rows = [row for row in summary_rows if str(row.get("target_family")) == family]
-        for metric in metrics:
-            ordered = sorted(
-                family_rows,
-                key=lambda row: (
-                    float(row.get(f"target_{metric}_mean", 0.0) or 0.0),
-                    str(row.get("target_name", "")),
-                    str(row.get("method", "")),
-                ),
-            )
-            previous_actual: Optional[float] = None
-            for row in ordered:
-                target_mean = float(row.get(f"target_{metric}_mean", 0.0) or 0.0)
-                actual_mean = float(row.get(f"actual_{metric}_mean", 0.0) or 0.0)
-                monotonic = 1
-                if previous_actual is not None and actual_mean + 1e-9 < previous_actual:
-                    monotonic = 0
-                previous_actual = actual_mean
-                rows.append(
-                    {
-                        "target_family": family,
-                        "metric": metric,
-                        "target_name": str(row.get("target_name", "")),
-                        "method": str(row.get("method", "")),
-                        "target_mean": target_mean,
-                        "actual_mean": actual_mean,
-                        "mean_norm_error": float(row.get(f"mean_norm_error_{metric}", 0.0) or 0.0),
-                        "pass_rate": float(row.get(f"pass_rate_{metric}", 0.0) or 0.0),
-                        "monotonic_non_decreasing_from_previous": int(monotonic),
-                    }
+        methods = sorted({str(row.get("method", "")) for row in family_rows})
+        for method in methods:
+            method_rows = [row for row in family_rows if str(row.get("method", "")) == method]
+            for metric in metrics:
+                ordered = sorted(
+                    method_rows,
+                    key=lambda row: (
+                        float(row.get(f"target_{metric}_mean", 0.0) or 0.0),
+                        str(row.get("target_name", "")),
+                    ),
                 )
+                previous_actual: Optional[float] = None
+                for row in ordered:
+                    target_mean = float(row.get(f"target_{metric}_mean", 0.0) or 0.0)
+                    actual_mean = float(row.get(f"actual_{metric}_mean", 0.0) or 0.0)
+                    monotonic = 1
+                    if previous_actual is not None and actual_mean + 1e-9 < previous_actual:
+                        monotonic = 0
+                    previous_actual = actual_mean
+                    rows.append(
+                        {
+                            "target_family": family,
+                            "metric": metric,
+                            "target_name": str(row.get("target_name", "")),
+                            "method": method,
+                            "target_mean": target_mean,
+                            "actual_mean": actual_mean,
+                            "mean_norm_error": float(row.get(f"mean_norm_error_{metric}", 0.0) or 0.0),
+                            "pass_rate": float(row.get(f"pass_rate_{metric}", 0.0) or 0.0),
+                            "monotonic_non_decreasing_from_previous": int(monotonic),
+                        }
+                    )
     return rows
 
 
@@ -698,6 +723,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--qd-init-random-fraction", type=float, default=0.35)
     parser.add_argument("--qd-emitter-mutation-rate", type=float, default=0.18)
     parser.add_argument("--write-graphs", action="store_true", help="Persist generated graphs in node-link JSON.")
+    parser.add_argument(
+        "--target-names",
+        type=str,
+        default="",
+        help="Optional comma-separated target subset, such as p_large_stress_100,p_large_stress_250,p_large_stress_500.",
+    )
     parser.add_argument("--quick", action="store_true", help="Small smoke execution profile for local validation.")
     return parser.parse_args()
 
@@ -708,6 +739,13 @@ def main() -> int:
     refs = load_vglc_reference_graphs(args.data_root, limit=args.reference_limit)
     reference_means = _reference_target_means(refs)
     specs = build_target_suite(reference_means)
+    requested_targets = {token.strip() for token in str(args.target_names).split(",") if token.strip()}
+    if requested_targets:
+        available_targets = {spec.name for spec in specs}
+        unknown_targets = sorted(requested_targets - available_targets)
+        if unknown_targets:
+            raise ValueError(f"Unknown target names: {unknown_targets}. Available: {sorted(available_targets)}")
+        specs = [spec for spec in specs if spec.name in requested_targets]
     if args.quick:
         args.samples_per_target = min(int(args.samples_per_target), 2)
         args.population_size = min(int(args.population_size), 12)

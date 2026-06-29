@@ -1,6 +1,6 @@
 # Repo Structure And Cleanup Audit
 
-Last updated: 2026-05-24
+Last updated: 2026-06-30
 
 ## Folder Roles
 
@@ -46,7 +46,8 @@ may import `bench`.
 - Promoted executable pytest coverage from `scripts/` to `tests/`:
   - `scripts/test_grammar_rules.py` -> `tests/test_grammar_rules.py`
   - `scripts/test_mathematical_rigor.py` -> `tests/test_mathematical_rigor.py`
-- Moved manual debug probes out of `tests/` and into `scripts/debug/`.
+- Removed one-off manual debug probes from `scripts/debug/` after their solver
+  regressions were covered by pytest or canonical validation scripts.
 - Moved manual validation probes out of `tests/`:
   - `tests/test_logicnet_pipeline_fix.py` -> `scripts/validate_logicnet_pipeline_fix.py`
   - `tests/test_training_setup_verification.py` -> `scripts/validate_training_setup.py`
@@ -74,6 +75,42 @@ may import `bench`.
   protocols, and stable runbooks.
 - Replaced personal/local dataset defaults in standalone Zelda validation tools
   with repo-root-relative paths.
+- Removed stale script wrappers and queue launchers that were not referenced by
+  current docs, tests, or production code:
+  - `scripts/debug/*.py`
+  - `scripts/debug_rule_application.py`
+  - `scripts/run_baseline_comparison.py`
+  - `scripts/run_pytest_safe.py`
+  - `scripts/queued_stageconditioned_ablation_queue.ps1`
+  - `scripts/run_codebook512_puzzle_subtype_protocol_v1.ps1`
+  - `scripts/run_global_logicnet_training_queue.ps1`
+  - `scripts/run_remaining_ablations.ps1`
+  - `scripts/run_stageconditioned_puzzlefix_v3.ps1`
+- Removed unreferenced GUI/demo/asset/status script leftovers from active
+  `scripts/`:
+  - `scripts/analyze_spritesheet.py`
+  - `scripts/asset_cutter.py`
+  - `scripts/cut_spritesheet.py`
+  - `scripts/extract_visual_levels.py`
+  - `scripts/generate_gui_real_checkpoint_demo.py`
+  - `scripts/generate_gui_showcase_demo.py`
+  - `scripts/generate_presentation_assets.py`
+  - `scripts/generate_qd_visualization.py`
+  - `scripts/visualize_cbs.py`
+  - `scripts/visualize_spatial_graph_attention.py`
+  - `scripts/check_logicnet_status.py`
+  - `scripts/run_block_i_improvement_experiments.py`
+  - `scripts/run_fairness_bias_audit.py`
+  - `scripts/train_full_and_export_png.py`
+- Removed stale top-level docs whose claim/status content is superseded by
+  `docs/architecture_audit_research_notes.md` or was GUI/handoff-only:
+  - `docs/GUI_RUNNER_DEMO_TUTORIAL.md`
+  - `docs/NEXT_CHAT_CONTEXT_2026_04_18.md`
+  - `docs/FINAL_PROTOCOL_AND_PLAYABILITY_STATUS_2026_04_17.md`
+  - `docs/FINAL_ABLATION_AND_ARCHITECTURE_VERDICT_2026_04_17.md`
+  - `docs/PCBS_REVIEWER2_NOVELTY_AUDIT_2026_04_17.md`
+  - `docs/PCBS_AFFORDANCE_MEMORY_AND_ABLATION_2026_04_17.md`
+  - `docs/END_TO_END_EVALUATION_PROTOCOL_GAP_AUDIT_2026_04_18.md`
 
 ## Remaining Manual Cleanup
 

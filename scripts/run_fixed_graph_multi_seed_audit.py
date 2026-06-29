@@ -15,7 +15,7 @@ import math
 import statistics
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Sequence
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from networkx.readwrite import json_graph
 
@@ -616,6 +616,81 @@ def _aggregate_variant(entries: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+def build_diffusion_fast_paired_rows(per_seed: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+    """Build paired quality/latency deltas on identical graph and seed inputs."""
+    diffusion_name = "diffusion_cfg3_logic0_steps50"
+    fast_name = "fast_cfg3_logic0_steps4"
+    rows: List[Dict[str, Any]] = []
+
+    def _metric(summary: Mapping[str, Any], path: Sequence[str]) -> Optional[float]:
+        value: Any = summary
+        for key in path:
+            if not isinstance(value, Mapping):
+                return None
+            value = value.get(key)
+        return _safe_optional_float(value)
+
+    metric_paths = {
+        "generation_time_sec": ("metrics", "generation_time_sec"),
+        "repair_rate": ("metrics", "repair_rate"),
+        "tiles_repaired": ("metrics", "total_tiles_repaired"),
+        "room_pairwise_ncd_mean": ("end_to_end_evaluation", "room_pairwise_ncd", "mean"),
+        "room_symbol_entropy_mean": ("end_to_end_evaluation", "room_symbol_entropy_mean"),
+        "astar_grid_solvable": ("validation", "astar_grid", "solvable"),
+        "cbs_success": ("validation", "cbs_balanced", "success"),
+    }
+    for seed_payload in per_seed:
+        variants = dict(seed_payload.get("variants", {}) or {})
+        diffusion = variants.get(diffusion_name)
+        fast = variants.get(fast_name)
+        if not isinstance(diffusion, Mapping) or not isinstance(fast, Mapping):
+            continue
+        row: Dict[str, Any] = {"seed": int(seed_payload.get("seed", 0) or 0)}
+        for metric_name, metric_path in metric_paths.items():
+            diffusion_value = _metric(diffusion, metric_path)
+            fast_value = _metric(fast, metric_path)
+            row[f"diffusion_{metric_name}"] = diffusion_value
+            row[f"fast_{metric_name}"] = fast_value
+            row[f"fast_minus_diffusion_{metric_name}"] = (
+                None
+                if diffusion_value is None or fast_value is None
+                else float(fast_value - diffusion_value)
+            )
+        diffusion_time = row.get("diffusion_generation_time_sec")
+        fast_time = row.get("fast_generation_time_sec")
+        row["diffusion_over_fast_speedup"] = (
+            None
+            if diffusion_time is None or fast_time is None or float(fast_time) <= 0.0
+            else float(diffusion_time) / float(fast_time)
+        )
+        rows.append(row)
+
+    numeric_keys = sorted(
+        {
+            key
+            for row in rows
+            for key, value in row.items()
+            if key != "seed" and _safe_optional_float(value) is not None
+        }
+    )
+    aggregate = {
+        f"mean_{key}": _safe_mean(
+            [value for row in rows if (value := _safe_optional_float(row.get(key))) is not None]
+        )
+        for key in numeric_keys
+    }
+    return {
+        "comparison": "paired_diffusion_50_step_vs_consistency_lora_4_step",
+        "distillation_claim_boundary": (
+            "The fast arm is the repository's graph-aware consistency_lora adapter, "
+            "not a paper-faithful lcm_lora runtime."
+        ),
+        "paired_n": len(rows),
+        "rows": rows,
+        "aggregate": aggregate,
+    }
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run a fixed-graph multi-seed audit for diffusion / fast-sampler.")
     parser.add_argument(
@@ -682,6 +757,11 @@ def parse_args() -> argparse.Namespace:
             "for diffusion, fast-sampler, and masked-room."
         ),
     )
+    parser.add_argument(
+        "--paired-diffusion-fast-only",
+        action="store_true",
+        help="Run only the matched diffusion and consistency-LoRA fast-sampler arms.",
+    )
     add_generation_override_args(parser)
     return parser.parse_args()
 
@@ -727,11 +807,14 @@ def run_from_args(args: argparse.Namespace) -> Dict[str, str]:
             "num_diffusion_steps": 4,
             "use_fast_sampling": True,
         },
-        {
-            "exporter": "masked_room",
-            "variant_name": "masked_room_full",
-        },
     ]
+    if not bool(getattr(args, "paired_diffusion_fast_only", False)):
+        variants.append(
+            {
+                "exporter": "masked_room",
+                "variant_name": "masked_room_full",
+            }
+        )
     if bool(getattr(args, "include_no_fallback_ablations", False)):
         variants.extend(
             [
@@ -906,9 +989,14 @@ def run_from_args(args: argparse.Namespace) -> Dict[str, str]:
         "generation_overrides": generation_overrides,
         "per_seed": per_seed,
         "aggregate": aggregate,
+        "paired_diffusion_fast_sampler": build_diffusion_fast_paired_rows(per_seed),
     }
     summary_path = args.output_dir / "summary.json"
     summary_path.write_text(json.dumps(_json_sanitize(output), indent=2), encoding="utf-8")
+    (args.output_dir / "paired_diffusion_fast_sampler.json").write_text(
+        json.dumps(_json_sanitize(output["paired_diffusion_fast_sampler"]), indent=2),
+        encoding="utf-8",
+    )
     (args.output_dir / "search_algorithm_comparison.json").write_text(
         json.dumps(
             _json_sanitize(

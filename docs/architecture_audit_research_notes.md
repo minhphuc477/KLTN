@@ -110,6 +110,14 @@ better than the referenced methods.
 - Robust block timeouts return without waiting for the timed-out worker.
 - NetworkX 3.5 artifact serialization uses standard pickle APIs.
 - Invalid BSP dimensions fail early instead of creating out-of-bounds rooms.
+- Script cleanup removed one-off debug probes, duplicate wrappers, stale dated
+  queue launchers, GUI/demo generators, asset cutters, and unreferenced status
+  probes from `scripts/`. The physical `scripts/` tree now contains 74 files,
+  focused on canonical `run_*`, `generate_*`, `validate_*`, analysis, and
+  training utilities.
+- Top-level docs cleanup removed stale GUI, handoff, final-verdict, and
+  superseded P-CBS/evaluation notes. Current claim boundaries live in this
+  ledger.
 
 ### Model and training
 
@@ -203,6 +211,43 @@ budget, generation budget, and post-processing policy explicit.
 The categorical codebook-usage sampler is an unconditional prior baseline. It
 must not be described as graph conditioned.
 
+### Implemented Publication Matrix
+
+`scripts/generate_round5_scientific_gap_manifest.py` now defaults to the five
+requested experiment families and emits paired seed-42/43/44 jobs:
+
+- additive versus SPADE diffusion training and paired evaluation, including
+  topology preservation, validity, runtime, and parameter-count disclosure;
+- 50-step diffusion versus 4-step graph-aware `consistency_lora` generation on
+  the identical mission graph and seed, with paired speed, hard-oracle,
+  P-CBS, repair, NCD, and entropy deltas;
+- novice, balanced, and expert P-CBS component ablations with identical maps,
+  seeds, A* budgets, and P-CBS state budgets;
+- weighted Bayesian versus flat-prior scaffolded symbolic WFC under paired
+  seeds and sample counts;
+- 100-, 250-, and 500-room controllability stress rows reporting normalized
+  target error, node-count pass rate, and generation time.
+
+Execution is fail-closed. A zero process exit is insufficient: required input
+artifacts, output files, and metric keys must exist before a run receives
+`passed` status. The fast-sampler preflight accepts only this repository's
+`consistency_lora` artifact and records that it is not a paper-faithful
+LCM-LoRA runtime.
+
+Research basis:
+
+- [SPADE](https://arxiv.org/abs/1903.07291) motivates learned spatial affine
+  modulation versus direct additive conditioning.
+- [Latent Consistency Models](https://arxiv.org/abs/2310.04378) motivates the
+  paired few-step quality/latency test, without overriding the repository's
+  stricter artifact-type boundary.
+- [G-PCGRL](https://arxiv.org/abs/2407.10483) motivates explicit graph node-count
+  controllability metrics.
+- [PCGRL+](https://arxiv.org/abs/2408.12525) motivates out-of-distribution scale
+  evaluation rather than ordinary-size extrapolation.
+- [WaveFunctionCollapse is Constraint Solving in the Wild](https://doi.org/10.1145/3102071.3110566)
+  motivates holding constraints fixed while ablating learned pattern priors.
+
 ## Experiment Status
 
 ### Executed but limited
@@ -214,6 +259,12 @@ must not be described as graph conditioned.
 - `results/baselines/wfc_dryrun_codex/wfc_baseline_report.json` contains one
   four-sample `wfc_overlapping_patterns` dry run with P-CBS disabled. It has no
   flat-prior arm and is smoke-executed plumbing evidence, not an ablation result.
+- `results/wfc_prior_paired_3seed_scaffold_smoke/` verifies the operationally
+  neural-free but graph-scaffolded paired WFC protocol with one sample per seed.
+  Weighted priors were
+  oracle-solvable on 3/3 seeds versus 0/3 for flat priors, while weighted tile
+  KL was worse on all three seeds. This is a low-power tradeoff diagnostic, not
+  publication evidence; the planned multi-sample run remains required.
 - `results/matched_budget/`: executed on a small budget, but all reported
   feasible-search rates are zero. Treat as diagnostic.
 - `results/cognitive_objective_ab/`: four paired cases with zero constraint
