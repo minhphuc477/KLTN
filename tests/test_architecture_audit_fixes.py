@@ -2419,7 +2419,7 @@ def test_pipeline_diffusion_loader_prefers_ema_weights_for_inference(tmp_path):
     assert torch.allclose(loaded.state_dict()[probe_key], ema_state[probe_key])
 
 
-def test_pipeline_random_init_loaders_follow_bound_component_dimensions():
+def test_pipeline_random_diffusion_follows_bound_dimensions_and_untrained_optional_models_stay_disabled():
     pipeline = NeuralSymbolicDungeonPipeline.create_symbolic_repair_pipeline(
         device="cpu",
         enable_logging=False,
@@ -2447,8 +2447,8 @@ def test_pipeline_random_init_loaders_follow_bound_component_dimensions():
 
     assert diffusion.latent_dim == 24
     assert diffusion.context_dim == 72
-    assert logic_net.latent_dim == 24
-    assert logic_net.num_classes == 31
+    assert logic_net is None
+    assert pipeline.logic_net_checkpoint_loaded is False
     assert masked_room is None
 
 

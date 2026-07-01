@@ -6,8 +6,7 @@ Tests for differentiable pathfinding and solvability checking.
 """
 
 import pytest
-
-torch = pytest.importorskip("torch")
+import torch
 from src.core.definitions import ROOM_HEIGHT, ROOM_WIDTH
 from src.pipeline.room_topology_conditioning import ROOM_TOPOLOGY_CHANNELS
 

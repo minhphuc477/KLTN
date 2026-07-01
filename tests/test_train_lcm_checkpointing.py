@@ -225,6 +225,7 @@ def test_timestep_embedding_matches_mlp_dtype():
 def test_fast_sampler_validate_respects_max_batches_and_eval_seed(monkeypatch):
     trainer = ConsistencyLoRATrainer.__new__(ConsistencyLoRATrainer)
     trainer.student = _EvalModeStub()
+    trainer.teacher = _EvalModeStub()
     trainer.device = torch.device("cpu")
 
     calls = []

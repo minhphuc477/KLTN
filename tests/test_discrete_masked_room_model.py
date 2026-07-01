@@ -18,6 +18,14 @@ from src.train_masked_room import (
 from src.zelda_data.zelda_loader import DungeonBatchSampler
 
 
+class _DatasetLoaderStub:
+    def __init__(self, dataset):
+        self.dataset = dataset
+
+    def __len__(self):
+        return len(self.dataset)
+
+
 class _DummyMaskedConditionEncoder:
     def __init__(self, output_dim: int = 8):
         self.output_dim = output_dim
@@ -78,7 +86,6 @@ def test_discrete_masked_model_respects_fixed_tokens():
     model = create_discrete_masked_model(
         num_classes=44,
         hidden_dim=64,
-        model_channels=32,
         context_dim=256,
         num_steps=3,
     )
@@ -106,7 +113,6 @@ def test_discrete_masked_model_reports_iterative_refinement_metrics():
     model = create_discrete_masked_model(
         num_classes=44,
         hidden_dim=32,
-        model_channels=16,
         context_dim=32,
         num_steps=3,
         unet_channel_mult=(1,),
@@ -138,7 +144,6 @@ def test_discrete_masked_training_step_embedding_tracks_mask_ratio():
     model = create_discrete_masked_model(
         num_classes=44,
         hidden_dim=32,
-        model_channels=16,
         context_dim=32,
         num_steps=5,
     )
@@ -769,12 +774,10 @@ def test_discrete_masked_model_accepts_unbatched_edge_index_graph_context():
     model = create_discrete_masked_model(
         num_classes=44,
         hidden_dim=32,
-        model_channels=32,
         context_dim=8,
         num_steps=2,
         unet_channel_mult=(1,),
         unet_num_res_blocks=1,
-        unet_attention_resolutions=(0,),
         unet_num_heads=1,
     )
     tokens = torch.full((1, ROOM_HEIGHT, ROOM_WIDTH), fill_value=44, dtype=torch.long)
@@ -803,7 +806,6 @@ def test_masked_room_trainer_passes_configurable_mask_schedule(monkeypatch):
         topology_marker_weight=2.5,
         topology_trace_weight=0.9,
         topology_focus_dilation=2,
-        model_channels=32,
         hidden_dim=32,
         condition_hidden_dim=64,
         condition_num_attention_heads=4,
@@ -864,7 +866,6 @@ def test_masked_room_trainer_logic_ablation_uses_raw_logits(monkeypatch):
         alpha_logic=0.5,
         logic_net_trainable=False,
         num_logic_iterations=2,
-        model_channels=32,
         hidden_dim=32,
         context_dim=8,
         condition_hidden_dim=64,
@@ -1085,7 +1086,6 @@ def test_masked_room_resume_checkpoint_round_trip(tmp_path):
         device="cpu",
         quick=True,
         checkpoint_dir=str(tmp_path),
-        model_channels=32,
         hidden_dim=32,
         condition_hidden_dim=64,
         condition_num_attention_heads=4,
@@ -1133,7 +1133,7 @@ def test_masked_room_dataloaders_use_real_validation_split(monkeypatch):
 
     def _fake_create_dataloader(*args, **kwargs):
         _ = (args, kwargs)
-        return SimpleNamespace(dataset=fake_dataset)
+        return _DatasetLoaderStub(fake_dataset)
 
     monkeypatch.setattr("src.train_masked_room.create_dataloader", _fake_create_dataloader)
 
@@ -1142,7 +1142,6 @@ def test_masked_room_dataloaders_use_real_validation_split(monkeypatch):
         quick=True,
         batch_size=2,
         validation_fraction=0.2,
-        model_channels=32,
         hidden_dim=32,
         condition_hidden_dim=64,
         condition_num_attention_heads=4,
@@ -1183,7 +1182,7 @@ def test_masked_room_logic_dataloaders_use_dungeon_batch_sampler(monkeypatch):
 
     monkeypatch.setattr(
         "src.train_masked_room.create_dataloader",
-        lambda *args, **kwargs: SimpleNamespace(dataset=_FakeRoomDataset()),
+        lambda *args, **kwargs: _DatasetLoaderStub(_FakeRoomDataset()),
     )
     config = MaskedRoomTrainingConfig(
         device="cpu",
@@ -1192,7 +1191,6 @@ def test_masked_room_logic_dataloaders_use_dungeon_batch_sampler(monkeypatch):
         validation_fraction=0.0,
         logic_net_enabled=True,
         alpha_logic=0.5,
-        model_channels=32,
         hidden_dim=32,
         condition_hidden_dim=64,
         condition_num_attention_heads=4,
@@ -1239,7 +1237,6 @@ def test_masked_room_auto_resume_skips_incompatible_latest_checkpoint(
         checkpoint_dir=str(tmp_path),
         epochs=1,
         batch_size=1,
-        model_channels=32,
         hidden_dim=32,
         condition_hidden_dim=64,
         condition_num_attention_heads=4,

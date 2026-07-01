@@ -46,7 +46,7 @@ from src.core.definitions import (
     ROOM_WIDTH,
     SEMANTIC_PALETTE,
 )
-from src.core.pathfinder_pm import perturb_and_map_distance
+from src.core.perturb_and_map import perturb_and_map_distance
 
 logger = logging.getLogger(__name__)
 

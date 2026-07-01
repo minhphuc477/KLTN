@@ -79,7 +79,7 @@ class TestEvolutionaryDirector:
         assert is_valid, errors
 
     def test_finalize_graph_output_repairs_disconnected_component(self):
-        """Final export should stitch isolated physical components back into the main graph."""
+        """Final export should prune disconnected optional decoration."""
         gen = EvolutionaryTopologyGenerator(
             target_curve=[0.2, 0.5, 0.8, 1.0],
             population_size=4,
@@ -97,7 +97,7 @@ class TestEvolutionaryDirector:
         graph.add_node(MissionNode(id=3, node_type=NodeType.ENEMY, position=(7, 0, 0), difficulty=0.5))
         graph.add_edge(0, 1, EdgeType.PATH)
         graph.add_edge(1, 2, EdgeType.PATH)
-        # Node 3 is intentionally isolated.
+        # Node 3 is intentionally isolated optional decoration.
         graph.sanitize()
 
         finalized = gen._finalize_graph_output(graph, directed_output=True)
@@ -105,6 +105,7 @@ class TestEvolutionaryDirector:
 
         assert is_valid, errors
         assert nx.is_connected(finalized.to_undirected())
+        assert 3 not in finalized
         assert gen.seed == 42
         assert len(gen.best_fitness_history) == 0
     

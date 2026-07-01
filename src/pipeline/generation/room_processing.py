@@ -600,6 +600,7 @@ def _build_puzzle_room_route_template(
     switch_depth = int(max(1, getattr(pipeline, "default_puzzle_room_switch_pocket_depth", 3)))
     resource_offset = int(max(1, getattr(pipeline, "default_puzzle_room_resource_bypass_offset", 2)))
     key_depth = int(max(1, getattr(pipeline, "default_puzzle_room_key_pocket_depth", 3)))
+    item_slot_depth = int(max(1, getattr(pipeline, "default_puzzle_room_item_slot_depth", 3)))
     toggle_offset = int(max(1, getattr(pipeline, "default_puzzle_room_toggle_corridor_offset", 2)))
     variant = dict(variant_spec or {})
     variant_style = str(variant.get("style", "baseline") or "baseline").strip().lower()
@@ -1883,7 +1884,6 @@ def _build_puzzle_room_segments(
     bottom_row = ROOM_HEIGHT - 4
     resource_offset = int(max(1, getattr(pipeline, "default_puzzle_room_resource_bypass_offset", 2)))
     key_depth = int(max(1, getattr(pipeline, "default_puzzle_room_key_pocket_depth", 3)))
-    item_slot_depth = int(max(1, getattr(pipeline, "default_puzzle_room_item_slot_depth", 3)))
     toggle_offset = int(max(1, getattr(pipeline, "default_puzzle_room_toggle_corridor_offset", 2)))
     variant = dict(variant_spec or {})
     variant_style = str(variant.get("style", "baseline") or "baseline").strip().lower()

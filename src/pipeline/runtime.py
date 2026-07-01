@@ -384,8 +384,6 @@ def _initialize_pipeline_from_flat_kwargs(
             f"Invalid topology_search_strategy={topology_search_strategy!r}. "
             "Expected 'ga', 'cvt_emitter', 'map_elites', 'cvt', or 'cvt_map_elites'."
         )
-    if pipeline.topology_refinement_mode == "upgraded":
-        pipeline.topology_refinement_mode = "gat2"
     allowed_topology_modes = {
         "none",
         "lightweight",

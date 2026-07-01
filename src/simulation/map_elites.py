@@ -30,6 +30,7 @@ from src.core.definitions import (
     parse_edge_type_tokens,
     parse_node_label_tokens,
 )
+from src.simulation.validation_helpers import MetricsEngine
 
 try:
     from src.zelda_data.zelda_core import DungeonSolver
@@ -106,9 +107,25 @@ class MAPElitesEvaluator:
             else:
                 logger.info("MAP-Elites archive path does not exist yet: %s", self.archive_path)
 
-    def calculate_linearity(self, path_len: int, playable_area: int) -> float:
-        # Fallback directness proxy when no solver path geometry is available:
-        # lower coverage implies a more direct route through the playable area.
+    @staticmethod
+    def calculate_linearity(
+        path: Iterable[Tuple[int, int]],
+        start: Optional[Tuple[int, int]] = None,
+        goal: Optional[Tuple[int, int]] = None,
+    ) -> float:
+        """Return geometric route directness: Manhattan displacement / steps."""
+        path_points = [(int(row), int(col)) for row, col in path]
+        if not path_points:
+            return 0.0
+        return MetricsEngine.calculate_linearity(
+            path_points,
+            start or path_points[0],
+            goal or path_points[-1],
+        )
+
+    @staticmethod
+    def calculate_route_sparsity(path_len: int, playable_area: int) -> float:
+        """Legacy inverse route-coverage proxy; this is not path linearity."""
         raw = 1.0 - (float(path_len) / max(1.0, float(playable_area)))
         return float(np.clip(raw, 0.0, 1.0))
 
@@ -455,7 +472,25 @@ class MAPElitesEvaluator:
 
         playable_area = int((grid == floor_id).sum())
         path_len = int(solver_result.get('path_length', 0))
-        linearity = self._clip01(solver_result.get('linearity', self.calculate_linearity(path_len, playable_area)))
+        route_sparsity = self.calculate_route_sparsity(path_len, playable_area)
+        graph_metrics = self._extract_graph_behavior_metrics(mission_graph)
+        graph_descriptor_used = bool(graph_metrics) and self.descriptor_mode != 'legacy'
+        supplied_linearity = solver_result.get('linearity')
+        solver_path = solver_result.get('path')
+        if supplied_linearity is not None:
+            linearity = self._clip01(supplied_linearity)
+        elif solver_path is not None and len(solver_path) > 0:
+            linearity = self._clip01(self.calculate_linearity(solver_path))
+        elif graph_descriptor_used:
+            # Replaced below by the mission-graph descriptor.
+            linearity = 0.0
+        elif self.descriptor_mode == 'legacy':
+            linearity = route_sparsity
+        else:
+            raise ValueError(
+                "Grid MAP-Elites requires solver_result['linearity'] or a concrete "
+                "solver_result['path']; route sparsity is only available in legacy mode"
+            )
         leniency = self._clip01(solver_result.get('leniency', self.calculate_leniency(grid)))
 
         total_tiles = max(1, int(grid.size))
@@ -473,8 +508,6 @@ class MAPElitesEvaluator:
             (0.40 * lock_pressure) + (0.30 * backtracking) + (0.20 * path_pressure) + (0.10 * enemy_pressure)
         )
 
-        graph_metrics = self._extract_graph_behavior_metrics(mission_graph)
-        graph_descriptor_used = bool(graph_metrics) and self.descriptor_mode != 'legacy'
         if graph_descriptor_used:
             linearity = self._clip01(graph_metrics['graph_linearity'])
             leniency = self._clip01(graph_metrics['graph_leniency'])
@@ -496,6 +529,7 @@ class MAPElitesEvaluator:
             'progression_complexity': progression_complexity,
             'topology_complexity': topology_complexity,
             'density': density,
+            'route_sparsity': route_sparsity,
             'backtracking_score': backtracking,
             'key_count': float(key_count),
             'lock_count': float(lock_count),
@@ -776,6 +810,7 @@ def run_map_elites_on_maps(
                 solver_result = {
                     'solvable': bool(result.is_solvable),
                     'path_length': path_length,
+                    'path': list(result.path),
                     'backtracking_score': float(getattr(result, 'backtracking_score', 0.0)),
                     'quality_score': _clip01(
                         (0.6 * float(getattr(result, 'reachability', 0.0)))

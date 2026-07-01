@@ -11,7 +11,6 @@ import pytest
 import numpy as np
 
 # Skip if dependencies not available
-pytest.importorskip("numpy")
 
 
 class TestVGLCParser:
@@ -53,7 +52,6 @@ class TestGraphvizParser:
     
     def test_parse_dot_string(self):
         """Test parsing a DOT string."""
-        pytest.importorskip("networkx")
         
         from src.data_processing.data_adapter import GraphvizParser
         
@@ -88,14 +86,11 @@ class TestDungeonTensor:
             np.zeros((16, 11), dtype=np.int32) for _ in range(3)
         ]
         
-        # Create mock topology
-        try:
-            import networkx as nx
-            topology = nx.DiGraph()
-            topology.add_nodes_from([0, 1, 2])
-            topology.add_edges_from([(0, 1), (1, 2)])
-        except ImportError:
-            topology = None
+        import networkx as nx
+
+        topology = nx.DiGraph()
+        topology.add_nodes_from([0, 1, 2])
+        topology.add_edges_from([(0, 1), (1, 2)])
         
         tensor = DungeonTensor(
             room_grids=room_grids,
@@ -125,18 +120,16 @@ class TestPhaseAligner:
         
         rooms = [MockRoom(1, 2), MockRoom(0, 1), MockRoom(2, 1)]
         
-        try:
-            import networkx as nx
-            graph = nx.DiGraph()
-            graph.add_node(0, label="s,k")
-            graph.add_node(1, label="")
-            graph.add_node(2, label="k,k,t")
-            
-            alignment, score = aligner.align(rooms, graph)
-            assert alignment is not None
-            assert 0 <= score <= 1.0
-        except ImportError:
-            pytest.skip("NetworkX not available")
+        import networkx as nx
+
+        graph = nx.DiGraph()
+        graph.add_node(0, label="s,k")
+        graph.add_node(1, label="")
+        graph.add_node(2, label="k,k,t")
+
+        alignment, score = aligner.align(rooms, graph)
+        assert alignment is not None
+        assert 0 <= score <= 1.0
 
     def test_shift_grid_improves_vertical_boundary_walls(self):
         """Vertical alignment correction should improve wall-sealed boundaries."""

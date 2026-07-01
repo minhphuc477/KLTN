@@ -271,8 +271,8 @@ def test_default_config_uses_small_data_recommended_room_model_profile():
     assert resolved["masked_room"]["unet_num_res_blocks"] == 1
     assert resolved["masked_room"]["unet_attention_resolutions"] == [0, 1]
     assert resolved["masked_room"]["unet_num_heads"] == 4
-    assert resolved["masked_room"]["min_mask_ratio"] == pytest.approx(0.12)
-    assert resolved["masked_room"]["max_mask_ratio"] == pytest.approx(0.85)
+    assert resolved["masked_room"]["min_mask_ratio"] == pytest.approx(0.0)
+    assert resolved["masked_room"]["max_mask_ratio"] == pytest.approx(1.0)
     assert resolved["fast_sampler"]["topology_alignment_weight"] == pytest.approx(0.25)
     assert resolved["fast_sampler"]["topology_marker_weight"] == pytest.approx(2.0)
     assert resolved["fast_sampler"]["topology_trace_weight"] == pytest.approx(0.75)
@@ -351,8 +351,8 @@ def test_canonical_yaml_uses_downsized_masked_room_profile():
     assert resolved["masked_room"]["unet_num_res_blocks"] == 1
     assert resolved["masked_room"]["unet_attention_resolutions"] == [0, 1]
     assert resolved["masked_room"]["unet_num_heads"] == 4
-    assert resolved["masked_room"]["min_mask_ratio"] == pytest.approx(0.12)
-    assert resolved["masked_room"]["max_mask_ratio"] == pytest.approx(0.85)
+    assert resolved["masked_room"]["min_mask_ratio"] == pytest.approx(0.0)
+    assert resolved["masked_room"]["max_mask_ratio"] == pytest.approx(1.0)
     assert resolved["generation"]["guidance_scale"] == pytest.approx(3.0)
     assert resolved["generation"]["logic_guidance_scale"] == pytest.approx(0.0)
     assert resolved["generation"]["symbolic_max_repair_attempts"] == 5
@@ -1264,23 +1264,19 @@ def test_masked_room_stage_derives_num_classes_and_latent_dim_from_shared_schema
     assert captured["config"].best_checkpoint_metric == "val_topology_focus_loss"
 
 
-def test_masked_room_helper_preserves_yaml_only_unet_and_mask_schedule_knobs(tmp_path: Path):
+def test_masked_room_helper_preserves_executable_transformer_and_mask_schedule_knobs(tmp_path: Path):
     cfg_path = tmp_path / "config.yaml"
     _write_yaml(
         cfg_path,
         {
             "training": {"stage": "masked_room"},
             "masked_room": {
-                "attention_mode": "linear_hedgehog",
-                "topology_conditioning_mode": "spade",
+                "attention_mode": "softmax",
+                "topology_conditioning_mode": "additive",
                 "condition_use_reference_room_maps": True,
                 "condition_reference_tile_vocab_size": 44,
                 "condition_reference_embedding_dim": 20,
                 "condition_reference_hidden_dim": 40,
-                "hedgehog_feature_dim": 48,
-                "graph_auto_linear_attention_nodes": 96,
-                "spatial_graph_gate_init": -1.25,
-                "spatial_topology_gate_init": -0.75,
                 "unet_channel_mult": [1, 2],
                 "unet_num_res_blocks": 3,
                 "unet_attention_resolutions": [0, 1],
@@ -1298,16 +1294,12 @@ def test_masked_room_helper_preserves_yaml_only_unet_and_mask_schedule_knobs(tmp
     resolved = merge_config(yaml_path=str(cfg_path), cli_overrides=None)
     kwargs = masked_room_training_kwargs_from_resolved_config(resolved)
 
-    assert kwargs["attention_mode"] == "linear_hedgehog"
-    assert kwargs["topology_conditioning_mode"] == "spade"
+    assert kwargs["attention_mode"] == "softmax"
+    assert kwargs["topology_conditioning_mode"] == "additive"
     assert kwargs["condition_use_reference_room_maps"] is True
     assert kwargs["condition_reference_tile_vocab_size"] == 44
     assert kwargs["condition_reference_embedding_dim"] == 20
     assert kwargs["condition_reference_hidden_dim"] == 40
-    assert kwargs["hedgehog_feature_dim"] == 48
-    assert kwargs["graph_auto_linear_attention_nodes"] == 96
-    assert kwargs["spatial_graph_gate_init"] == pytest.approx(-1.25)
-    assert kwargs["spatial_topology_gate_init"] == pytest.approx(-0.75)
     assert kwargs["unet_channel_mult"] == (1, 2)
     assert kwargs["unet_num_res_blocks"] == 3
     assert kwargs["unet_attention_resolutions"] == (0, 1)
@@ -1318,6 +1310,34 @@ def test_masked_room_helper_preserves_yaml_only_unet_and_mask_schedule_knobs(tmp
     assert kwargs["validation_fraction"] == pytest.approx(0.2)
     assert kwargs["validation_max_batches"] == 7
     assert kwargs["best_checkpoint_metric"] == "val_topology_focus_loss"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("attention_mode", "linear_hedgehog"),
+        ("topology_conditioning_mode", "spade"),
+        ("model_channels", 32),
+        ("hedgehog_feature_dim", 48),
+        ("unet_attention_resolutions", [0]),
+    ],
+)
+def test_masked_room_config_rejects_non_executable_legacy_ablations(
+    tmp_path: Path,
+    field: str,
+    value,
+):
+    cfg_path = tmp_path / f"invalid_{field}.yaml"
+    _write_yaml(
+        cfg_path,
+        {
+            "training": {"stage": "masked_room"},
+            "masked_room": {field: value},
+        },
+    )
+
+    with pytest.raises(ValueError):
+        merge_config(yaml_path=str(cfg_path), cli_overrides=None)
 
 
 def test_pipeline_kwargs_use_valid_masked_room_attention_fallback_for_legacy_configs():

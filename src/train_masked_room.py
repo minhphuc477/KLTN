@@ -122,8 +122,8 @@ class MaskedRoomTrainingConfig:
         unet_attention_resolutions: Tuple[int, ...] = (0, 1),
         unet_num_heads: int = 4,
         unet_dropout: float = 0.1,
-        min_mask_ratio: float = 0.12,
-        max_mask_ratio: float = 0.85,
+        min_mask_ratio: float = 0.0,
+        max_mask_ratio: float = 1.0,
         topology_alignment_weight: float = 0.25,
         topology_marker_weight: float = 2.0,
         topology_trace_weight: float = 0.75,
@@ -316,24 +316,35 @@ class MaskedRoomTrainingConfig:
             raise ValueError("graph_conditioning_mode must be 'node_sequence' or 'pooled'.")
         if self.topology_supervision_mode not in {"runtime_aligned", "oracle_room_grid"}:
             raise ValueError("topology_supervision_mode must be 'runtime_aligned' or 'oracle_room_grid'.")
-        if self.attention_mode not in {"softmax", "linear_hedgehog"}:
-            raise ValueError("attention_mode must be 'softmax' or 'linear_hedgehog'.")
-        if self.topology_conditioning_mode not in {"additive", "spade"}:
-            raise ValueError("topology_conditioning_mode must be 'additive' or 'spade'.")
+        if self.attention_mode != "softmax":
+            raise ValueError("Masked-room attention_mode only supports 'softmax'.")
+        if self.topology_conditioning_mode != "additive":
+            raise ValueError("Masked-room topology_conditioning_mode only supports 'additive'.")
         if self.logic_grid_pathfinder not in {"bellman_ford", "conv", "cnn", "vin", "learnable", "perturb_and_map"}:
             raise ValueError(
                 "logic_grid_pathfinder must be 'bellman_ford', 'conv'/'cnn', 'vin', 'learnable', or 'perturb_and_map'."
             )
-        if any((self.model_channels * mult) % self.unet_num_heads != 0 for mult in self.unet_channel_mult):
+        if self.hidden_dim % self.unet_num_heads != 0:
             raise ValueError(
-                "Every masked-room U-Net channel width must be divisible by unet_num_heads; "
-                f"got model_channels={self.model_channels}, unet_channel_mult={self.unet_channel_mult}, "
-                f"unet_num_heads={self.unet_num_heads}."
+                "hidden_dim must be divisible by unet_num_heads for the masked transformer; "
+                f"got hidden_dim={self.hidden_dim}, unet_num_heads={self.unet_num_heads}."
             )
-        max_level = len(self.unet_channel_mult) - 1
-        if any(level > max_level for level in self.unet_attention_resolutions):
+        legacy_values = {
+            "model_channels": (self.model_channels, 64),
+            "hedgehog_feature_dim": (self.hedgehog_feature_dim, 32),
+            "graph_auto_linear_attention_nodes": (self.graph_auto_linear_attention_nodes, 128),
+            "spatial_graph_gate_init": (self.spatial_graph_gate_init, -2.0),
+            "spatial_topology_gate_init": (self.spatial_topology_gate_init, -2.0),
+            "unet_attention_resolutions": (self.unet_attention_resolutions, (0, 1)),
+        }
+        changed_legacy = [
+            name for name, (value, expected) in legacy_values.items()
+            if value != expected
+        ]
+        if changed_legacy:
             raise ValueError(
-                f"unet_attention_resolutions={self.unet_attention_resolutions!r} contains a level above {max_level}."
+                "The masked-room model is a transformer; these legacy U-Net/linear-attention "
+                f"fields are not executable ablations and must remain at defaults: {changed_legacy}."
             )
         if self.min_mask_ratio > self.max_mask_ratio:
             raise ValueError(
@@ -583,10 +594,7 @@ def _create_masked_room_dataloaders(
         dungeon_ids=config.train_dungeon_ids,
         variants=config.variants,
     )
-    try:
-        base_loader_batches = int(len(base_loader))
-    except Exception:
-        base_loader_batches = -1
+    base_loader_batches = int(len(base_loader))
     if base_loader_batches == 0:
         return base_loader, base_loader, "train", 0, 0
     dataset = base_loader.dataset
@@ -1603,12 +1611,8 @@ def train_masked_room(config: MaskedRoomTrainingConfig) -> MaskedRoomTrainer:
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     train_loader, val_loader, eval_split_name, train_size, eval_size = _create_masked_room_dataloaders(config)
-    exact_total_steps = int(max(1, int(config.epochs)))
-    try:
-        exact_total_steps = int(max(1, int(config.epochs) * max(1, len(train_loader))))
-        trainer.configure_scheduler_total_steps(exact_total_steps)
-    except (TypeError, ValueError):
-        pass
+    exact_total_steps = int(max(1, int(config.epochs) * max(1, len(train_loader))))
+    trainer.configure_scheduler_total_steps(exact_total_steps)
     log_capacity_guardrails(
         logger,
         stage_name="Masked-room trainer",
@@ -1845,9 +1849,9 @@ def main() -> None:
     parser.add_argument("--model-channels", type=int, default=None)
     parser.add_argument("--hidden-dim", type=int, default=None)
     parser.add_argument("--masked-steps", type=int, default=None)
-    parser.add_argument("--attention-mode", type=str, default=None, choices=["softmax", "linear_hedgehog"])
+    parser.add_argument("--attention-mode", type=str, default=None, choices=["softmax"])
     parser.add_argument("--context-attention-mode", type=str, default=None, choices=["concat_encoder", "cross_decoder"])
-    parser.add_argument("--topology-conditioning-mode", type=str, default=None, choices=["additive", "spade"])
+    parser.add_argument("--topology-conditioning-mode", type=str, default=None, choices=["additive"])
     parser.add_argument("--hedgehog-feature-dim", type=int, default=None)
     parser.add_argument("--graph-auto-linear-attention-nodes", type=int, default=None)
     parser.add_argument("--spatial-graph-gate-init", type=float, default=None)

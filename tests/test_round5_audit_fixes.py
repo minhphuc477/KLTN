@@ -139,31 +139,52 @@ def test_output_node_cap_preserves_directed_reachability_to_progression_nodes():
     assert nx.has_path(capped, "start", "key")
 
 
-def test_output_connectivity_repairs_goal_only_component():
+def test_output_connectivity_rejects_disconnected_goal_component():
     graph = nx.DiGraph()
     graph.add_node("start", type="START", position=(0, 0, 0))
     graph.add_node("middle", type="ENEMY", position=(1, 0, 0))
     graph.add_node("goal", type="GOAL", position=(3, 0, 0))
     graph.add_edge("start", "middle", edge_type="PATH")
 
+    with pytest.raises(RuntimeError, match="Disconnected progression component"):
+        EvolutionaryTopologyGenerator._repair_output_connectivity(graph)
+
+
+def test_output_connectivity_prunes_disconnected_optional_decoration():
+    graph = nx.DiGraph()
+    graph.add_node("start", type="START", position=(0, 0, 0))
+    graph.add_node("middle", type="ENEMY", position=(1, 0, 0))
+    graph.add_node("decoration", type="TREASURE", position=(3, 0, 0))
+    graph.add_edge("start", "middle", edge_type="PATH")
+
     repaired = EvolutionaryTopologyGenerator._repair_output_connectivity(graph)
 
+    assert "decoration" not in repaired
     assert nx.is_connected(repaired.to_undirected())
-    assert any("goal" in edge for edge in repaired.edges())
+    assert repaired.graph["generation_stats"]["connectivity_pruned_optional_nodes"] == 1
 
 
-def test_output_connectivity_does_not_add_raw_path_into_goal_component_without_boss_anchor():
+def test_output_connectivity_prunes_disconnected_unreferenced_key():
     graph = nx.DiGraph()
-    graph.add_node("start", type="START", position=(0, 0, 0))
-    graph.add_node("middle", type="ENEMY", position=(1, 0, 0))
-    graph.add_node("goal", type="GOAL", position=(3, 0, 0))
-    graph.add_edge("start", "middle", edge_type="PATH")
+    graph.add_node("start", type="START")
+    graph.add_node("goal", type="GOAL")
+    graph.add_node("surplus_key", type="KEY", key_id=7)
+    graph.add_edge("start", "goal", edge_type="PATH")
 
     repaired = EvolutionaryTopologyGenerator._repair_output_connectivity(graph)
-    incoming = list(repaired.in_edges("goal", data=True))
 
-    assert incoming
-    assert all(str(data.get("edge_type", "")).upper() != "PATH" for _src, _dst, data in incoming)
+    assert "surplus_key" not in repaired
+
+
+def test_output_connectivity_rejects_disconnected_required_key():
+    graph = nx.DiGraph()
+    graph.add_node("start", type="START")
+    graph.add_node("goal", type="GOAL")
+    graph.add_node("required_key", type="KEY", key_id=7)
+    graph.add_edge("start", "goal", edge_type="LOCKED", key_required=7)
+
+    with pytest.raises(RuntimeError, match="Disconnected progression component"):
+        EvolutionaryTopologyGenerator._repair_output_connectivity(graph)
 
 
 def test_leniency_counts_boss_key_and_boss_lock():

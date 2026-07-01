@@ -4614,7 +4614,6 @@ class StateSpaceAStar:
             manhattan_h = abs(pos[0] - goal[0]) + abs(pos[1] - goal[1])
 
         # Track current node and graph-derived lower bounds.
-        current_node = None
         has_graph_topology = False
         graph_hops_lb = None
         locked_edges_lb = None
@@ -4628,7 +4627,6 @@ class StateSpaceAStar:
                     if (r_off <= pos[0] < r_off + ROOM_HEIGHT and
                         c_off <= pos[1] < c_off + ROOM_WIDTH):
                         node = self.env.room_to_node.get(room_pos)
-                        current_node = node
                         if node is not None:
                             bfs_dist = self._graph_bfs_dist.get(node, None)
                             if bfs_dist is not None:

@@ -77,12 +77,17 @@ def _apply_maskgit_neighbor_boundary_tokens(
             if latent_t.dim() == 3:
                 latent_t = latent_t.unsqueeze(0)
             if latent_t.dim() != 4:
-                continue
+                raise ValueError(
+                    f"Neighbor latent for {direction} must be rank 3 or 4, got {tuple(latent_t.shape)}"
+                )
             with torch.no_grad():
                 neighbor_logits = pipeline._decode_latent_with_vqvae(latent_t)
                 neighbor_grid = neighbor_logits.argmax(dim=1)[0].to(device=pipeline.device, dtype=torch.long)
             if tuple(neighbor_grid.shape[-2:]) != (ROOM_HEIGHT, ROOM_WIDTH):
-                continue
+                raise ValueError(
+                    f"Decoded neighbor grid for {direction} has shape {tuple(neighbor_grid.shape)}, "
+                    f"expected {(ROOM_HEIGHT, ROOM_WIDTH)}"
+                )
             dst = _CURRENT_BOUNDARY_SLICES[direction]
             src = _NEIGHBOR_OPPOSITE_SLICES[direction]
             source_values = neighbor_grid[src]
@@ -95,8 +100,10 @@ def _apply_maskgit_neighbor_boundary_tokens(
             fixed_mask_view[write_mask] = True
             fixed_mask[0][dst] = fixed_mask_view
             applied += int(write_mask.sum().item())
-        except (AttributeError, RuntimeError, ValueError, TypeError):
-            logger.debug("Skipping MaskGIT neighbor boundary anchors for direction %s", direction, exc_info=True)
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+            raise RuntimeError(
+                f"MaskGIT neighbor-boundary decoding failed for direction {direction}"
+            ) from exc
     return fixed_tokens, fixed_mask, applied
 
 
@@ -165,6 +172,32 @@ def _default_latent_shape_chw(
     )
 
 
+def _categorical_codebook_probabilities(pipeline, active_codebook_size: int) -> torch.Tensor:
+    """Return normalized on-device codebook usage or an explicit uniform prior."""
+    size = int(max(1, active_codebook_size))
+    probabilities = torch.ones(size, device=pipeline.device, dtype=torch.float32)
+    usage_getter = getattr(pipeline.vqvae, "get_codebook_usage", None)
+    if not callable(usage_getter):
+        return probabilities / probabilities.sum()
+
+    usage = usage_getter()
+    if not isinstance(usage, torch.Tensor):
+        raise TypeError("vqvae.get_codebook_usage() must return a tensor")
+    usage_values = usage.detach().to(device=pipeline.device, dtype=torch.float32).flatten()
+    if int(usage_values.numel()) < size:
+        raise ValueError(
+            f"Codebook usage has {int(usage_values.numel())} entries, "
+            f"but categorical sampling requested {size}."
+        )
+    usage_values = usage_values[:size]
+    if not bool(torch.isfinite(usage_values).all()):
+        raise ValueError("Codebook usage contains non-finite values")
+    usage_values = usage_values.clamp_min(0.0)
+    if float(usage_values.sum().item()) > 0.0:
+        probabilities = usage_values
+    return probabilities / probabilities.sum().clamp_min(1e-9)
+
+
 def _infer_latent_shape_from_neighbors_or_default(
     pipeline,
     neighbor_latents: Dict[str, Optional[Any]],
@@ -229,17 +262,23 @@ def generate_room_batch(
     )
     batch_conditions: List[torch.Tensor] = []
     per_room_inputs: List[Dict[str, Any]] = []
+    needs_condition = not (
+        sampler_mode == "categorical"
+        and pipeline.room_generator_mode != "discrete_masked"
+    )
 
     condition_started_at = time.perf_counter()
     for j, room_id in enumerate(room_ids):
         neighbor_latents = pipeline._normalize_neighbor_latents(
             pipeline._get_neighbor_latents(room_id, mission_graph_physical, room_latents)
         )
-        reference_room_maps = (
-            pipeline._get_neighbor_reference_room_maps(room_id, mission_graph_physical, generated_rooms)
-            if bool(getattr(pipeline.condition_encoder, "use_reference_room_maps", False))
-            else None
-        )
+        reference_room_maps = None
+        if needs_condition and bool(getattr(pipeline.condition_encoder, "use_reference_room_maps", False)):
+            reference_room_maps = pipeline._get_neighbor_reference_room_maps(
+                room_id,
+                mission_graph_physical,
+                generated_rooms,
+            )
         boundary_constraints = pipeline._build_room_boundary_constraints(
             graph=mission_graph_physical,
             room_id=room_id,
@@ -260,14 +299,15 @@ def generate_room_batch(
             room_id=room_id,
             start_goal=start_goal,
         )
-        condition = pipeline._compute_room_condition(
-            neighbor_latents=neighbor_latents,
-            reference_room_maps=reference_room_maps,
-            graph_context=room_graph_context,
-            boundary_constraints=boundary_constraints,
-            position=room_position,
-        )
-        batch_conditions.append(condition.detach())
+        if needs_condition:
+            condition = pipeline._compute_room_condition(
+                neighbor_latents=neighbor_latents,
+                reference_room_maps=reference_room_maps,
+                graph_context=room_graph_context,
+                boundary_constraints=boundary_constraints,
+                position=room_position,
+            )
+            batch_conditions.append(condition.detach())
         per_room_inputs.append(
             {
                 'batch_index': int(j),
@@ -282,17 +322,19 @@ def generate_room_batch(
             }
         )
 
-    if not batch_conditions or not per_room_inputs:
+    if not per_room_inputs or (needs_condition and not batch_conditions):
         return {}
     _record_stage_time(batch_stage_times, "batch_condition_time_sec", condition_started_at)
 
     # Stack per-room conditions into one batch.
     stack_started_at = time.perf_counter()
-    expected_dim = int(batch_conditions[0].dim())
-    if any(int(cond.dim()) != expected_dim for cond in batch_conditions):
-        dims = [int(cond.dim()) for cond in batch_conditions]
-        raise ValueError(f"Inconsistent condition tensor ranks inside batch: {dims}")
-    condition_batch = torch.cat(batch_conditions, dim=0)
+    condition_batch: Optional[torch.Tensor] = None
+    if needs_condition:
+        expected_dim = int(batch_conditions[0].dim())
+        if any(int(cond.dim()) != expected_dim for cond in batch_conditions):
+            dims = [int(cond.dim()) for cond in batch_conditions]
+            raise ValueError(f"Inconsistent condition tensor ranks inside batch: {dims}")
+        condition_batch = torch.cat(batch_conditions, dim=0)
     first_room_graph_context = per_room_inputs[0]['graph_context']
 
     graph_ctx_for_guidance = {
@@ -426,18 +468,7 @@ def generate_room_batch(
             num_embeddings = int(getattr(getattr(pipeline.vqvae, "quantizer", object()), "num_embeddings", 512))
         active_codebook_size = int(max(1, min(num_embeddings, int(categorical_codebook_size or num_embeddings))))
 
-        probs_t = torch.ones(active_codebook_size, device=pipeline.device, dtype=torch.float32)
-        try:
-            usage = pipeline.vqvae.get_codebook_usage()
-            if isinstance(usage, torch.Tensor):
-                usage_t = usage.detach().to(device=pipeline.device, dtype=torch.float32)
-                if int(usage_t.numel()) >= active_codebook_size:
-                    usage_t = usage_t.flatten()[:active_codebook_size].clamp_min(0.0)
-                    if bool((usage_t.sum() > 0).item()):
-                        probs_t = usage_t
-        except (AttributeError, RuntimeError, ValueError, TypeError):
-            pass
-        probs_t = probs_t / probs_t.sum().clamp_min(1e-9)
+        probs_t = _categorical_codebook_probabilities(pipeline, active_codebook_size)
 
         sampled = []
         for inp in per_room_inputs:
@@ -531,8 +562,10 @@ def generate_room_batch(
                             graph_data=room_graph_guidance,
                             num_steps=max(8, int(num_diffusion_steps) // 2),
                         )
-                except (AttributeError, RuntimeError, ValueError, TypeError):
-                    continue
+                except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+                    raise RuntimeError(
+                        f"Boundary latent inpainting failed for room {inp['room_id']!r}"
+                    ) from exc
             _record_stage_time(batch_stage_times, "batch_boundary_inpaint_time_sec", inpaint_started_at)
         decode_started_at = time.perf_counter()
         logits_batch = pipeline._decode_latent_with_vqvae(z_batch)
@@ -561,7 +594,11 @@ def generate_room_batch(
             apply_repair=apply_repair,
             start_goal_coords=inp['start_goal'],
             seed=inp['seed'],
-            precomputed_condition=condition_batch[i:i + 1],
+            precomputed_condition=(
+                condition_batch[i:i + 1]
+                if isinstance(condition_batch, torch.Tensor)
+                else None
+            ),
             precomputed_latent=z_batch[i:i + 1],
             precomputed_logits=logits_batch[i:i + 1],
             precomputed_tokens=(
@@ -805,19 +842,7 @@ def generate_room(
             num_embeddings = int(getattr(getattr(pipeline.vqvae, "quantizer", object()), "num_embeddings", 512))
         active_codebook_size = int(max(1, min(num_embeddings, int(categorical_codebook_size or num_embeddings))))
 
-        probs_t = torch.ones(active_codebook_size, device=pipeline.device, dtype=torch.float32)
-        try:
-            usage = pipeline.vqvae.get_codebook_usage()
-            if isinstance(usage, torch.Tensor):
-                usage_t = usage.detach().to(device=pipeline.device, dtype=torch.float32).flatten()
-                if int(usage_t.numel()) >= active_codebook_size:
-                    usage_t = usage_t[:active_codebook_size].clamp_min(0.0)
-                    if bool(torch.isfinite(usage_t).all()) and float(usage_t.sum().item()) > 0.0:
-                        probs_t = usage_t
-        except (AttributeError, RuntimeError, ValueError, TypeError) as e:
-            pipeline._bump_diagnostic("categorical_prior_fallback")
-            logger.debug("Falling back to uniform categorical priors (codebook usage unavailable): %s", e)
-        probs_t = probs_t / probs_t.sum().clamp_min(1e-9)
+        probs_t = _categorical_codebook_probabilities(pipeline, active_codebook_size)
 
         torch_generator = None
         if seed is not None:
@@ -933,9 +958,10 @@ def generate_room(
                         noise_strength=0.25,  # Lower noise for boundary blending (not full regeneration)
                     )
                     pipeline._bump_diagnostic("boundary_latent_masking_applied")
-            except (AttributeError, RuntimeError, ValueError, TypeError) as e:
-                pipeline._bump_diagnostic("boundary_latent_masking_fallback")
-                logger.debug("Boundary latent masking skipped due to error: %s", e)
+            except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+                raise RuntimeError(
+                    f"Boundary latent inpainting failed for room {room_id!r}"
+                ) from exc
             _record_stage_time(stage_times, "boundary_inpaint_time_sec", inpaint_started_at)
 
         # BLOCK II: VQ-VAE Decoding
@@ -996,8 +1022,10 @@ def generate_room(
                             logits[0, :, r, col] = neg_large
                             logits[0, door_tile, r, col] = pos_large
                             door_tiles_forced += 1
-        except (AttributeError, RuntimeError, ValueError, TypeError) as e:
-            logger.debug("Topology door constrained decoding skipped for room %s: %s", room_id, e)
+        except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+            raise RuntimeError(
+                f"Topology-constrained door decoding failed for room {room_id!r}"
+            ) from exc
 
     if door_tiles_forced > 0:
         pipeline._bump_diagnostic("topology_door_tiles_forced")

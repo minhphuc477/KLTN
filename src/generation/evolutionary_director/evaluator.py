@@ -1587,6 +1587,12 @@ class TensionCurveEvaluator:
         
         if not start or not goal:
             return False
+
+        # START-to-GOAL reachability alone is insufficient: detached keys,
+        # switches, tokens, or challenge rooms make the exported mission
+        # structurally invalid even when the critical path remains intact.
+        if not graph.is_graph_connected():
+            return False
         
         # Check basic connectivity
         path = self._find_path(graph, start.id, goal.id)

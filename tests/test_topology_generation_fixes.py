@@ -50,9 +50,6 @@ class TestTopologyGeneratorMaxNodes:
 
     def test_cvt_emitter_archive_persistence_round_trips(self, tmp_path):
         """Topology QD archives should be reusable across runs."""
-        if CVTEliteArchive is None:
-            pytest.skip("CVTEliteArchive unavailable")
-
         archive_path = tmp_path / "topology_qd_archive.pkl"
         generator = EvolutionaryTopologyGenerator(
             target_curve=[0.2, 0.5, 0.8],

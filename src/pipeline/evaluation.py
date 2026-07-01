@@ -467,7 +467,11 @@ def _validate_dungeon(pipeline, dungeon_grid: np.ndarray) -> Optional[Dict[str, 
         result = validator.validate_single(dungeon_grid)
 
         path_length = int(result.path_length) if result.is_solvable else 0
-        linearity = float(pipeline.map_elites.calculate_linearity(path_length, playable_area))
+        linearity = float(
+            pipeline.map_elites.calculate_linearity(result.path)
+            if result.is_solvable and result.path
+            else 0.0
+        )
         backtracking = float(np.clip(getattr(result, 'backtracking_score', 0.0), 0.0, 1.0))
         reachability = float(np.clip(getattr(result, 'reachability', 0.0), 0.0, 1.0))
         lock_pressure = min(1.0, lock_count / max(1.0, float(max(1, key_count))))

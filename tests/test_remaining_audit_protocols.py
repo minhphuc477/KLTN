@@ -42,7 +42,11 @@ def _branch_graph() -> nx.DiGraph:
 
 def test_runtime_map_elites_prefers_macro_graph_descriptors():
     evaluator = MAPElitesEvaluator(enable_advanced_archive=False, descriptor_mode="hybrid")
-    solver_result = {"solvable": True, "path_length": 5}
+    solver_result = {
+        "solvable": True,
+        "path_length": 3,
+        "path": [(1, 1), (1, 2), (1, 3)],
+    }
     chain_features, chain_metrics = evaluator._build_behavior_descriptor(_grid(), solver_result, _chain_graph())
     branch_features, branch_metrics = evaluator._build_behavior_descriptor(_grid(), solver_result, _branch_graph())
 
@@ -64,7 +68,7 @@ def test_runtime_map_elites_rejects_infeasible_macro_descriptor_path():
 
     _, metrics = evaluator._build_behavior_descriptor(
         _grid(),
-        {"solvable": True, "path_length": 1},
+        {"solvable": True, "path_length": 2, "path": [(1, 1), (1, 2)]},
         graph,
     )
 
@@ -83,7 +87,7 @@ def test_runtime_map_elites_does_not_collect_required_item_as_provider():
 
     _, metrics = evaluator._build_behavior_descriptor(
         _grid(),
-        {"solvable": True, "path_length": 2},
+        {"solvable": True, "path_length": 2, "path": [(1, 1), (1, 2)]},
         graph,
     )
 
@@ -102,7 +106,7 @@ def test_runtime_map_elites_collects_real_item_provider_for_item_gate():
 
     _, metrics = evaluator._build_behavior_descriptor(
         _grid(),
-        {"solvable": True, "path_length": 2},
+        {"solvable": True, "path_length": 2, "path": [(1, 1), (1, 2)]},
         graph,
     )
 
@@ -130,7 +134,11 @@ class _DungeonWrapper:
 
 class _AlwaysSolves:
     def solve(self, _dungeon):
-        return {"solvable": True, "path_length": 5}
+        return {
+            "solvable": True,
+            "path_length": 3,
+            "path": [(1, 1), (1, 2), (1, 3)],
+        }
 
 
 def test_map_elites_list_runner_forwards_embedded_mission_graph():

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import logging
 import math
 import random
@@ -305,8 +306,6 @@ class AddBossGauntlet(ProductionRule):
         
         pred = preds[0]
         goal_pos = goal.position
-        goal_z = goal_pos[2] if len(goal_pos) > 2 else 0
-
         # Create Boss Door and Boss chain directly so strict validation passes
         # without needing a later normalization pass.
         boss_door_id = max(graph.nodes.keys()) + 1
@@ -639,8 +638,6 @@ class CreateHubRule(ProductionRule):
         
         # Add branches
         hub_pos = hub_node.position
-        floor = hub_pos[2] if len(hub_pos) > 2 else 0
-        
         for i in range(branches_to_add):
             # Create branch with at least 2 nodes
             branch_start_id = max(graph.nodes.keys()) + 1
@@ -822,7 +819,6 @@ class AddSecretRule(ProductionRule):
         
         anchor_node = rng.choice(candidates)
         anchor_pos = anchor_node.position
-        floor = anchor_pos[2] if len(anchor_pos) > 2 else 0
         secret_pos = _bounded_free_position(
             graph,
             anchor_pos,
@@ -2565,8 +2561,6 @@ class AddResourceLoopRule(ProductionRule):
             # Create new neighbor
             farm_id = max(graph.nodes.keys()) + 1
             farm_pos = graph.nodes[gate_source].position
-            floor = farm_pos[2] if len(farm_pos) > 2 else 0
-            
             farm_node = MissionNode(
                 id=farm_id,
                 node_type=NodeType.RESOURCE_FARM,
@@ -2711,6 +2705,7 @@ class AddMultiLockRule(ProductionRule):
     def apply(self, graph: MissionGraph, context: Dict[str, Any]) -> MissionGraph:
         """Create multi-switch battery pattern."""
         rng = context.get('rng') or random
+        original = copy.deepcopy(graph)
         
         # Find hub with 3+ branches
         hubs = [n for n in graph.nodes.values() if graph.get_node_degree(n.id) >= 3]
@@ -2753,7 +2748,7 @@ class AddMultiLockRule(ProductionRule):
             switch_ids.append(switch_id)
         
         if len(switch_ids) < 2:
-            return graph
+            return original
         
         # Find edge to lock with battery
         # Prefer edges leaving the hub
@@ -2789,7 +2784,7 @@ class AddMultiLockRule(ProductionRule):
                     "AddMultiLockRule: No viable lock edge keeps all switches reachable; "
                     "skipping lock conversion"
                 )
-                return graph
+                return original
 
             lock_edge_idx, lock_edge = rng.choice(viable_candidates)
 

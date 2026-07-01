@@ -31,7 +31,12 @@ def test_map_elites_archive_round_trips(tmp_path):
     evaluator.add_dungeon(
         dungeon=grid,
         grid=grid,
-        solver_result={"solvable": True, "path_length": 12, "quality_score": 0.75},
+        solver_result={
+            "solvable": True,
+            "path_length": 3,
+            "path": [(1, 1), (1, 2), (1, 3)],
+            "quality_score": 0.75,
+        },
     )
 
     evaluator.save_archive(archive_path)
@@ -77,7 +82,12 @@ def test_symbolic_pipeline_can_warm_start_map_elites_archive(tmp_path):
     evaluator.add_dungeon(
         dungeon=grid,
         grid=grid,
-        solver_result={"solvable": True, "path_length": 12, "quality_score": 0.75},
+        solver_result={
+            "solvable": True,
+            "path_length": 3,
+            "path": [(1, 1), (1, 2), (1, 3)],
+            "quality_score": 0.75,
+        },
     )
     evaluator.save_archive(archive_path)
 

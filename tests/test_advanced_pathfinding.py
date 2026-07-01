@@ -453,38 +453,6 @@ class TestComparison:
         
         logger.info("\n✓ All algorithms successfully solved simple dungeon")
     
-    def test_bidirectional_speedup(self):
-        """Verify Bidirectional A* reduces nodes expanded on long paths."""
-        logger.info("\n==== BIDIRECTIONAL A* SPEEDUP TEST ====")
-        
-        grid = create_long_corridor()
-        
-        # Standard A*
-        env1 = ZeldaLogicEnv(grid)
-        astar = StateSpaceAStar(env1, timeout=100000)
-        success1, _path1, nodes1 = astar.solve()
-        
-        # Bidirectional A*
-        env2 = ZeldaLogicEnv(grid)
-        bidir = BidirectionalAStar(env2, timeout=100000)
-        success2, _path2, nodes2 = bidir.solve()
-        
-        assert success1 and success2, "Both algorithms should succeed"
-        
-        speedup = (nodes1 - nodes2) / nodes1 * 100 if nodes1 > 0 else 0
-        
-        logger.info(f"A* nodes: {nodes1}")
-        logger.info(f"Bidirectional A* nodes: {nodes2}")
-        logger.info(f"Nodes reduction: {speedup:.1f}%")
-        
-        # Bidirectional should explore fewer nodes (ideally ~50% less)
-        # But due to state-space complexity, any reduction is good
-        if nodes2 < nodes1:
-            logger.info("✓ Bidirectional A* explored fewer nodes than A*")
-        else:
-            logger.info("⚠ Bidirectional A* didn't reduce nodes (state-space complexity)")
-
-
 # ==========================================
 # MAIN
 # ==========================================

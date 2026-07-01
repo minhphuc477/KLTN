@@ -82,16 +82,16 @@ def graph_context(device):
 # INITIALIZATION TESTS
 # =============================================================================
 
-def test_pipeline_initialization(pipeline):
-    """Test that pipeline initializes all components."""
+def test_pipeline_initialization_disables_uncheckpointed_logic_guidance(pipeline):
+    """Core smoke components initialize, while untrained LogicNet stays disabled."""
     assert pipeline.vqvae is not None
     assert pipeline.condition_encoder is not None
     assert pipeline.diffusion is not None
-    assert pipeline.logic_net is not None
+    assert pipeline.logic_net is None
+    assert pipeline.logic_net_checkpoint_loaded is False
     assert pipeline.refiner is not None
     assert pipeline.map_elites is not None
     
-    print("✓ All 7 blocks initialized successfully")
 
 
 def test_pipeline_device(device):
@@ -956,6 +956,7 @@ def test_generate_room_batch_categorical_sampler_uses_shared_latent_shape(monkey
         generate_topology=False,
         use_topological_positional_encoding=True,
     )
+    pipeline.condition_encoder = None
     captured_latents = {}
 
     def fake_generate_room(**kwargs):
@@ -1209,7 +1210,7 @@ def test_logic_guidance_effect(pipeline, neighbor_latents, graph_context):
     )
     
     assert np.array_equal(result_no_guidance.neural_grid, result_with_guidance.neural_grid)
-    assert pipeline.runtime_diagnostics["logic_guidance_disabled_untrained_logic_net"] >= 1
+    assert pipeline.runtime_diagnostics["logic_guidance_disabled_missing_component"] >= 1
     assert pipeline.diffusion.guidance.logic_net is None
 
 

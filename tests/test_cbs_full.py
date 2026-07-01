@@ -313,11 +313,10 @@ class TestCuriosityHeuristic:
         
         # Solve and verify it explores
         success, path, states_explored, metrics = cbs.solve()
-        if success:
-            assert len(path) > 0, "Explorer should find a path"
-            # Check metrics for exploration evidence
-            assert states_explored > 0 or metrics.nodes_expanded > 0, \
-                "Explorer should explore states"
+        assert success, "Explorer should solve the reachable fixture"
+        assert len(path) > 0, "Explorer should find a path"
+        assert states_explored > 0 or metrics.nodes_expanded > 0, \
+            "Explorer should explore states"
 
     def test_utility_function_with_curiosity(self, belief_map):
         """

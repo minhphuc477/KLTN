@@ -2,9 +2,7 @@
 Tests for the standalone Semantic Gaussian VAE baseline.
 """
 
-import pytest
-
-torch = pytest.importorskip("torch")
+import torch
 
 
 class TestSemanticGaussianVAE:

@@ -35,6 +35,7 @@ import threading
 from typing import Dict, Iterable, List, Tuple, Optional, Any, Sequence
 
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
@@ -370,15 +371,11 @@ class VectorQuantizer(nn.Module):
             
             # DDP synchronization: aggregate stats across all GPUs
             # before applying EMA so every replica sees the same update.
-            try:
-                import torch.distributed as dist
-                if dist.is_initialized():
-                    work_cluster = dist.all_reduce(cluster_size, op=dist.ReduceOp.SUM, async_op=True)
-                    work_embedding = dist.all_reduce(embedding_sum, op=dist.ReduceOp.SUM, async_op=True)
-                    work_cluster.wait()
-                    work_embedding.wait()
-            except (ImportError, RuntimeError):
-                pass  # single-GPU fallback: no-op
+            if dist.is_available() and dist.is_initialized():
+                work_cluster = dist.all_reduce(cluster_size, op=dist.ReduceOp.SUM, async_op=True)
+                work_embedding = dist.all_reduce(embedding_sum, op=dist.ReduceOp.SUM, async_op=True)
+                work_cluster.wait()
+                work_embedding.wait()
             
             self._ema_update_counter += 1
             decay = self._current_ema_decay()
@@ -437,14 +434,10 @@ class VectorQuantizer(nn.Module):
                 batch_active_mask = torch.bincount(
                     indices.view(-1), minlength=self.num_embeddings
                 ).to(device=self.ema_cluster_size.device) > 0
-                try:
-                    import torch.distributed as dist
-                    if dist.is_initialized():
-                        active_int = batch_active_mask.to(dtype=torch.int32)
-                        dist.all_reduce(active_int, op=dist.ReduceOp.MAX)
-                        batch_active_mask = active_int > 0
-                except (ImportError, RuntimeError):
-                    pass  # single-GPU fallback: no-op
+                if dist.is_available() and dist.is_initialized():
+                    active_int = batch_active_mask.to(dtype=torch.int32)
+                    dist.all_reduce(active_int, op=dist.ReduceOp.MAX)
+                    batch_active_mask = active_int > 0
                 batch_active = int(batch_active_mask.sum().item())
                 dead_mask = dead_mask & (~batch_active_mask)
             candidate_dead = int(dead_mask.sum().item())
@@ -472,12 +465,8 @@ class VectorQuantizer(nn.Module):
                 new_embeddings = new_embeddings + torch.randn_like(new_embeddings) * 0.01
                 
                 # DDP: broadcast from rank 0 so all replicas reset identically
-                try:
-                    import torch.distributed as dist
-                    if dist.is_initialized():
-                        dist.broadcast(new_embeddings, src=0)
-                except (ImportError, RuntimeError):
-                    pass  # single-GPU fallback: no-op
+                if dist.is_available() and dist.is_initialized():
+                    dist.broadcast(new_embeddings, src=0)
                 
                 self.embedding.weight.data[dead_mask] = new_embeddings
                 

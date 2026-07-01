@@ -50,8 +50,6 @@ def _build_mission_graph(seed: int, num_rooms: int):
 
 def _normalize_mode(mode: str) -> str:
     m = str(mode).strip().lower()
-    if m == "upgraded":
-        return "gat2"
     if m not in {"none", "lightweight", "gat2"}:
         raise ValueError(f"Invalid mode={mode!r}. Expected none|lightweight|gat2")
     return m

@@ -705,7 +705,7 @@ def test_block_iv_topology_refinement_mode_switch_runs_all_modes():
     }
 
     outputs = []
-    for mode in ["none", "lightweight", "sparse_edge", "sparse_directed_semantic", "upgraded", "graphormer"]:
+    for mode in ["none", "lightweight", "sparse_edge", "sparse_directed_semantic", "gat2", "graphormer"]:
         updated = model.set_topology_refinement_mode(mode)
         assert updated > 0
         assert model.get_topology_refinement_mode() == mode
@@ -723,7 +723,7 @@ def test_block_iv_topology_refinement_mode_switch_runs_all_modes():
     # Ensure mode changes are not degenerate no-ops for all outputs.
     diff_light_vs_up = float((outputs[1] - outputs[2]).abs().mean().item())
     assert diff_light_vs_up >= 0.0
-    print("  [OK] Block IV (Topology Modes): none/lightweight/sparse_edge/sparse_directed_semantic/upgraded/graphormer execution OK")
+    print("  [OK] Block IV (Topology Modes): none/lightweight/sparse_edge/sparse_directed_semantic/gat2/graphormer execution OK")
 
 
 def test_block_iv_attention_mode_switch_runs_softmax_and_linear_hedgehog():

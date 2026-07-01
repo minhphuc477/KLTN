@@ -236,7 +236,6 @@ def run_ai_generation_worker(gui, logger):
         mission_data = mission_graph_to_gnn_input(mission_graph)
         mission_data["seed"] = seed
 
-        edge_index = mission_data["edge_index"]
         num_nodes = mission_data["num_nodes"]
         num_edges = mission_data["num_edges"]
         logger.info(

@@ -421,8 +421,6 @@ class DiffusionTrainingConfig:
         self.num_timesteps = num_timesteps
         self.schedule_type = schedule_type
         trm = str(topology_refinement_mode).strip().lower()
-        if trm == "upgraded":
-            trm = "gat2"
         allowed_topology_modes = {
             "none",
             "lightweight",
@@ -3436,10 +3434,10 @@ class DiffusionTrainer:
         self._update_ema()
         self._accumulation_micro_steps = 0
         self.global_step += 1
-        self._apply_lr_warmup(completed_steps=self.global_step)
         scheduler = getattr(self, "scheduler", None)
         if scheduler is not None:
             scheduler.step()
+        self._apply_lr_warmup(completed_steps=self.global_step)
 
         metrics["optimizer_step"] = 1.0
         metrics["gradient_accumulation_micro_steps"] = 0.0
@@ -4569,7 +4567,6 @@ def main():
             'gat2', 'gat2_directed', 'gat2_semantic', 'gat2_directed_semantic',
             'graphormer', 'graphormer_learned', 'graphormer_learned_directed',
             'graphormer_learned_semantic', 'graphormer_learned_directed_semantic',
-            'upgraded',
         ],
         help='Topology preprocessing inside diffusion cross-attention (gat2 is explicit 2-layer GAT).',
     )

@@ -1084,8 +1084,10 @@ class ZeldaRoomDataset(Dataset):
                                         puzzle_stage_trace_decay=self.puzzle_stage_trace_decay,
                                     )
                                 )
-                except (AttributeError, RuntimeError, ValueError, TypeError) as e:
-                    logger.debug(f"Skipping dungeon {dungeon_num}v{variant}: {e}")
+                except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+                    raise RuntimeError(
+                        f"Failed to load room dataset entry for dungeon {dungeon_num} variant {variant}"
+                    ) from exc
         
         logger.info(f"Loaded {len(self.rooms)} individual rooms")
     

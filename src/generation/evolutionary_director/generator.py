@@ -140,9 +140,6 @@ class EvolutionaryTopologyGenerator:
         if parsed_strategy not in {"ga", "cvt_emitter"}:
             logger.warning("Unknown search_strategy='%s', defaulting to 'ga'", search_strategy)
             parsed_strategy = "ga"
-        if parsed_strategy == "cvt_emitter" and CVTEliteArchive is None:
-            logger.warning("CVTEliteArchive unavailable, falling back to GA strategy")
-            parsed_strategy = "ga"
         self.search_strategy = parsed_strategy
         self.qd_archive_cells = int(max(32, qd_archive_cells))
         self.qd_init_random_fraction = float(np.clip(float(qd_init_random_fraction), 0.05, 0.95))
@@ -554,8 +551,25 @@ class EvolutionaryTopologyGenerator:
             # Combine and select survivors (mu+lambda)
             population = self._select_survivors(population + offspring)
         
-        # Get best individual
-        best = max(population, key=lambda ind: ind.fitness)
+        # Export only a phenotype whose complete mission graph is connected.
+        # Fitness evaluation already marks disconnected graphs infeasible, but
+        # small populations can contain no feasible individual under all soft
+        # descriptor constraints. Connectivity remains a hard export contract.
+        ranked = sorted(population, key=self._individual_sort_key)
+        best = next(
+            (
+                individual
+                for individual in ranked
+                if individual.phenotype is not None
+                and individual.phenotype.is_graph_connected()
+            ),
+            None,
+        )
+        if best is None:
+            raise RuntimeError(
+                "Evolution produced no connected mission phenotype; "
+                "increase the population/generation budget or revise grammar rules"
+            )
         self.last_best_individual = best
         
         logger.info(
@@ -836,6 +850,11 @@ class EvolutionaryTopologyGenerator:
                 candidate = constraint_grammar.repair_progression_constraints(candidate)
                 candidate = constraint_grammar.ensure_anchor_nodes(candidate)
             candidate.sanitize()
+            if not candidate.is_graph_connected():
+                logger.debug(
+                    "Rejected pedagogical repair that disconnected progression nodes"
+                )
+                break
             repaired = candidate
             repairs_applied += 1
             metrics = self.evaluator._extract_descriptor_metrics(repaired)
@@ -983,6 +1002,12 @@ class EvolutionaryTopologyGenerator:
                     candidate = self._repair_pedagogical_progression(candidate, constraint_grammar=constraint_grammar)
                     candidate = constraint_grammar.ensure_anchor_nodes(candidate)
                 candidate.sanitize()
+                if not candidate.is_graph_connected():
+                    logger.debug(
+                        "Rejected %s progression repair because it disconnected the graph",
+                        rule.name,
+                    )
+                    continue
                 candidate_metrics = self.evaluator._extract_descriptor_metrics(candidate)
                 candidate_gap = self._progression_balance_gap(candidate_metrics)
                 if candidate_gap + 1e-6 < best_gap:
@@ -1152,6 +1177,12 @@ class EvolutionaryTopologyGenerator:
                     if not constraint_grammar.validate_goal_gauntlet(candidate, log_failures=False):
                         continue
                 candidate.sanitize()
+                if not candidate.is_graph_connected():
+                    logger.debug(
+                        "Rejected %s gate-economy repair because it disconnected the graph",
+                        rule.name,
+                    )
+                    continue
                 candidate_metrics = self.evaluator._extract_descriptor_metrics(candidate)
                 candidate_gap = self._progression_balance_gap(candidate_metrics)
                 if candidate_gap + 1e-6 < best_gap:
@@ -1184,12 +1215,12 @@ class EvolutionaryTopologyGenerator:
     @staticmethod
     def _repair_output_connectivity(graph: nx.Graph) -> nx.Graph:
         """
-        Connect disconnected physical components with PATH edges.
+        Remove disconnected optional decoration without inventing progression.
 
-        Block I search can occasionally leave an isolated side-room after
-        constraint repair. Downstream strict topology validation rejects those
-        graphs, so final export stitches the components together using the
-        closest non-goal anchors.
+        A disconnected component containing a progression anchor is a grammar
+        failure. Connecting it with a synthetic PATH/BOSS_LOCKED edge can
+        bypass the generated key, boss, switch, or token economy, so such
+        graphs fail closed instead of being relabeled as valid.
         """
         if graph.number_of_nodes() <= 1:
             return graph
@@ -1201,44 +1232,56 @@ class EvolutionaryTopologyGenerator:
         repaired = graph.copy()
         repaired.graph["generation_stats"] = copy.deepcopy(graph.graph.get("generation_stats", {}))
         stats = repaired.graph.setdefault("generation_stats", {})
-        protected_goal_types = {"GOAL", "BOSS", "BOSS_DOOR"}
-        protected_goal_nodes = {
-            node_id
-            for node_id, attrs in repaired.nodes(data=True)
-            if str(attrs.get("type", attrs.get("label", ""))).strip().upper() in protected_goal_types
+        optional_types = {"EMPTY", "ENEMY", "SECRET", "TREASURE", "SCENIC", "ARENA"}
+        required_key_ids = {
+            data.get("key_required")
+            for _source, _target, data in repaired.edges(data=True)
+            if data.get("key_required") is not None
         }
+        required_key_ids.update(
+            attrs.get("key_id")
+            for _node_id, attrs in repaired.nodes(data=True)
+            if str(attrs.get("type", "")).upper() in {"LOCK", "BOSS_DOOR"}
+            and attrs.get("key_id") is not None
+        )
+        fungible_key_required = any(
+            int(data.get("requires_key_count", 0) or 0) > 0
+            for _source, _target, data in repaired.edges(data=True)
+        )
+        required_switch_ids: Set[Any] = set()
+        required_items: Set[str] = set()
+        token_required = False
+        for _source, _target, data in repaired.edges(data=True):
+            switch_id = data.get("switch_id")
+            if switch_id is not None:
+                required_switch_ids.add(switch_id)
+            required_switch_ids.update(data.get("switches_required", []) or [])
+            item_required = data.get("item_required")
+            if item_required:
+                required_items.add(str(item_required))
+            token_required = token_required or int(data.get("token_count", 0) or 0) > 0
 
         def _node_type(node_id: Any) -> str:
             attrs = repaired.nodes.get(node_id, {})
             return str(attrs.get("type", attrs.get("label", "")) or "").strip().upper()
 
-        def _position(node_id: Any) -> Tuple[float, float, float]:
-            pos = repaired.nodes.get(node_id, {}).get("position", (0, 0, 0))
-            if isinstance(pos, (list, tuple)) and len(pos) >= 2:
-                z = float(pos[2]) if len(pos) > 2 else 0.0
-                return (float(pos[0]), float(pos[1]), z)
-            return (0.0, 0.0, 0.0)
-
-        def _candidate_nodes(component: set[Any]) -> List[Any]:
-            preferred = [node_id for node_id in component if node_id not in protected_goal_nodes]
-            return preferred if preferred else list(component)
-
-        def _source_candidates(main_component_nodes: set[Any], other_component_nodes: set[Any]) -> List[Any]:
-            other_types = {_node_type(node_id) for node_id in other_component_nodes}
-            if other_types and other_types.issubset(protected_goal_types):
-                progression_anchors = [
-                    node_id
-                    for node_id in main_component_nodes
-                    if _node_type(node_id) in {"BOSS", "BOSS_DOOR"}
-                ]
-                if progression_anchors:
-                    return progression_anchors
-            return _candidate_nodes(main_component_nodes)
-
-        def _distance(node_a: Any, node_b: Any) -> float:
-            ax, ay, az = _position(node_a)
-            bx, by, bz = _position(node_b)
-            return abs(ax - bx) + abs(ay - by) + abs(az - bz)
+        def _is_required_provider(node_id: Any) -> bool:
+            attrs = repaired.nodes.get(node_id, {})
+            node_type = _node_type(node_id)
+            if node_type in {"KEY", "BIG_KEY"}:
+                key_id = attrs.get("key_id")
+                return (
+                    (key_id is not None and key_id in required_key_ids)
+                    or (node_type == "KEY" and key_id is None and fungible_key_required)
+                )
+            if node_type == "SWITCH":
+                return node_id in required_switch_ids or attrs.get("switch_id") in required_switch_ids
+            if node_type == "TOKEN":
+                return token_required
+            if node_type in {"ITEM", "PROTECTION_ITEM", "RESOURCE_FARM"}:
+                supplied = attrs.get("item_type") or attrs.get("drops_resource")
+                return bool(supplied and str(supplied) in required_items)
+            return True
 
         components = [set(component) for component in nx.connected_components(repaired.to_undirected())]
         start_candidates = [node for node, attrs in repaired.nodes(data=True) if str(attrs.get("type", "")).upper() == "START"]
@@ -1247,66 +1290,32 @@ class EvolutionaryTopologyGenerator:
             main_index = next((idx for idx, component in enumerate(components) if start_node in component), 0)
         else:
             main_index = max(range(len(components)), key=lambda idx: len(components[idx]))
-        main_component = set(components.pop(main_index))
+        components.pop(main_index)
 
-        connectivity_repairs = 0
-        while components:
-            other_component = components.pop(0)
-            best_pair: Optional[Tuple[Any, Any]] = None
-            best_distance: Optional[float] = None
-            for left in _source_candidates(main_component, other_component):
-                for right in _candidate_nodes(other_component):
-                    dist = _distance(left, right)
-                    if best_distance is None or dist < best_distance:
-                        best_distance = dist
-                        best_pair = (left, right)
-
-            if best_pair is None:
-                logger.warning(
-                    "Unable to find any node pair while repairing output connectivity; component kept disconnected: %s",
-                    sorted(other_component, key=str),
+        pruned_nodes = 0
+        for component in components:
+            anchor_nodes = sorted(
+                (
+                    node_id
+                    for node_id in component
+                    if _node_type(node_id) not in optional_types
+                    and _is_required_provider(node_id)
+                ),
+                key=str,
+            )
+            if anchor_nodes:
+                raise RuntimeError(
+                    "Disconnected progression component cannot be repaired without "
+                    f"changing mission semantics; anchors={anchor_nodes}"
                 )
-                main_component.update(other_component)
-                continue
+            repaired.remove_nodes_from(component)
+            pruned_nodes += len(component)
 
-            source, target = best_pair
-            source_type = _node_type(source)
-            target_type = _node_type(target)
-            protected_progression_link = target_type in protected_goal_types and source_type not in {"BOSS", "BOSS_DOOR"}
-            repair_edge_type = EdgeType.BOSS_LOCKED if protected_progression_link else EdgeType.PATH
-            edge_attrs = {
-                "label": repair_edge_type.name.lower(),
-                "edge_type": repair_edge_type.name,
-                "key_required": None,
-                "item_required": None,
-                "switch_id": None,
-                "metadata": {
-                    "connectivity_repair": True,
-                    "progression_gate_repair": bool(protected_progression_link),
-                },
-                "requires_key_count": 0,
-                "token_count": 0,
-                "token_id": None,
-                "is_window": False,
-                "hazard_damage": 0,
-                "protection_item_id": None,
-                "preferred_direction": None,
-                "battery_id": None,
-                "switches_required": [],
-                "path_savings": 0,
-            }
-            repaired.add_edge(source, target, **edge_attrs)
-            if repaired.is_directed() and _node_type(target) not in protected_goal_types and not repaired.has_edge(target, source):
-                reverse_attrs = copy.deepcopy(edge_attrs)
-                reverse_attrs["metadata"] = {"connectivity_repair": True, "implied_reverse": True}
-                repaired.add_edge(target, source, **reverse_attrs)
-            connectivity_repairs += 1
-            main_component.update(other_component)
-            components = [set(component) for component in nx.connected_components(repaired.to_undirected()) if not component.issubset(main_component)]
-
-        if connectivity_repairs > 0:
-            stats["connectivity_repairs"] = int(stats.get("connectivity_repairs", 0)) + int(connectivity_repairs)
-            stats["total_repairs"] = int(stats.get("total_repairs", 0)) + int(connectivity_repairs)
+        if pruned_nodes > 0:
+            stats["connectivity_pruned_optional_nodes"] = int(
+                stats.get("connectivity_pruned_optional_nodes", 0)
+            ) + int(pruned_nodes)
+            stats["total_repairs"] = int(stats.get("total_repairs", 0)) + int(pruned_nodes)
             stats["repair_applied"] = True
 
         return repaired
@@ -2704,8 +2713,6 @@ class EvolutionaryTopologyGenerator:
 
     def _new_qd_archive(self) -> Any:
         """Create a CVT archive using the generator's configured descriptor space."""
-        if CVTEliteArchive is None:
-            raise RuntimeError("CVTEliteArchive is unavailable")
         return CVTEliteArchive(
             num_cells=int(self.qd_archive_cells),
             feature_dims=4,

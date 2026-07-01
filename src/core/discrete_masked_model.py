@@ -636,6 +636,7 @@ class DiscreteMaskedRoomModel(nn.Module):
         batch_size = int(tokens.shape[0])
         device = tokens.device
         available_counts = ((~fixed_mask) & (~committed)).sum(dim=(1, 2)).clamp_min(1)
+        total_editable_counts = (~fixed_mask).sum(dim=(1, 2)).clamp_min(1)
 
         logits = torch.zeros(batch_size, self.num_classes, ROOM_HEIGHT, ROOM_WIDTH, device=device)
         hidden = self._embed_tokens(tokens)
@@ -643,11 +644,10 @@ class DiscreteMaskedRoomModel(nn.Module):
         committed_per_step: list[Tensor] = []
         for i in range(int(max(1, total_steps))):
             steps_executed += 1
-            step = torch.full(
-                (batch_size,),
-                fill_value=max(0, int(total_steps) - 1 - i),
-                device=device,
-                dtype=torch.long,
+            unresolved_before_step = (~committed).sum(dim=(1, 2))
+            step = self._step_from_mask_ratio(
+                unresolved_before_step.to(dtype=torch.float32)
+                / total_editable_counts.to(dtype=torch.float32)
             )
             logits, hidden = self.forward(tokens, step, context, graph_data=graph_data, return_hidden=True)
             logits = self._apply_edge_aware_logit_bias(
@@ -988,8 +988,8 @@ class DiscreteMaskedRoomModel(nn.Module):
         graph_data: Optional[Dict[str, Tensor]] = None,
         fixed_tokens: Optional[Tensor] = None,
         fixed_mask: Optional[Tensor] = None,
-        min_mask_ratio: float = 0.15,
-        max_mask_ratio: float = 0.90,
+        min_mask_ratio: float = 0.0,
+        max_mask_ratio: float = 1.0,
         topology_focus_map: Optional[Tensor] = None,
         topology_alignment_weight: float = 0.0,
         return_aux: bool = False,
@@ -1010,6 +1010,11 @@ class DiscreteMaskedRoomModel(nn.Module):
         available = ~fixed_mask
         min_mask_ratio = float(min_mask_ratio)
         max_mask_ratio = float(max_mask_ratio)
+        if not 0.0 <= min_mask_ratio <= 1.0 or not 0.0 <= max_mask_ratio <= 1.0:
+            raise ValueError(
+                "min_mask_ratio and max_mask_ratio must both be in [0, 1], "
+                f"got {min_mask_ratio} and {max_mask_ratio}."
+            )
         if min_mask_ratio > max_mask_ratio:
             raise ValueError(
                 f"min_mask_ratio must be <= max_mask_ratio, got {min_mask_ratio} > {max_mask_ratio}."

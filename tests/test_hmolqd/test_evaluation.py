@@ -6,9 +6,7 @@ Tests for solvability validation and quality diversity.
 """
 
 import pytest
-
-# NetworkX required for these tests
-nx = pytest.importorskip("networkx")
+import networkx as nx
 
 
 class TestAgentSimulator:

@@ -209,7 +209,7 @@ CONFIG_FIELDS: List[ConfigField] = [
     ConfigField("diffusion.graph_conditioning_mode", str, "node_sequence", "Graph-conditioning representation.", choices=("node_sequence", "pooled")),
     ConfigField("diffusion.num_timesteps", int, 1000, "Forward diffusion timesteps.", min_value=10),
     ConfigField("diffusion.schedule_type", str, "cosine", "Diffusion noise schedule.", choices=("linear", "cosine")),
-    ConfigField("diffusion.topology_refinement_mode", str, "gat2", "Topology refinement inside attention.", choices=("none", "lightweight", "sparse_edge", "sparse_directed", "sparse_semantic", "sparse_directed_semantic", "gat2", "gat2_directed", "gat2_semantic", "gat2_directed_semantic", "graphormer", "graphormer_learned", "graphormer_learned_directed", "graphormer_learned_semantic", "graphormer_learned_directed_semantic", "upgraded")),
+    ConfigField("diffusion.topology_refinement_mode", str, "gat2", "Topology refinement inside attention.", choices=("none", "lightweight", "sparse_edge", "sparse_directed", "sparse_semantic", "sparse_directed_semantic", "gat2", "gat2_directed", "gat2_semantic", "gat2_directed_semantic", "graphormer", "graphormer_learned", "graphormer_learned_directed", "graphormer_learned_semantic", "graphormer_learned_directed_semantic")),
     ConfigField("diffusion.attention_mode", str, "softmax", "Attention kernel.", choices=("softmax", "linear_hedgehog")),
     ConfigField("diffusion.topology_conditioning_mode", str, "spade", "Room-topology conditioning path.", choices=("additive", "spade")),
     ConfigField("diffusion.hedgehog_feature_dim", int, 32, "Linear-attention feature width.", min_value=4),
@@ -400,23 +400,23 @@ CONFIG_FIELDS: List[ConfigField] = [
     ConfigField("masked_room.graph_conditioning_mode", str, "node_sequence", "Masked-room graph-conditioning mode.", choices=("node_sequence", "pooled")),
     ConfigField("masked_room.use_current_node_distance_features", bool, True, "Inject current-room distance features into masked-room graph conditioning."),
     ConfigField("masked_room.current_node_distance_max", int, 8, "Distance clip used when normalizing current-room graph distances for masked-room training.", min_value=1),
-    ConfigField("masked_room.model_channels", int, 64, "Masked-room U-Net base channels.", min_value=8),
+    ConfigField("masked_room.model_channels", int, 64, "Legacy checkpoint field; the masked transformer requires the compatibility value 64.", min_value=8),
     ConfigField("masked_room.hidden_dim", int, 48, "Masked-room token hidden width.", min_value=8),
     ConfigField("masked_room.masked_steps", int, 8, "Masked-token corruption steps.", min_value=1),
-    ConfigField("masked_room.attention_mode", str, "softmax", "Masked-room attention kernel.", choices=("softmax", "linear_hedgehog")),
+    ConfigField("masked_room.attention_mode", str, "softmax", "Masked transformer attention kernel. Only softmax is implemented.", choices=("softmax",)),
     ConfigField("masked_room.context_attention_mode", str, "concat_encoder", "Masked-room context fusion ablation. concat_encoder is the original baseline; cross_decoder routes context through decoder cross-attention.", choices=("concat_encoder", "cross_decoder")),
-    ConfigField("masked_room.topology_conditioning_mode", str, "additive", "Masked-room room-topology conditioning path.", choices=("additive", "spade")),
-    ConfigField("masked_room.hedgehog_feature_dim", int, 32, "Masked-room linear-attention feature width.", min_value=4),
-    ConfigField("masked_room.graph_auto_linear_attention_nodes", int, 128, "Switch masked-room graph-to-grid attention to linear mode above this node count. 0 disables the auto-switch.", min_value=0),
-    ConfigField("masked_room.spatial_graph_gate_init", float, -2.0, "Initial logit for masked-room graph-conditioning gate."),
-    ConfigField("masked_room.spatial_topology_gate_init", float, -2.0, "Initial logit for masked-room room-topology gate."),
-    ConfigField("masked_room.unet_channel_mult", list, [1, 2], "Per-level masked-room U-Net channel multipliers.", sequence_item_type=int, min_value=1),
-    ConfigField("masked_room.unet_num_res_blocks", int, 1, "Residual blocks per masked-room U-Net level.", min_value=1),
-    ConfigField("masked_room.unet_attention_resolutions", list, [0, 1], "Masked-room U-Net level indices that enable attention.", sequence_item_type=int, min_value=0),
-    ConfigField("masked_room.unet_num_heads", int, 4, "Masked-room U-Net attention head count.", min_value=1),
-    ConfigField("masked_room.unet_dropout", float, 0.1, "Masked-room U-Net residual/attention dropout.", min_value=0.0, max_value=1.0),
-    ConfigField("masked_room.min_mask_ratio", float, 0.12, "Minimum token-mask ratio sampled during masked-room training.", min_value=0.0, max_value=1.0),
-    ConfigField("masked_room.max_mask_ratio", float, 0.85, "Maximum token-mask ratio sampled during masked-room training.", min_value=0.0, max_value=1.0),
+    ConfigField("masked_room.topology_conditioning_mode", str, "additive", "Masked transformer topology conditioning. Only additive conditioning is implemented.", choices=("additive",)),
+    ConfigField("masked_room.hedgehog_feature_dim", int, 32, "Legacy compatibility field; must remain 32.", min_value=4),
+    ConfigField("masked_room.graph_auto_linear_attention_nodes", int, 128, "Legacy compatibility field; must remain 128.", min_value=0),
+    ConfigField("masked_room.spatial_graph_gate_init", float, -2.0, "Legacy compatibility field; must remain -2.0."),
+    ConfigField("masked_room.spatial_topology_gate_init", float, -2.0, "Legacy compatibility field; must remain -2.0."),
+    ConfigField("masked_room.unet_channel_mult", list, [1, 2], "Legacy stage list whose length sets masked-transformer depth.", sequence_item_type=int, min_value=1),
+    ConfigField("masked_room.unet_num_res_blocks", int, 1, "Transformer layers per legacy stage.", min_value=1),
+    ConfigField("masked_room.unet_attention_resolutions", list, [0, 1], "Legacy compatibility field; must remain [0, 1].", sequence_item_type=int, min_value=0),
+    ConfigField("masked_room.unet_num_heads", int, 4, "Masked-transformer attention head count.", min_value=1),
+    ConfigField("masked_room.unet_dropout", float, 0.1, "Masked-transformer attention/feed-forward dropout.", min_value=0.0, max_value=1.0),
+    ConfigField("masked_room.min_mask_ratio", float, 0.0, "Minimum token-mask ratio sampled during masked-room training.", min_value=0.0, max_value=1.0),
+    ConfigField("masked_room.max_mask_ratio", float, 1.0, "Maximum token-mask ratio sampled during masked-room training.", min_value=0.0, max_value=1.0),
     ConfigField("masked_room.topology_alignment_weight", float, 0.25, "Extra weight on topology-critical masked-token CE during masked-room training.", min_value=0.0),
     ConfigField("masked_room.logic_net_enabled", bool, False, "Enable LogicNet supervision for masked-room training as an ablation."),
     ConfigField("masked_room.logic_net_trainable", bool, False, "Allow LogicNet parameters to update during masked-room logic-supervised ablations."),
@@ -742,21 +742,32 @@ def validate_config(config: Dict[str, Any]) -> Dict[str, Any]:
             )
 
     masked_channel_mult = [int(v) for v in validated["masked_room"]["unet_channel_mult"]]
-    masked_attention_levels = [int(v) for v in validated["masked_room"]["unet_attention_resolutions"]]
     masked_unet_num_heads = int(validated["masked_room"]["unet_num_heads"])
-    masked_model_channels = int(validated["masked_room"]["model_channels"])
+    masked_hidden_dim = int(validated["masked_room"]["hidden_dim"])
     if not masked_channel_mult:
         raise ValueError("masked_room.unet_channel_mult must be non-empty.")
-    if any(level < 0 or level >= len(masked_channel_mult) for level in masked_attention_levels):
+    if masked_hidden_dim % masked_unet_num_heads != 0:
         raise ValueError(
-            "masked_room.unet_attention_resolutions contains an out-of-range level for "
-            f"masked_room.unet_channel_mult={masked_channel_mult!r}."
+            "masked_room.hidden_dim must be divisible by masked_room.unet_num_heads. "
+            f"Got hidden_dim={masked_hidden_dim}, unet_num_heads={masked_unet_num_heads}."
         )
-    if any((masked_model_channels * mult) % masked_unet_num_heads != 0 for mult in masked_channel_mult):
+    legacy_masked_defaults = {
+        "model_channels": 64,
+        "hedgehog_feature_dim": 32,
+        "graph_auto_linear_attention_nodes": 128,
+        "spatial_graph_gate_init": -2.0,
+        "spatial_topology_gate_init": -2.0,
+        "unet_attention_resolutions": [0, 1],
+    }
+    changed_legacy = [
+        name
+        for name, expected in legacy_masked_defaults.items()
+        if validated["masked_room"][name] != expected
+    ]
+    if changed_legacy:
         raise ValueError(
-            "Every masked-room U-Net channel width must be divisible by masked_room.unet_num_heads. "
-            f"Got model_channels={masked_model_channels}, unet_channel_mult={masked_channel_mult}, "
-            f"unet_num_heads={masked_unet_num_heads}."
+            "The masked-room model is a transformer; these legacy U-Net/linear-attention "
+            f"fields are not executable ablations and must remain at defaults: {changed_legacy}."
         )
     min_mask_ratio = float(validated["masked_room"]["min_mask_ratio"])
     max_mask_ratio = float(validated["masked_room"]["max_mask_ratio"])

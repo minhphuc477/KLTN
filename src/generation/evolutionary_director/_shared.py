@@ -42,10 +42,7 @@ from src.zelda_data.vglc_utils import filter_virtual_nodes, validate_topology
 from src.evaluation.structural_metrics import compute_branching_factor, compute_cyclomatic_complexity
 from src.generation.pareto_objectives import apply_pareto_metrics, compute_pareto_objectives
 
-try:
-    from src.evaluation.map_elites import CVTEliteArchive
-except ImportError:
-    CVTEliteArchive = None
+from src.evaluation.map_elites import CVTEliteArchive
 
 logger = logging.getLogger(__name__)
 

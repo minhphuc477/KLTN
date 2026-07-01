@@ -1,6 +1,6 @@
 # Architecture Audit Research Notes
 
-Last consolidated: 2026-06-24.
+Last consolidated: 2026-07-01.
 
 This is the current non-GUI audit ledger for H-MOLQD. It replaces the previous
 chronological append-only log. Historical reviews remain under `docs/archive/`.
@@ -23,8 +23,9 @@ semantics.
 
 ## Audit Method
 
-- Graphify semantic graph queries are the first code-navigation step.
-- Focused source review follows graph relationships into implementation.
+- Source code, call sites, and executable counterexamples are authoritative.
+- Graphify may narrow navigation, but its generated graph is not correctness
+  evidence and is never substituted for reading the implementation.
 - Reported bugs require a code trace or counterexample.
 - Tests are evidence only when their asserted contract is independently valid.
 - Static checks include `compileall` and Ruff undefined-name/duplicate checks.
@@ -32,9 +33,10 @@ semantics.
   references. Provider behavior is verified against the provider's current
   first-party API documentation; inaccessible sources remain unverified.
 
-Graphify status:
+Optional navigation status:
 
-- `graphify-out/graph.json` and the local query/explain commands are active.
+- `graphify-out/graph.json` and the local query/explain commands are available,
+  but this consolidation pass did not rely on them.
 - ApiFreeLLM is configured through a user-level environment variable and a
   localhost OpenAI-protocol adapter; no credential is stored in the repository.
 - The free endpoint has a 32k-token context and a documented per-request delay.
@@ -100,7 +102,8 @@ better than the referenced methods.
 
 - Pure MaskGIT no longer loads unused VQ-VAE/diffusion models.
 - Categorical codebook sampling is explicitly an unconditional baseline and no
-  longer loads or computes an unused condition encoder.
+  longer loads or computes an unused condition encoder, including batched
+  generation.
 - Enabling a teacher fallback loads the required diffusion teacher stack.
 - Strict VQ-VAE loading rejects missing learned keys.
 - Text datasets scan all files before `pad_to_max` batching.
@@ -110,11 +113,13 @@ better than the referenced methods.
 - Robust block timeouts return without waiting for the timed-out worker.
 - NetworkX 3.5 artifact serialization uses standard pickle APIs.
 - Invalid BSP dimensions fail early instead of creating out-of-bounds rooms.
+- Room-dataset construction fails with dungeon/variant context on parser or
+  graph-extraction errors instead of silently dropping samples.
 - Script cleanup removed one-off debug probes, duplicate wrappers, stale dated
   queue launchers, GUI/demo generators, asset cutters, and unreferenced status
-  probes from `scripts/`. The physical `scripts/` tree now contains 74 files,
-  focused on canonical `run_*`, `generate_*`, `validate_*`, analysis, and
-  training utilities.
+  probes from `scripts/`. The physical `scripts/` tree currently contains 71
+  Python files focused on canonical `run_*`, `generate_*`, `validate_*`,
+  analysis, and training utilities.
 - Top-level docs cleanup removed stale GUI, handoff, final-verdict, and
   superseded P-CBS/evaluation notes. Current claim boundaries live in this
   ledger.
@@ -126,6 +131,21 @@ better than the referenced methods.
 
 ### Model and training
 
+- MaskGIT corruption sampling now covers the complete `[0, 1]` mask-ratio
+  range by default. Inference derives the step embedding from the actual
+  unresolved-token fraction, so shortened/extended sampling schedules do not
+  use inconsistent or out-of-range step indices. The bounds remain
+  configurable ablations.
+- MaskGIT cross-entropy uses `ignore_index=-100` for unmasked context tokens,
+  and concat mode does not allocate an unused Transformer decoder.
+- Masked-room configuration no longer advertises unsupported linear-attention,
+  SPADE, or U-Net controls as executable ablations. Transformer hidden width,
+  head count, depth, and dropout are validated against the actual backbone.
+- VQ-VAE DDP collectives no longer catch `RuntimeError` and continue with
+  replica-local EMA statistics. Single-process mode is detected explicitly;
+  initialized distributed jobs fail if synchronization fails.
+- Categorical codebook sampling stays on-device and no longer suppresses
+  failures raised by an available codebook-usage API.
 - CFG dropout now masks context, topology maps, node masks, and other batched
   graph conditioning together.
 - Diffusion epoch ownership is centralized in the outer training loop, avoiding
@@ -151,6 +171,28 @@ better than the referenced methods.
 
 ### Solvers and metrics
 
+- The legacy `ParallelAStarSolver` API now delegates to canonical state-space
+  A*. Its former workers raced from one root behind a shared closed set, so
+  only one worker could expand the root and the implementation was neither
+  HDA* nor a real parallel speedup. Duplicate top-level `simulation/` shims
+  were removed; `src/simulation/` is the only implementation.
+- IDDFS deepening iterations share one global expansion budget rather than
+  each consuming the full timeout.
+- Perturb-and-MAP backward propagation now follows each Dijkstra predecessor
+  chain. The previous surrogate marked the entire reachable component and
+  incorrectly sent a goal gradient through off-path cells and the source.
+- Evolutionary feasibility now requires weak connectivity across the complete
+  mission graph, not only a surviving START-to-GOAL route. Final selection
+  therefore cannot promote an elite with detached keys, switches, tokens, or
+  challenge rooms.
+- Descriptor-driven grammar repairs reject candidates that disconnect the
+  mission. A failed multi-lock transaction rolls back the switches it created
+  instead of leaving unowned state nodes behind.
+- Final topology connectivity handling prunes disconnected optional decoration
+  and unreferenced surplus providers, but rejects providers referenced by an
+  active gate and all other disconnected progression anchors. It no longer
+  fabricates PATH/unkeyed BOSS_LOCKED edges to make an invalid mission graph
+  appear valid.
 - Goal-gauntlet repair now discards unreachable preserved approaches and selects
   the deepest directed traversable progression node. It no longer fabricates a
   `START -> orphan` bridge that bypasses the generated dungeon.
@@ -175,6 +217,11 @@ better than the referenced methods.
 - IDDFS checks the goal at the depth boundary and visits every permitted depth.
 - Path length means transitions (`len(path) - 1`) across validation, solver
   comparison, P-CBS, and benchmark adapters.
+- Grid MAP-Elites linearity is geometric route directness
+  (`Manhattan displacement / movement steps`) computed from the concrete solver
+  path. The former inverse route-coverage proxy is retained only as the
+  explicitly named `route_sparsity` legacy descriptor. An unused room-diameter
+  estimator that reported this proxy as linearity was removed.
 - Confusion ratio is normalized as excess path overhead, where an oracle-match
   is `0.0`.
 - The main ablation runner now uses transition counts, the canonical
@@ -392,6 +439,24 @@ Before publication lock:
 - archive exact commands, configs, seeds, checkpoint hashes, environment, and
   required metric files;
 - fail experiment completion when required outputs or provenance are missing;
-- update Graphify with `python -m graphify update .`;
+- regenerate optional navigation indexes only after source verification;
 - regenerate this ledger from current evidence rather than appending another
   dated audit section.
+
+Test policy:
+
+- tests must call production behavior rather than inspect source strings;
+- deterministic failures must not be converted to skips or conditional passes;
+- required dependencies such as PyTorch and NetworkX must fail import normally;
+- GPU, external-dataset, and genuinely optional-format tests may skip when
+  their prerequisite is absent;
+- generated demo artifacts and long-running experiment subprocesses are not
+  unit tests and must not block the default correctness suite.
+
+Latest local verification (2026-07-01):
+
+- `python -m pytest tests -q --tb=short`: 1,570 passed, 0 failed.
+- Ruff `F821`, `F811`, and `F841`: passed.
+- `python -m compileall -q src scripts tests experiments`: passed.
+- `python -m vulture src --min-confidence 90`: no findings.
+- `git diff --check`: passed.

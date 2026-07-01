@@ -43,7 +43,7 @@ def ask_generation_config(gui: Any, logger_obj: Any = None) -> Optional[Dict[str
 
     try:
         import tkinter as tk
-        from tkinter import simpledialog, messagebox
+        from tkinter import simpledialog
     except (ImportError, RuntimeError) as exc:
         log.warning("tkinter not available for generation config: %s", exc)
         gui._set_message("Config dialog unavailable; using defaults")

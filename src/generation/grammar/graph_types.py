@@ -926,18 +926,34 @@ class MissionGraph:
     
     def is_graph_connected(self) -> bool:
         """
-        Check if graph remains connected.
-        
+        Check weak physical connectivity across all mission nodes.
+
         Returns:
-            True if all nodes reachable from any starting node
+            True if every node belongs to one undirected component
         """
         if not self.nodes:
             return True
-        
-        start_id = next(iter(self.nodes.keys()))
-        reachable = self.get_reachable_nodes(start_id)
-        
-        return len(reachable) == len(self.nodes)
+
+        adjacency: Dict[int, Set[int]] = {node_id: set() for node_id in self.nodes}
+        for edge in self.edges:
+            if edge.edge_type in self.NON_TRAVERSABLE_EDGE_TYPES:
+                continue
+            if edge.source not in adjacency or edge.target not in adjacency:
+                continue
+            adjacency[edge.source].add(edge.target)
+            adjacency[edge.target].add(edge.source)
+
+        start_id = next(iter(self.nodes))
+        visited = {start_id}
+        queue = deque([start_id])
+        while queue:
+            current = queue.popleft()
+            for neighbor in adjacency[current]:
+                if neighbor in visited:
+                    continue
+                visited.add(neighbor)
+                queue.append(neighbor)
+        return len(visited) == len(self.nodes)
     
     def get_item_for_gate(self, edge: MissionEdge) -> Optional[str]:
         """

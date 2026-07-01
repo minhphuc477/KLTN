@@ -6,9 +6,7 @@ Tests for vector quantization, encoder/decoder, and training.
 """
 
 import pytest
-
-# Skip entire module if torch not available
-torch = pytest.importorskip("torch")
+import torch
 
 
 class TestVectorQuantizer:

@@ -38,7 +38,6 @@ def create_showcase_map() -> np.ndarray:
     """
     P = SEMANTIC_PALETTE
     # Short aliases
-    V  = P['VOID']
     F  = P['FLOOR']
     W  = P['WALL']
     B  = P['BLOCK']
@@ -47,7 +46,6 @@ def create_showcase_map() -> np.ndarray:
     DB = P['DOOR_BOMB']
     DP = P['DOOR_PUZZLE']
     DK = P['DOOR_BOSS']
-    DS = P['DOOR_SOFT']
     EN = P['ENEMY']
     ST = P['START']
     TR = P['TRIFORCE']
@@ -233,7 +231,6 @@ def create_all_doors_map() -> np.ndarray:
     P = SEMANTIC_PALETTE
     F  = P['FLOOR']
     W  = P['WALL']
-    DO = P['DOOR_OPEN']
     DL = P['DOOR_LOCKED']
     DB = P['DOOR_BOMB']
     DP = P['DOOR_PUZZLE']

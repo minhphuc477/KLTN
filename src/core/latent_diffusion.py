@@ -330,8 +330,6 @@ class CrossAttention(nn.Module):
     def set_topology_refinement_mode(self, mode: str) -> None:
         """Set topology refinement mode for graph-token refinement."""
         m = str(mode).strip().lower()
-        if m == "upgraded":
-            m = "gat2"
         allowed = {
             "none",
             "lightweight",
@@ -489,8 +487,6 @@ class CrossAttention(nn.Module):
         n = int(max(0, num_nodes))
         e = int(max(0, num_edges if num_edges is not None else 0))
         normalized = str(mode).strip().lower()
-        if normalized == "upgraded":
-            normalized = "gat2"
         allowed = {
             "none",
             "lightweight",

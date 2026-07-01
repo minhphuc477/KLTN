@@ -403,9 +403,10 @@ def test_perturb_and_map_goal_distance_routes_gradient_to_path_support():
     distances[:, :, 3, 3].sum().backward()
 
     assert walkability.grad is not None
-    assert float(walkability.grad.abs().sum().item()) > 0.0
-    assert float(walkability.grad[:, :, 0, 0].abs().item()) > 0.0
-    assert float(walkability.grad[:, :, 1, 0].abs().item()) > 0.0
+    route_support = walkability.grad[0, 0].abs() > 0
+    assert int(route_support.sum().item()) == 6
+    assert not bool(route_support[0, 0])
+    assert bool(route_support[3, 3])
 
 
 def test_logicnet_perturb_and_map_propagates_to_latents_and_classifier():
