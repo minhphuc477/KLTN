@@ -15,22 +15,8 @@ import argparse
 import json
 import logging
 import sys
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
-
-import networkx as nx
-import numpy as np
-import pandas as pd
-
-# Optional visualization
-try:
-    import matplotlib.pyplot as plt
-    import matplotlib
-    matplotlib.use('Agg')  # Non-interactive backend
-    HAS_MATPLOTLIB = True
-except ImportError:
-    HAS_MATPLOTLIB = False
+from typing import Any, Dict, Tuple
 
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
@@ -72,8 +58,6 @@ def analyze_coverage_convergence(
     """
     
     summary = report["summary"][0]
-    payload = report["benchmark_payload_by_method"]["MAP_ELITES"]
-    
     # Current coverage and projected convergence
     current_coverage = summary.get("map_elites_coverage", 0)
     eval_budget = report["settings"]["eval_budget"]

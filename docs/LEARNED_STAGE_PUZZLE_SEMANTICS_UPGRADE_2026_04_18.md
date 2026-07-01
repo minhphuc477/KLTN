@@ -67,7 +67,7 @@ Research direction that supports this change:
     <https://arxiv.org/abs/1907.02548>
 - persona playtesting prior art still means P-CBS should be claimed as a
   bounded-rational validator, not as the first persona playtester:
-  - Holmgård et al.:
+  - Holmgard et al.:
     <https://arxiv.org/abs/1802.06881>
 
 ## Honest Claim Boundary

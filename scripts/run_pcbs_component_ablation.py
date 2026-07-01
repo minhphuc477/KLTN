@@ -22,7 +22,7 @@ import time
 from collections import Counter
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Tuple
+from typing import Any, Dict, Iterable, List
 
 import numpy as np
 

@@ -10,7 +10,6 @@ boundaries explicit and only compares dimensions that are actually meaningful.
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 import math
 from pathlib import Path

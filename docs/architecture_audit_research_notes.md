@@ -118,6 +118,9 @@ better than the referenced methods.
 - Top-level docs cleanup removed stale GUI, handoff, final-verdict, and
   superseded P-CBS/evaluation notes. Current claim boundaries live in this
   ledger.
+- Active ablation manifests now fail closed on evidence. A zero exit code
+  without required metric artifacts is labelled
+  `completed_needs_metric_artifact`, not treated as passed scientific evidence.
 
 ### Model and training
 

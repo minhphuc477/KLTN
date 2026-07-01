@@ -18,11 +18,9 @@ import sys
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
-import networkx as nx
 import numpy as np
-from scipy import stats
 
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
@@ -31,13 +29,10 @@ if str(ROOT) not in sys.path:
 from src.zelda_data.vglc_utils import validate_topology
 from src.evaluation.benchmark_suite import (
     extract_graph_descriptor,
-    load_vglc_reference_graphs,
 )
-from src.evaluation.map_elites import EliteArchive, LinearityLeniencyExtractor
+from src.evaluation.map_elites import EliteArchive
 from src.evaluation.validator import ExternalValidator
 from src.generation.evolutionary_director import (
-    EvolutionaryTopologyGenerator,
-    TensionCurveEvaluator,
     mission_graph_to_networkx,
 )
 from src.generation.grammar import MissionGrammar

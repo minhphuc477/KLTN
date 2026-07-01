@@ -111,6 +111,13 @@ may import `bench`.
   - `docs/PCBS_REVIEWER2_NOVELTY_AUDIT_2026_04_17.md`
   - `docs/PCBS_AFFORDANCE_MEMORY_AND_ABLATION_2026_04_17.md`
   - `docs/END_TO_END_EVALUATION_PROTOCOL_GAP_AUDIT_2026_04_18.md`
+  - `docs/PRODUCTION_FINALIZATION_REVIEW_2026_04_18.md`
+  - `docs/STATEFUL_PUZZLE_ARCHITECTURE_AUDIT_2026_04_09.md`
+- Cleaned active scripts with Ruff unused-import/unused-local checks. This is
+  intentionally mechanical and does not change experiment protocols.
+- Removed misleading `process_completed_unverified` status language from active
+  ablation manifests. Successful subprocesses without metric artifacts are now
+  labelled `completed_needs_metric_artifact`, not evidence.
 
 ## Remaining Manual Cleanup
 

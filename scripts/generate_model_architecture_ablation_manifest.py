@@ -20,7 +20,7 @@ import sys
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Sequence
+from typing import Any, Dict, List, Mapping, Sequence
 
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
@@ -165,6 +165,36 @@ def write_manifest(
             )
 
 
+def _resolve_artifact_path(raw_path: str | Path) -> Path:
+    path = Path(str(raw_path))
+    return path if path.is_absolute() else ROOT / path
+
+
+def _collect_metric_names(path: Path) -> set[str]:
+    if not path.exists():
+        return set()
+    suffix = path.suffix.lower()
+    if suffix == ".csv":
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            return set(next(csv.reader(handle), []))
+    if suffix == ".json":
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        names: set[str] = set()
+
+        def visit(value: Any) -> None:
+            if isinstance(value, Mapping):
+                for key, child in value.items():
+                    names.add(str(key))
+                    visit(child)
+            elif isinstance(value, list):
+                for child in value:
+                    visit(child)
+
+        visit(payload)
+        return names
+    return set()
+
+
 def build_plan(args: argparse.Namespace) -> Dict[str, Any]:
     config_path = Path(args.config)
     resolved = merge_config(yaml_path=str(config_path), cli_overrides=None)
@@ -231,12 +261,28 @@ def execute_plan(payload: Dict[str, Any]) -> None:
         start = time.perf_counter()
         completed = subprocess.run(run["command"], cwd=str(ROOT), check=False)
         run["elapsed_sec"] = float(time.perf_counter() - start)
-        run["status"] = (
-            "process_completed_unverified"
-            if completed.returncode == 0
-            else "failed"
-        )
         run["returncode"] = int(completed.returncode)
+        if completed.returncode != 0:
+            run["status"] = "failed_process"
+            continue
+        output_paths = [_resolve_artifact_path(path) for path in run.get("output_paths", [])]
+        if not output_paths:
+            run["status"] = "completed_needs_metric_artifact"
+            continue
+        missing_outputs = [str(path) for path in output_paths if not path.exists()]
+        if missing_outputs:
+            run["status"] = "failed_missing_outputs"
+            run["missing_outputs"] = missing_outputs
+            continue
+        metric_names: set[str] = set()
+        for output_path in output_paths:
+            metric_names.update(_collect_metric_names(output_path))
+        missing_metrics = sorted(set(payload.get("required_metrics", [])) - metric_names)
+        if missing_metrics:
+            run["status"] = "failed_missing_metrics"
+            run["missing_metrics"] = missing_metrics
+            continue
+        run["status"] = "passed"
 
 
 def parse_args() -> argparse.Namespace:
@@ -268,7 +314,7 @@ def main() -> int:
         csv_path=out_dir / "model_architecture_ablation_manifest.csv",
         payload=payload,
     )
-    failed = [run for run in payload["runs"] if run["status"] == "failed"]
+    failed = [run for run in payload["runs"] if str(run["status"]).startswith("failed")]
     return 1 if failed else 0
 
 

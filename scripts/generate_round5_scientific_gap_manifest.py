@@ -27,9 +27,9 @@ import json
 import subprocess
 import sys
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Sequence
+from typing import Any, Dict, List, Mapping, Sequence
 
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
@@ -624,7 +624,7 @@ def execute_manifest(payload: Dict[str, Any]) -> None:
             run["missing_outputs"] = missing_outputs
             continue
         if not output_paths:
-            run["status"] = "process_completed_unverified"
+            run["status"] = "completed_needs_metric_artifact"
             continue
         metric_names: set[str] = set()
         for output_path in output_paths:

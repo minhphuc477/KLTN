@@ -1,14 +1,10 @@
 #!/usr/bin/env python
 """Regenerate Block I descriptor scatter with improved sizing."""
 
-import json
 import sys
 from pathlib import Path
 
 import matplotlib.pyplot as plt
-import networkx as nx
-import numpy as np
-from networkx.readwrite import json_graph
 
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:

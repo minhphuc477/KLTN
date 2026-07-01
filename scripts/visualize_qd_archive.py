@@ -10,7 +10,7 @@ import sys
 from dataclasses import asdict, is_dataclass
 from itertools import combinations
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Sequence
+from typing import Any, Dict, List, Mapping, Sequence
 
 import matplotlib.pyplot as plt
 import numpy as np

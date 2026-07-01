@@ -53,8 +53,6 @@ Superseded notes belong under `docs/archive/`.
   [`BLOCK_ARCHITECTURE_GAP_AUDIT_2026_05_23.md`](BLOCK_ARCHITECTURE_GAP_AUDIT_2026_05_23.md)
 - Repo structure and cleanup audit:
   [`REPO_STRUCTURE_AND_CLEANUP_AUDIT_2026_05_24.md`](REPO_STRUCTURE_AND_CLEANUP_AUDIT_2026_05_24.md)
-- Production finalization review:
-  [`PRODUCTION_FINALIZATION_REVIEW_2026_04_18.md`](PRODUCTION_FINALIZATION_REVIEW_2026_04_18.md)
 
 ## Block References
 
@@ -62,8 +60,6 @@ Superseded notes belong under `docs/archive/`.
   [`TOPOLOGY_COMMANDS.md`](TOPOLOGY_COMMANDS.md)
 - VQ-VAE audit:
   [`VQVAE_RESEARCH_AUDIT_2026_04_10.md`](VQVAE_RESEARCH_AUDIT_2026_04_10.md)
-- Stateful puzzle architecture audit:
-  [`STATEFUL_PUZZLE_ARCHITECTURE_AUDIT_2026_04_09.md`](STATEFUL_PUZZLE_ARCHITECTURE_AUDIT_2026_04_09.md)
 - Learned staged-puzzle semantics:
   [`LEARNED_STAGE_PUZZLE_SEMANTICS_UPGRADE_2026_04_18.md`](LEARNED_STAGE_PUZZLE_SEMANTICS_UPGRADE_2026_04_18.md)
 - Search algorithm audit:

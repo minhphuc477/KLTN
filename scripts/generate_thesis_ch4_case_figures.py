@@ -6,18 +6,16 @@ import argparse
 import csv
 import json
 import logging
-import math
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Sequence, Tuple
 
 import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.image as mpimg
 import matplotlib.pyplot as plt
-import networkx as nx
 import numpy as np
 from networkx.readwrite import json_graph
 
