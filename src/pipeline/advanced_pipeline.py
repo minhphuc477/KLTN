@@ -50,7 +50,11 @@ from src.generation.seam_smoother import SeamSmoother
 from src.generation.style_transfer import ThemeType
 from src.generation.global_state import GlobalStateManager, GlobalStateType, StateAwareRoomGenerator
 from src.generation.big_room_generator import BigRoomConfig, BigRoomGenerator, RoomDimensions
-from src.generation.weighted_bayesian_wfc import WeightedBayesianWFC, extract_tile_priors_from_vqvae, WeightedBayesianWFCConfig
+from src.generation.weighted_bayesian_wfc import (
+    WeightedBayesianWFC,
+    WeightedBayesianWFCConfig,
+    extract_tile_priors_from_grids,
+)
 from src.pipeline.dungeon_pipeline import NeuralSymbolicDungeonPipeline
 from src.pipeline.room_stitching import StitchedRoomLayout, compute_graph_aware_room_slots
 from src.core.definitions import ROOM_HEIGHT, ROOM_WIDTH, parse_node_label_tokens
@@ -1569,9 +1573,7 @@ class AdvancedNeuralSymbolicPipeline:
                     continue
             
             if len(sample_grids) >= 3:
-                # Extract priors from samples
-                codebook = self.neural_pipeline.vqvae.quantizer.embedding.weight.detach().cpu().numpy()
-                tile_priors = extract_tile_priors_from_vqvae(codebook, sample_grids)
+                tile_priors = extract_tile_priors_from_grids(sample_grids)
                 logger.info(f"Extracted priors for {len(tile_priors)} tile types")
                 return tile_priors
             else:

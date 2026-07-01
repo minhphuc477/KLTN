@@ -135,6 +135,7 @@ class StateSpaceDFS:
             # Reset metrics for this iteration
             self.states_explored = 0
             self.metrics = DFSMetrics()
+            remaining_budget = int(self.timeout - total_states)
             
             logger.debug(f'IDDFS: Trying depth_limit={depth_limit}')
             
@@ -144,7 +145,8 @@ class StateSpaceDFS:
                 visited=set(),
                 path=[self.env.start_pos],
                 depth=0,
-                depth_limit=depth_limit
+                depth_limit=depth_limit,
+                state_budget=remaining_budget,
             )
             
             total_states += self.states_explored
@@ -160,7 +162,8 @@ class StateSpaceDFS:
     
     def _dfs_recursive(self, state: GameState, visited: Set[Tuple],
                       path: List[Tuple[int, int]], depth: int, 
-                      depth_limit: int) -> Tuple[bool, List[Tuple[int, int]]]:
+                      depth_limit: int,
+                      state_budget: int) -> Tuple[bool, List[Tuple[int, int]]]:
         """
         Recursive DFS implementation with depth limiting.
         
@@ -174,7 +177,7 @@ class StateSpaceDFS:
         Returns:
             (success, path) tuple
         """
-        if self.states_explored >= self.timeout:
+        if self.states_explored >= state_budget:
             return False, []
         
         state_key = game_state_key(state)
@@ -210,7 +213,12 @@ class StateSpaceDFS:
             
             path.append(next_state.position)
             success, result_path = self._dfs_recursive(
-                next_state, visited, path, depth + 1, depth_limit
+                next_state,
+                visited,
+                path,
+                depth + 1,
+                depth_limit,
+                state_budget,
             )
             path.pop()
             

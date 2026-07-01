@@ -1975,6 +1975,25 @@ def test_validate_hard_solvability_uses_only_counted_generated_samples():
     assert metrics["val_hard_solvability"] == pytest.approx(1.0)
 
 
+def test_hard_solvability_rejects_connected_geometry_without_required_key():
+    trainer = _make_stub_trainer(context_dim=8)
+    logits = torch.zeros(1, 44, ROOM_HEIGHT, ROOM_WIDTH)
+    logits[:, int(SEMANTIC_PALETTE["WALL"])] = 5.0
+    row = ROOM_HEIGHT // 2
+    logits[:, :, row, :] = 0.0
+    logits[:, int(SEMANTIC_PALETTE["FLOOR"]), row, :] = 5.0
+    logits[:, :, row, 1] = 0.0
+    logits[:, int(SEMANTIC_PALETTE["START"]), row, 1] = 6.0
+    logits[:, :, row, ROOM_WIDTH // 2] = 0.0
+    logits[:, int(SEMANTIC_PALETTE["DOOR_LOCKED"]), row, ROOM_WIDTH // 2] = 6.0
+    logits[:, :, row, ROOM_WIDTH - 1] = 0.0
+    logits[:, int(SEMANTIC_PALETTE["DOOR_OPEN"]), row, ROOM_WIDTH - 1] = 6.0
+
+    score = DiffusionTrainer._compute_hard_solvability(trainer, logits)
+
+    assert score == pytest.approx(0.0)
+
+
 def test_validate_reports_post_repair_solvability_metrics():
     class _BlockedDecodeVQVAE:
         def decode(self, latent, target_size=None):

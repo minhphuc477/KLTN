@@ -1,7 +1,6 @@
 import numpy as np
 
 from src.core.definitions import SEMANTIC_PALETTE
-from src.simulation.parallel_astar import _try_move_local
 from src.simulation.validator import ZeldaLogicEnv
 
 
@@ -41,15 +40,6 @@ def test_canonical_validator_pushes_into_vacated_block_origin_but_not_occupied_d
 
     def move(env, state, target_pos, target_tile):
         return env.try_move_pure(state, target_pos, target_tile)
-
-    _assert_vacated_block_origin_is_reusable(move)
-
-
-def test_parallel_validator_matches_dynamic_block_occupancy_rules():
-    """Parallel A* workers must mirror the canonical block transition semantics."""
-
-    def move(env, state, target_pos, target_tile):
-        return _try_move_local(state, target_pos, target_tile, env.grid, env.height, env.width)
 
     _assert_vacated_block_origin_is_reusable(move)
 

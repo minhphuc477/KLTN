@@ -416,16 +416,15 @@ class TestBossGoalValidation:
         assert any('goal' in err.lower() or 'triforce' in err.lower() for err in errors)
     
     def test_no_boss_fails(self):
-        """Test that missing boss fails validation (if BOSS_REQUIRED_FOR_GOAL)."""
+        """The strict VGLC profile requires a boss before the goal."""
         G = nx.DiGraph()
         G.add_node(1, label='e')
         G.add_node(2, label='t')
         G.add_edge(1, 2)
         
         is_valid, errors = validate_goal_subgraph(G)
-        # May or may not fail depending on BOSS_REQUIRED_FOR_GOAL constant
-        if not is_valid:
-            assert any('boss' in err.lower() for err in errors)
+        assert not is_valid
+        assert any('boss' in err.lower() for err in errors)
 
     def test_export_style_goal_gauntlet_with_type_attrs_passes(self):
         """Generated graphs export uppercase `type` attrs; validator should still read them correctly."""
@@ -636,4 +635,3 @@ class TestVGLCIntegration:
 
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
-

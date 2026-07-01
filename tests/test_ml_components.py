@@ -1188,38 +1188,31 @@ class TestTrainingPipeline:
     
     def test_train_diffusion_import(self):
         """Test that training module imports correctly."""
-        try:
-            from src.train_diffusion import (
-                DiffusionTrainingConfig,
-                DiffusionTrainer,
-                train_diffusion,
-            )
-            assert DiffusionTrainingConfig is not None
-            assert DiffusionTrainer is not None
-            assert train_diffusion is not None
-        except ImportError as e:
-            # May fail if dependencies not fully set up
-            pytest.skip(f"Import failed (may need dependencies): {e}")
+        from src.train_diffusion import (
+            DiffusionTrainingConfig,
+            DiffusionTrainer,
+            train_diffusion,
+        )
+        assert DiffusionTrainingConfig is not None
+        assert DiffusionTrainer is not None
+        assert train_diffusion is not None
     
     def test_training_config(self):
         """Test training configuration."""
-        try:
-            from src.train_diffusion import DiffusionTrainingConfig
-            
-            config = DiffusionTrainingConfig(
-                epochs=2,
-                batch_size=2,
-                quick=True,
-            )
-            
-            assert config.epochs == 2
-            assert config.batch_size == 2
-            
-            config_dict = config.to_dict()
-            assert 'epochs' in config_dict
-            assert 'learning_rate' in config_dict
-        except ImportError:
-            pytest.skip("Training module not available")
+        from src.train_diffusion import DiffusionTrainingConfig
+
+        config = DiffusionTrainingConfig(
+            epochs=2,
+            batch_size=2,
+            quick=True,
+        )
+
+        assert config.epochs == 2
+        assert config.batch_size == 2
+
+        config_dict = config.to_dict()
+        assert 'epochs' in config_dict
+        assert 'learning_rate' in config_dict
 
 
 # ============================================================================

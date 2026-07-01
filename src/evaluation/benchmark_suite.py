@@ -57,7 +57,7 @@ from src.generation.realism_profiles import (
 )
 from src.generation.weighted_bayesian_wfc import (
     WeightedBayesianWFCConfig,
-    extract_tile_priors_from_vqvae,
+    extract_tile_priors_from_grids,
     integrate_weighted_wfc_into_pipeline,
 )
 
@@ -1564,10 +1564,7 @@ def run_wfc_robustness_probe(
         arr[rows, cols] = -1  # Unknown tile sentinel (not seeded in WFC priors).
         return arr, int(chosen.size)
 
-    tile_priors = extract_tile_priors_from_vqvae(
-        vqvae_codebook=np.zeros((1, 1), dtype=np.float32),
-        training_grids=samples,
-    )
+    tile_priors = extract_tile_priors_from_grids(samples)
     wfc_cfg = WeightedBayesianWFCConfig(
         use_vqvae_priors=True,
         enable_backtracking=True,

@@ -330,7 +330,7 @@ class BigRoomGenerator:
             patch_grids[patch.patch_id] = patch_grid
             
             # Blend into full room
-            self._blend_patch_into_room(full_room, patch, patch_grid, patch_grids)
+            self._blend_patch_into_room(full_room, patch, patch_grid)
         
         return full_room
     
@@ -402,7 +402,6 @@ class BigRoomGenerator:
         full_room: np.ndarray,
         patch: RoomPatch,
         patch_grid: np.ndarray,
-        existing_patches: Dict[int, np.ndarray]
     ):
         """
         Blend patch into full room, handling overlaps.

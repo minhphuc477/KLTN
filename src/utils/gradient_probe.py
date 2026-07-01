@@ -45,7 +45,7 @@ class GradientProbe:
             self.hooks.append(module.register_full_backward_hook(self._make_hook(name)))
         return self
 
-    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+    def __exit__(self, _exc_type: Any, exc: Any, tb: Any) -> None:
         for hook in self.hooks:
             hook.remove()
         self.hooks.clear()

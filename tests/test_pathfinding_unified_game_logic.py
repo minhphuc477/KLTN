@@ -256,13 +256,13 @@ class TestUnifiedGameLogic:
             
             print(f"✓ {name}: Block Chain Pushing test passed")
     
-    def test_complex_dungeon_all_mechanics(self):
-        """Test: Complex dungeon requiring ALL mechanics."""
-        # Single corridor with all mechanics
+    def test_integrated_inventory_and_traversal_mechanics(self):
+        """Test all inventory gates in one physically solvable corridor."""
         grid = np.full((5, 13), SEMANTIC_PALETTE['WALL'], dtype=np.int64)
         grid[2, 1:12] = SEMANTIC_PALETTE['FLOOR']
         
-        # Layout: Start -> Key -> Door -> Bomb -> BombDoor -> BossKey -> BossDoor -> Block -> Ladder -> Water -> Goal
+        # Block pushing has a separate fixture. Placing a block immediately
+        # before the only ladder pickup makes this one-tile corridor unsolvable.
         grid[2, 1] = SEMANTIC_PALETTE['START']
         grid[2, 2] = SEMANTIC_PALETTE['KEY_SMALL']
         grid[2, 3] = SEMANTIC_PALETTE['DOOR_LOCKED']
@@ -270,7 +270,6 @@ class TestUnifiedGameLogic:
         grid[2, 5] = SEMANTIC_PALETTE['DOOR_BOMB']
         grid[2, 6] = SEMANTIC_PALETTE['KEY_BOSS']
         grid[2, 7] = SEMANTIC_PALETTE['DOOR_BOSS']
-        grid[2, 8] = SEMANTIC_PALETTE['BLOCK']
         grid[2, 9] = SEMANTIC_PALETTE['KEY_ITEM']  # Ladder
         grid[2, 10] = SEMANTIC_PALETTE['ELEMENT']  # Water
         grid[2, 11] = SEMANTIC_PALETTE['TRIFORCE']
@@ -282,22 +281,19 @@ class TestUnifiedGameLogic:
             solver = solver_class(env)
             
             if name == 'D* Lite':
-                # D* Lite may struggle with complex dungeons - skip for now
-                print(f"⚠ {name}: Complex test skipped (D* Lite best for replanning, not initial search)")
-                continue
+                success, path, _ = solver.solve(env.state.copy())
             elif hasattr(solver, 'solve'):
-                success, _path, _ = solver.solve()
+                success, path, _ = solver.solve()
             else:
-                success, _path, _ = solver.solve_with_diagnostics()
-            
-            # Note: This test may be too complex for simple DFS without heuristics
-            # If it fails, that's expected - the point is to verify the mechanics work
-            # when the algorithm does find a solution
-            
-            if success:
-                print(f"✓ {name}: Complex All-Mechanics test passed")
-            else:
-                print(f"⚠ {name}: Complex test timed out (expected for non-heuristic solvers)")
+                success, path, _ = solver.solve_with_diagnostics()
+
+            assert success, f"{name} failed the integrated mechanics fixture"
+            required_tiles = (
+                (2, 2), (2, 3), (2, 4), (2, 5),
+                (2, 6), (2, 7), (2, 9), (2, 10),
+            )
+            for required in required_tiles:
+                assert required in path, f"{name} skipped required tile {required}"
 
 
     def test_stateful_puzzle_door_requires_multi_step_sequence(self):

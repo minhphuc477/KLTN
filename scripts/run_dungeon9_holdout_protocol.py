@@ -46,7 +46,7 @@ from src.core.latent_diffusion import CrossAttention, SelfAttention, create_late
 from src.generation.weighted_bayesian_wfc import (
     WeightedBayesianWFC,
     WeightedBayesianWFCConfig,
-    extract_tile_priors_from_vqvae,
+    extract_tile_priors_from_grids,
 )
 from src.zelda_data.splits import DEFAULT_TEST_DUNGEONS, DEFAULT_TRAIN_DUNGEONS, DEFAULT_VARIANTS
 from src.zelda_data.zelda_core import ZeldaDungeonAdapter
@@ -869,7 +869,7 @@ def run_protocol(args: argparse.Namespace) -> Dict[str, Any]:
         )
     _write_csv(out_dir / "dungeon9_graph_summary.csv", d9_graph_rows)
 
-    tile_priors = extract_tile_priors_from_vqvae(np.zeros((1, 1), dtype=np.float32), list(train_rooms))
+    tile_priors = extract_tile_priors_from_grids(list(train_rooms))
 
     gan_start = time.perf_counter()
     generator, tile_vocab = _train_tiny_gan(

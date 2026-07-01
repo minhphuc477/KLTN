@@ -35,7 +35,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import numpy as np
 import networkx as nx
 import argparse
-import pytest
 
 logger = logging.getLogger(__name__)
 
@@ -45,11 +44,7 @@ from src.generation.weighted_bayesian_wfc import (
     WeightedBayesianWFCConfig,
     TilePrior
 )
-try:
-    from src.evaluation.difficulty_calculator import DifficultyCalculator
-except ImportError:
-    logger.warning("DifficultyCalculator not available - skipping difficulty tests")
-    DifficultyCalculator = None
+from src.evaluation.difficulty_calculator import DifficultyCalculator
 
 from src.simulation.key_economy_validator import (
     KeyEconomyValidator
@@ -169,58 +164,30 @@ def _difficulty_metrics_separation(verbose: bool = False):
     print("TEST 2: Weighted Difficulty Metrics - Cognitive vs Tedious")
     print("="*80)
     
-    if DifficultyCalculator is None:
-        print("[SKIP] DifficultyCalculator not available")
-        return None
-    
     calc = DifficultyCalculator()  # Use default weights
     
     # Test Case 1: High Cognitive (puzzle-heavy dungeon)
     print("\nTest Case 1: Puzzle-Heavy Dungeon (High Cognitive)")
     
     # Use existing DifficultyCalculator API and validate component separation.
-    try:
-        metrics_1 = calc.compute(
-            enemy_count=5,
-            avg_enemy_hp=30,
-            path_length=20,
-            room_size=(11, 16),
-            health_drops=2
-        )
-        
-        if verbose:
-            print(f"  Combat: {metrics_1.combat_score:.3f}")
-            print(f"  Navigation: {metrics_1.navigation_complexity:.3f}")
-            print(f"  Resource: {metrics_1.resource_scarcity:.3f}")
-            print(f"  Overall: {metrics_1.overall_difficulty:.3f}")
-    except (AttributeError, RuntimeError, ValueError, TypeError) as e:
-        if verbose:
-            print(f"  Difficulty calculation: {e}")
-        print("[SKIP] Difficulty calculator compute() unavailable for this API shape")
-        return None
+    metrics_1 = calc.compute(
+        enemy_count=5,
+        avg_enemy_hp=30,
+        path_length=20,
+        room_size=(11, 16),
+        health_drops=2
+    )
     
     # Test Case 2: High Tedious (enemy spam dungeon)
     print("\nTest Case 2: Enemy Spam Dungeon (High Tedious)")
     
-    try:
-        metrics_2 = calc.compute(
-            enemy_count=20,
-            avg_enemy_hp=100, 
-            path_length=15,
-            room_size=(11, 7),
-            health_drops=0
-        )
-        
-        if verbose:
-            print(f"  Combat: {metrics_2.combat_score:.3f}")
-            print(f"  Navigation: {metrics_2.navigation_complexity:.3f}")
-            print(f"  Resource: {metrics_2.resource_scarcity:.3f}")
-            print(f"  Overall: {metrics_2.overall_difficulty:.3f}")
-    except (AttributeError, RuntimeError, ValueError, TypeError) as e:
-        if verbose:
-            print(f"  Difficulty calculation: {e}")
-        print("[SKIP] Difficulty calculator failed on comparison scenario")
-        return None
+    metrics_2 = calc.compute(
+        enemy_count=20,
+        avg_enemy_hp=100,
+        path_length=15,
+        room_size=(11, 7),
+        health_drops=0
+    )
     
     # Real validation: component-level separation checks.
     scenario_delta = abs(metrics_2.overall_difficulty - metrics_1.overall_difficulty)
@@ -252,10 +219,7 @@ def _difficulty_metrics_separation(verbose: bool = False):
 # ============================================================================
 
 def test_difficulty_metrics_separation():
-    result = _difficulty_metrics_separation(verbose=False)
-    if result is None:
-        pytest.skip("DifficultyCalculator is not available for this API shape.")
-    assert result is True
+    assert _difficulty_metrics_separation(verbose=False) is True
 
 
 def _key_economy_all_topologies(verbose: bool = False):

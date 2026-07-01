@@ -2654,7 +2654,7 @@ class GradientGuidance(nn.Module):
             logger.info(f"[GUIDANCE] scaled_gamma={scaled_gamma}")
         if scaled_gamma <= 0.0:
             if _debug_guidance:
-                logger.info(f"[GUIDANCE] scaled_gamma <= 0, returning zero guidance")
+                logger.info("[GUIDANCE] scaled_gamma <= 0, returning zero guidance")
             return torch.zeros_like(x_t)
         if int(x_t.numel()) > self.max_guidance_elements:
             logger.warning(
@@ -4477,11 +4477,11 @@ class LatentDiffusionModel(nn.Module):
             prediction = self.denoiser(
                 x_t,
                 t,
-            context,
-            context_edge_index=context_edge_index,
-            context_edge_attr=context_edge_attr,
-            context_node_mask=context_node_mask,
-            spatial_graph_data=spatial_graph_data,
+                context,
+                context_edge_index=context_edge_index,
+                context_edge_attr=context_edge_attr,
+                context_node_mask=context_node_mask,
+                spatial_graph_data=spatial_graph_data,
             )
         except Exception:
             if use_spatial_alignment:

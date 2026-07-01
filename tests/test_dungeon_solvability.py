@@ -171,12 +171,10 @@ class TestDungeonSolvability:
         
         # Check result
         if (dungeon_num, variant) in KNOWN_IMPOSSIBLE:
-            # Known impossible - just verify it actually fails
-            if result.get('solvable'):
-                pytest.fail(
-                    f"Dungeon {dungeon_num} v{variant} was expected to be impossible "
-                    f"but solver found a path!"
-                )
+            assert not result.get('solvable'), (
+                f"Dungeon {dungeon_num} v{variant} was expected to be impossible "
+                f"but solver found a path"
+            )
         else:
             # Expected to be solvable
             assert result.get('solvable'), (

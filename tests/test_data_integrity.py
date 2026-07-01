@@ -226,8 +226,7 @@ class TestDataIntegrity:
     def test_dungeon_stitches(self, adapter, dungeon_num, variant):
         """Test that dungeon can be stitched."""
         dungeon = adapter.load_dungeon(dungeon_num, variant=variant)
-        if dungeon is None:
-            pytest.skip("Could not load dungeon")
+        assert dungeon is not None, f"Could not load dungeon {dungeon_num} v{variant}"
         
         stitched = adapter.stitch_dungeon(dungeon)
         assert stitched is not None, f"Failed to stitch dungeon {dungeon_num} v{variant}"
@@ -238,8 +237,7 @@ class TestDataIntegrity:
     def test_graph_room_consistency(self, adapter, dungeon_num, variant):
         """Test that graph nodes match rooms."""
         dungeon = adapter.load_dungeon(dungeon_num, variant=variant)
-        if dungeon is None:
-            pytest.skip("Could not load dungeon")
+        assert dungeon is not None, f"Could not load dungeon {dungeon_num} v{variant}"
         
         stitched = adapter.stitch_dungeon(dungeon)
         issues = _check_graph_room_consistency(dungeon, stitched)
@@ -258,8 +256,7 @@ class TestDataIntegrity:
     def test_start_goal_exist(self, adapter, dungeon_num, variant):
         """Test that start and goal positions exist."""
         dungeon = adapter.load_dungeon(dungeon_num, variant=variant)
-        if dungeon is None:
-            pytest.skip("Could not load dungeon")
+        assert dungeon is not None, f"Could not load dungeon {dungeon_num} v{variant}"
         
         stitched = adapter.stitch_dungeon(dungeon)
         issues = _check_start_goal_positions(dungeon, stitched)
@@ -274,8 +271,7 @@ class TestDataIntegrity:
     def test_room_dimensions(self, adapter, dungeon_num, variant):
         """Test that rooms have correct dimensions."""
         dungeon = adapter.load_dungeon(dungeon_num, variant=variant)
-        if dungeon is None:
-            pytest.skip("Could not load dungeon")
+        assert dungeon is not None, f"Could not load dungeon {dungeon_num} v{variant}"
         
         issues = _check_room_dimensions(dungeon)
         
@@ -288,8 +284,7 @@ class TestDataIntegrity:
     def test_tile_validity(self, adapter, dungeon_num, variant):
         """Test that all tiles are valid."""
         dungeon = adapter.load_dungeon(dungeon_num, variant=variant)
-        if dungeon is None:
-            pytest.skip("Could not load dungeon")
+        assert dungeon is not None, f"Could not load dungeon {dungeon_num} v{variant}"
         
         stitched = adapter.stitch_dungeon(dungeon)
         issues = _check_tile_validity(stitched)
@@ -297,9 +292,7 @@ class TestDataIntegrity:
         for issue in issues:
             _stats.record_issue(dungeon_num, variant, issue)
         
-        # Report but don't fail on unknown tiles
-        if issues:
-            pytest.skip(f"Found issues: {'; '.join(issues)}")
+        assert not issues, f"Dungeon {dungeon_num} v{variant}: {'; '.join(issues)}"
 
 
 class TestDataStatistics:

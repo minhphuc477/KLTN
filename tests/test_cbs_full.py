@@ -244,18 +244,22 @@ class TestMemoryDecay:
 class TestInventoryAwarePlanning:
     """Test that agent picks up key before attempting locked door."""
 
-    def test_key_door_sequence(self, small_grid):
+    def test_key_door_sequence(self):
         """Agent should find key before attempting locked door."""
-        # ZeldaLogicEnv finds start/goal from the grid tiles
-        env = ZeldaLogicEnv(semantic_grid=small_grid)
+        grid = np.full((5, 7), SEMANTIC_PALETTE['WALL'], dtype=np.int32)
+        grid[2, 1:6] = SEMANTIC_PALETTE['FLOOR']
+        grid[2, 1] = SEMANTIC_PALETTE['START']
+        grid[2, 2] = SEMANTIC_PALETTE['KEY_SMALL']
+        grid[2, 3] = SEMANTIC_PALETTE['DOOR_LOCKED']
+        grid[2, 5] = SEMANTIC_PALETTE['TRIFORCE']
+        env = ZeldaLogicEnv(semantic_grid=grid)
         cbs = CognitiveBoundedSearch(env, persona='balanced', timeout=500, seed=42)
         success, path, _states, _metrics = cbs.solve()
-        
-        if not success:
-            pytest.skip("CBS did not find solution in time")
+
+        assert success, "P-CBS failed the deterministic key-door fixture"
         
         # Find key and door positions in path
-        key_pos = (2, 1)
+        key_pos = (2, 2)
         door_pos = (2, 3)
         
         key_idx = None
@@ -267,26 +271,10 @@ class TestInventoryAwarePlanning:
             if pos == door_pos and door_idx is None:
                 door_idx = i
         
-        # Key should be visited before door (or door not visited if key enables bypass)
-        if door_idx is not None and key_idx is not None:
-            assert key_idx < door_idx, \
-                f"Key should be picked up (idx={key_idx}) before door (idx={door_idx})"
-
-    def test_subgoal_key_insertion(self, small_grid):
-        """Test that hierarchical planner inserts key as subgoal."""
-        env = ZeldaLogicEnv(semantic_grid=small_grid)
-        cbs = CognitiveBoundedSearch(env, persona='balanced', timeout=500, seed=42)
-        
-        # Run the solver to completion - it will handle subgoal insertion internally
-        success, path, _metrics, _visited = cbs.solve()
-        
-        # If path found, it should visit the key before door
-        if success and path:
-            _key_pos = tuple(np.argwhere(small_grid == SEMANTIC_PALETTE['KEY'])[0]) \
-                if SEMANTIC_PALETTE['KEY'] in small_grid else None
-            # The solver should have found a valid path
-            assert len(path) > 0, "Should find a path"
-
+        assert key_idx is not None, "P-CBS path skipped the required key"
+        assert door_idx is not None, "P-CBS path skipped the required locked door"
+        assert key_idx < door_idx, \
+            f"Key should be picked up (idx={key_idx}) before door (idx={door_idx})"
 
 # ============================================================================
 # Test 4: Curiosity Heuristic (Prefers Unknown Regions)
@@ -352,26 +340,6 @@ class TestCuriosityHeuristic:
         assert utility_unknown > utility_known, \
             f"Unknown area should have higher utility: {utility_unknown} > {utility_known}"
 
-    def test_explorer_explores_more(self, exploration_grid):
-        """Explorer persona should visit more unique tiles than cautious."""
-        env_explorer = ZeldaLogicEnv(semantic_grid=exploration_grid)
-        env_cautious = ZeldaLogicEnv(semantic_grid=exploration_grid.copy())
-        
-        # Run with different personas
-        cbs_explorer = CognitiveBoundedSearch(env_explorer, persona='explorer', timeout=300, seed=42)
-        cbs_cautious = CognitiveBoundedSearch(env_cautious, persona='cautious', timeout=300, seed=42)
-        
-        success_e, path_e, _, _metrics_e = cbs_explorer.solve()
-        success_c, path_c, _, _metrics_c = cbs_cautious.solve()
-        
-        if success_e and success_c:
-            unique_e = len(set(path_e))
-            unique_c = len(set(path_c))
-            # Explorer should generally visit more unique tiles
-            # (though not guaranteed due to randomness)
-            print(f"Explorer unique tiles: {unique_e}, Cautious: {unique_c}")
-
-
 # ============================================================================
 # Test 5: Persona Parameter Effects
 # ============================================================================
@@ -395,60 +363,42 @@ class TestPersonaEffects:
         tolerance = 0.05  # tuned weights may deviate slightly from spec
 
         for name, params in expected.items():
-            if name in PERSONA_CONFIGS:
-                config = PERSONA_CONFIGS[name]
-                assert abs(config.goal_weight - params['alpha']) < tolerance, \
-                    f"{name} goal_weight mismatch: got {config.goal_weight}, expected ~{params['alpha']}"
-                assert abs(config.curiosity_weight - params['beta']) < tolerance, \
-                    f"{name} curiosity_weight mismatch: got {config.curiosity_weight}, expected ~{params['beta']}"
-                assert abs(config.risk_weight - params['gamma']) < tolerance, \
-                    f"{name} risk_weight mismatch: got {config.risk_weight}, expected ~{params['gamma']}"
+            assert name in PERSONA_CONFIGS
+            config = PERSONA_CONFIGS[name]
+            assert abs(config.goal_weight - params['alpha']) < tolerance, \
+                f"{name} goal_weight mismatch: got {config.goal_weight}, expected ~{params['alpha']}"
+            assert abs(config.curiosity_weight - params['beta']) < tolerance, \
+                f"{name} curiosity_weight mismatch: got {config.curiosity_weight}, expected ~{params['beta']}"
+            assert abs(config.risk_weight - params['gamma']) < tolerance, \
+                f"{name} risk_weight mismatch: got {config.risk_weight}, expected ~{params['gamma']}"
 
     def test_forgetful_higher_decay(self):
         """Forgetful persona should have faster memory decay."""
         balanced = PERSONA_CONFIGS.get('balanced')
         forgetful = PERSONA_CONFIGS.get('forgetful')
-        
-        if balanced and forgetful:
-            assert forgetful.memory_decay_rate <= balanced.memory_decay_rate, \
-                "Forgetful should have equal or higher decay rate"
+
+        assert balanced is not None
+        assert forgetful is not None
+        assert forgetful.memory_decay_rate <= balanced.memory_decay_rate, \
+            "Forgetful should have equal or faster decay"
 
     def test_cautious_avoids_enemies(self, small_grid):
         """Cautious persona should weight risk higher."""
         cautious = PERSONA_CONFIGS.get('cautious')
         balanced = PERSONA_CONFIGS.get('balanced')
-        
-        if cautious and balanced:
-            assert cautious.risk_weight > balanced.risk_weight, \
-                "Cautious should have higher risk weight"
+
+        assert cautious is not None
+        assert balanced is not None
+        assert cautious.risk_weight > balanced.risk_weight, \
+            "Cautious should have higher risk weight"
 
     def test_explorer_high_curiosity(self):
         """Explorer persona should have highest curiosity weight."""
         explorer = PERSONA_CONFIGS.get('explorer')
-        
-        if explorer:
-            assert explorer.curiosity_weight >= 0.5, \
-                f"Explorer curiosity should be high, got {explorer.curiosity_weight}"
 
-    def test_persona_affects_path_length(self, exploration_grid):
-        """Different personas should produce different path characteristics."""
-        results = {}
-        
-        for persona_name in ['balanced', 'explorer', 'cautious']:
-            env = ZeldaLogicEnv(semantic_grid=exploration_grid.copy())
-            cbs = CognitiveBoundedSearch(env, persona=persona_name, timeout=300, seed=42)
-            success, path, states, _metrics = cbs.solve()
-            
-            if success:
-                results[persona_name] = {
-                    'path_length': len(path),
-                    'states_explored': states,
-                    'unique_tiles': len(set(path))
-                }
-        
-        # Print results for analysis
-        for name, data in results.items():
-            print(f"{name}: path={data['path_length']}, states={data['states_explored']}")
+        assert explorer is not None
+        assert explorer.curiosity_weight >= 0.5, \
+            f"Explorer curiosity should be high, got {explorer.curiosity_weight}"
 
 
 # ============================================================================

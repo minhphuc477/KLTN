@@ -239,35 +239,8 @@ class VGLCParser:
     not drift from the rest of the codebase.
     """
 
-    SLOT_WIDTH = ROOM_WIDTH
-    SLOT_HEIGHT = ROOM_HEIGHT
-    GAP_CHAR = '-'
-
-    def __init__(self, gap_threshold: float = 0.7):
-        self.gap_threshold = float(gap_threshold)
+    def __init__(self):
         self._core = CoreVGLCParser(room_cls=_ParsedVGLCRoom)
-
-    def load_grid(self, filepath: Union[str, Path]) -> np.ndarray:
-        filepath = Path(filepath)
-        if not filepath.exists():
-            raise FileNotFoundError(f"VGLC file not found: {filepath}")
-        with open(filepath, 'r', encoding='utf-8') as f:
-            lines = [line.rstrip('\n') for line in f]
-        if not lines:
-            return np.zeros((0, 0), dtype='<U1')
-        max_width = max(len(line) for line in lines)
-        return np.array([list(line.ljust(max_width, self.GAP_CHAR)) for line in lines], dtype='<U1')
-
-    def is_room_slot(self, slot_grid: np.ndarray) -> bool:
-        if slot_grid.size == 0:
-            return False
-        gap_count = int(np.sum(slot_grid == self.GAP_CHAR))
-        total = int(slot_grid.size)
-        if gap_count > total * self.gap_threshold:
-            return False
-        wall_count = int(np.sum((slot_grid == 'W') | (slot_grid == 'w')))
-        interior_count = total - wall_count - gap_count
-        return wall_count >= 20 and interior_count >= 5
 
     def extract_rooms(self, filepath: Union[str, Path]) -> List[RoomTensor]:
         parsed_rooms = self._core.parse(str(filepath))
@@ -1371,18 +1344,12 @@ class IntelligentDataAdapter:
         self.graph_dir = self.data_dir / 'Graph Processed'
         self.image_dir = self.data_dir / 'Original'
     
-    def load_dungeon(
-        self,
-        dungeon_id: str,
-        load_images: bool = False,
-    ) -> DungeonTensor:
+    def load_dungeon(self, dungeon_id: str) -> DungeonTensor:
         """
         Load and process a complete dungeon.
         
         Args:
             dungeon_id: Dungeon identifier (e.g., 'tloz1_1')
-            load_images: Also load original screenshots
-            
         Returns:
             DungeonTensor with all processed data
         """

@@ -55,7 +55,7 @@ from src.pipeline.room_stitching import build_stitched_room_layout
 from src.generation.weighted_bayesian_wfc import (
     WeightedBayesianWFC,
     WeightedBayesianWFCConfig,
-    extract_tile_priors_from_vqvae,
+    extract_tile_priors_from_grids,
 )
 from src.core.definitions import ROOM_HEIGHT, ROOM_WIDTH
 from src.core.definitions import TileID
@@ -1120,10 +1120,7 @@ class AblationStudy:
             training_rooms = self.reference_rooms if self.reference_rooms else [
                 np.zeros((ROOM_HEIGHT, ROOM_WIDTH), dtype=np.int32)
             ]
-            self._wfc_tile_priors = extract_tile_priors_from_vqvae(
-                vqvae_codebook=np.zeros((1, 1), dtype=np.float32),
-                training_grids=training_rooms,
-            )
+            self._wfc_tile_priors = extract_tile_priors_from_grids(training_rooms)
         return self._wfc_tile_priors
 
     def _generate_dungeon_pure_wfc(

@@ -206,7 +206,7 @@ class TestDStarLite:
         logger.info(f"✓ D* Lite: path_len={len(path)}, nodes={nodes}")
     
     def test_complex_dungeon(self):
-        """Test D* Lite on complex dungeon."""
+        """D* Lite must solve the deterministic complex fixture."""
         logger.info("==== Testing D* Lite: Complex Dungeon ====")
         
         grid = create_complex_dungeon()
@@ -215,10 +215,11 @@ class TestDStarLite:
         
         start_state = env.state.copy()
         success, path, nodes = solver.solve(start_state)
-        
-        # D* Lite might not handle all cases (simplified implementation)
-        # So we just log result without strict assertion
-        logger.info(f"D* Lite on complex: success={success}, path_len={len(path) if path else 0}, nodes={nodes}")
+
+        assert success
+        assert path[0] == env.start_pos
+        assert path[-1] == env.goal_pos
+        assert 0 < nodes <= solver.timeout
 
     def test_diagonal_heuristic_uses_octile_lower_bound(self):
         grid = create_simple_dungeon()
@@ -298,8 +299,8 @@ class TestStateSpaceDFS:
         logger.info(f"✓ IDDFS: path_len={len(path)}, nodes={nodes}, max_depth={solver.metrics.max_depth_reached}")
         logger.info(f"  Metrics: backtracks={solver.metrics.backtrack_count}, cycles={solver.metrics.cycle_detections}")
     
-    def test_iddfs_complex(self):
-        """Test IDDFS on complex dungeon."""
+    def test_iddfs_complex_respects_global_state_budget(self):
+        """All deepening iterations share one global expansion budget."""
         logger.info("==== Testing IDDFS: Complex Dungeon ====")
         
         grid = create_complex_dungeon()
@@ -307,12 +308,13 @@ class TestStateSpaceDFS:
         solver = StateSpaceDFS(env, timeout=100000, max_depth=300, use_iddfs=True)
         
         success, path, nodes = solver.solve()
-        
-        # Complex dungeon might timeout for DFS
+
+        assert nodes <= solver.timeout
         if success:
-            logger.info(f"✓ IDDFS on complex: path_len={len(path)}, nodes={nodes}")
+            assert path[0] == env.start_pos
+            assert path[-1] == env.goal_pos
         else:
-            logger.info(f"⚠ IDDFS timed out on complex: nodes={nodes}")
+            assert path == []
 
 
 class TestBidirectionalAStar:

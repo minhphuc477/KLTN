@@ -95,8 +95,8 @@ class WeightedBayesianWFC:
     Wave Function Collapse with Bayesian priors from VQ-VAE.
     
     Usage:
-        # Extract priors from VQ-VAE training data
-        priors = extract_tile_priors_from_vqvae(vqvae_model, training_data)
+        # Extract categorical priors from training grids
+        priors = extract_tile_priors_from_grids(training_data)
         
         # Create WFC
         wfc = WeightedBayesianWFC(
@@ -648,15 +648,13 @@ class WeightedBayesianWFC:
 # PRIOR EXTRACTION
 # ============================================================================
 
-def extract_tile_priors_from_vqvae(
-    vqvae_codebook: np.ndarray,
-    training_grids: List[np.ndarray]
+def extract_tile_priors_from_grids(
+    training_grids: List[np.ndarray],
 ) -> Dict[int, TilePrior]:
     """
-    Extract tile priors from VQ-VAE codebook usage statistics.
+    Extract categorical tile and adjacency priors from training grids.
     
     Args:
-        vqvae_codebook: VQ-VAE codebook (num_codes, embedding_dim)
         training_grids: List of (H, W) training grids (quantized tile IDs)
     
     Returns:

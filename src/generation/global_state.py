@@ -319,33 +319,6 @@ class StateAwareRoomGenerator:
         
         return result
     
-    def regenerate_with_state_change(
-        self,
-        room_id: int,
-        old_state: Dict[str, Any],
-        new_state: Dict[str, Any],
-        cached_rooms: Dict[int, Any],
-        graph_context: Dict
-    ):
-        """
-        Re-generate room after state change.
-        
-        Uses cached neighbor latents when possible to maintain consistency.
-        """
-        # Get neighbor latents from cache
-        neighbor_latents = {}
-        # ... extract from cached_rooms ...
-        
-        # Generate with new state
-        result = self.generate_room_with_state(
-            room_id=room_id,
-            neighbor_latents=neighbor_latents,
-            graph_context=graph_context,
-            global_state=new_state
-        )
-        
-        return result
-    
     def _encode_global_state(self, global_state: Dict[str, Any]) -> np.ndarray:
         """Encode global state as feature vector."""
         # Simple encoding: hash state to fixed-size vector

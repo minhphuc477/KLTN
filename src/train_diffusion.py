@@ -1858,60 +1858,45 @@ class DiffusionTrainer:
         return targets.to(device=self.device, dtype=torch.long).clamp(0, int(self.config.num_classes) - 1)
 
     def _compute_hard_solvability(self, decoded_logits: torch.Tensor) -> float:
-        """Symbolically check generated room grids for a start-to-goal/exit path."""
+        """Run the canonical inventory-aware oracle on generated room grids."""
         if not isinstance(decoded_logits, torch.Tensor) or decoded_logits.dim() != 4:
             return 0.0
         try:
-            from src.core.symbolic_refiner import PathAnalyzer
+            from src.simulation.validator import StateSpaceAStar, ZeldaLogicEnv
         except Exception as exc:
-            logger.debug("Hard solvability skipped: PathAnalyzer unavailable: %s", exc)
+            logger.debug("Hard solvability skipped: canonical oracle unavailable: %s", exc)
             return 0.0
 
-        analyzer = PathAnalyzer()
         tile_maps = decoded_logits.argmax(dim=1).detach().cpu()
-        walkable_ids = set(int(v) for v in getattr(analyzer, "walkable_tiles", set()))
         start_id = int(SEMANTIC_PALETTE.get("START", 0))
-        goal_ids = {
-            int(SEMANTIC_PALETTE.get(name, -1))
-            for name in ("TRIFORCE", "DOOR_OPEN", "DOOR_LOCKED", "DOOR_BOMB", "DOOR_PUZZLE", "DOOR_BOSS", "DOOR_SOFT", "STAIR")
-        }
+        goal_id = int(SEMANTIC_PALETTE.get("TRIFORCE", 0))
         solved = 0
         total = int(tile_maps.shape[0])
         for tile_map_t in tile_maps:
-            grid = tile_map_t.numpy()
-            start_hits = torch.nonzero(tile_map_t == start_id, as_tuple=False)
-            if start_hits.numel() > 0:
-                start = tuple(int(v) for v in start_hits[0].tolist())
-            else:
-                walkable_hits = torch.nonzero(
-                    torch.isin(tile_map_t, torch.tensor(sorted(walkable_ids), dtype=tile_map_t.dtype)),
-                    as_tuple=False,
+            endpoints = self._infer_symbolic_repair_endpoints(tile_map_t)
+            if endpoints is None:
+                continue
+            start, goal = endpoints
+            grid = tile_map_t.numpy().astype(np.int32, copy=True)
+            grid[start] = start_id
+            grid[goal] = goal_id
+            try:
+                env = ZeldaLogicEnv(grid)
+                oracle = StateSpaceAStar(
+                    env,
+                    timeout=max(10_000, int(grid.size) * 256),
+                    priority_options={
+                        "allow_diagonals": False,
+                        "enable_hierarchical": False,
+                        "representation": "tile",
+                    },
+                    search_mode="astar",
                 )
-                if walkable_hits.numel() == 0:
-                    continue
-                start = tuple(int(v) for v in walkable_hits[0].tolist())
-
-            goal_positions = []
-            for goal_id in goal_ids:
-                if goal_id < 0:
-                    continue
-                hits = torch.nonzero(tile_map_t == goal_id, as_tuple=False)
-                goal_positions.extend(tuple(int(v) for v in hit.tolist()) for hit in hits)
-            if not goal_positions:
-                height, width = tile_map_t.shape
-                border_mask = torch.zeros_like(tile_map_t, dtype=torch.bool)
-                border_mask[0, :] = True
-                border_mask[-1, :] = True
-                border_mask[:, 0] = True
-                border_mask[:, -1] = True
-                walkable_tensor = torch.tensor(sorted(walkable_ids), dtype=tile_map_t.dtype)
-                border_walkable = border_mask & torch.isin(tile_map_t, walkable_tensor)
-                goal_positions = [
-                    tuple(int(v) for v in hit.tolist())
-                    for hit in torch.nonzero(border_walkable, as_tuple=False)
-                ]
-            if any(analyzer.analyze_grid(grid, start=start, goal=goal) == [] for goal in goal_positions):
-                solved += 1
+                success, _path, _states = oracle.solve()
+            except (RuntimeError, ValueError, TypeError, IndexError) as exc:
+                logger.debug("Hard solvability oracle rejected generated room: %s", exc)
+                success = False
+            solved += int(bool(success))
         return float(solved / max(1, total))
 
     def _infer_symbolic_repair_endpoints(
@@ -3878,16 +3863,20 @@ class DiffusionTrainer:
             'diffusion_state_dict': self.diffusion.state_dict(),
             'ema_diffusion_state_dict': self.ema_diffusion.state_dict(),
             'condition_encoder_state_dict': self.condition_encoder.state_dict(),
-            'logic_net_state_dict': self.logic_net.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
             'scheduler_state_dict': self.scheduler.state_dict(),
-            'grad_scaler_state_dict': self._grad_scaler.state_dict(),
             'config': self.config.to_dict(),
             'metrics': metrics,
             # Store schedule/prediction type for inference consistency
             'schedule_type': self.config.schedule_type,
         }
-        if bool(getattr(self.config, "logic_net_enabled", True)):
+        grad_scaler = getattr(self, "_grad_scaler", None)
+        if grad_scaler is not None:
+            payload['grad_scaler_state_dict'] = grad_scaler.state_dict()
+        if (
+            bool(getattr(self.config, "logic_net_enabled", True))
+            and getattr(self, "logic_net", None) is not None
+        ):
             payload['logic_net_state_dict'] = self.logic_net.state_dict()
         return payload
 
@@ -3898,12 +3887,14 @@ class DiffusionTrainer:
             'diffusion_state_dict': self.diffusion.state_dict(),
             'ema_diffusion_state_dict': self.ema_diffusion.state_dict(),
             'condition_encoder_state_dict': self.condition_encoder.state_dict(),
-            'logic_net_state_dict': self.logic_net.state_dict(),
             'config': self.config.to_dict(),
             'metrics': metrics,
             'schedule_type': self.config.schedule_type,
         }
-        if bool(getattr(self.config, "logic_net_enabled", True)):
+        if (
+            bool(getattr(self.config, "logic_net_enabled", True))
+            and getattr(self, "logic_net", None) is not None
+        ):
             payload['logic_net_state_dict'] = self.logic_net.state_dict()
         return payload
 
