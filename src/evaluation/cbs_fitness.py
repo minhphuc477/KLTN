@@ -12,6 +12,7 @@ from src.evaluation.search_benchmark_utils import (
     normalized_confusion_ratio,
     run_astar_oracle,
 )
+from src.evaluation.validator import ExternalValidator
 from src.simulation.cognitive_bounded_search import CognitiveBoundedSearch
 from src.simulation.validator import ZeldaLogicEnv
 
@@ -96,12 +97,16 @@ def _compute_graph_cognitive_proxy(
         else max(physical.nodes(), key=lambda node: (physical.degree(node), str(node)))
     )
 
-    try:
-        shortest = nx.shortest_path_length(physical, source=start, target=goal)
-        solvable = True
-    except (nx.NetworkXNoPath, nx.NodeNotFound):
-        shortest = 0
-        solvable = False
+    validation_graph = nx.DiGraph(graph)
+    validation = ExternalValidator(mode="full").validate(validation_graph, start_node=start, goal_node=goal)
+    solvable = bool(validation.is_solvable)
+    if solvable and validation.path_length > 0:
+        shortest = int(validation.path_length)
+    else:
+        try:
+            shortest = nx.shortest_path_length(physical, source=start, target=goal)
+        except (nx.NetworkXNoPath, nx.NodeNotFound):
+            shortest = 0
 
     degrees = [deg for _node, deg in physical.degree()]
     mean_deg = float(np.mean(degrees)) if degrees else 0.0
@@ -162,7 +167,9 @@ def _compute_graph_cognitive_proxy(
         'confusion_index': float(confusion_index),
         'astar_path_length': int(shortest),
         'cbs_path_length': int(cbs_path_len),
-        'astar_states': int(max(0, n_physical + e_physical)),
+        'astar_states': int(getattr(validation, "states_explored", 0) or max(0, n_physical + e_physical)),
+        'oracle_status': 'solved' if solvable else 'failed',
+        'failure_reason': '' if solvable else str(getattr(validation, "failure_reason", "") or "progression graph unsolved"),
         'is_proxy': 1.0,
     }
 

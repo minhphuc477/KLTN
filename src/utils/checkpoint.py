@@ -30,6 +30,7 @@ import torch.optim as optim
 
 logger = logging.getLogger(__name__)
 LATEST_RESUME_FILENAME = "latest_resume.pth"
+ALLOW_LEGACY_TORCH_LOAD_ENV = "HMOLQD_ALLOW_UNSAFE_LEGACY_TORCH_LOAD"
 
 
 def safe_torch_load(
@@ -38,13 +39,40 @@ def safe_torch_load(
     map_location: Any = "cpu",
     weights_only: bool = True,
 ) -> Any:
-    """Load a PyTorch checkpoint with restricted unpickling when available."""
+    """Load a PyTorch checkpoint with restricted unpickling when available.
+
+    Loading unrestricted pickle-backed checkpoints can execute arbitrary code.
+    Therefore, when callers request ``weights_only=True`` and the installed
+    PyTorch does not support that parameter, this helper fails closed by
+    default. Set ``HMOLQD_ALLOW_UNSAFE_LEGACY_TORCH_LOAD=1`` only for trusted,
+    local legacy checkpoints.
+    """
     try:
         return torch.load(path, map_location=map_location, weights_only=weights_only)
-    except TypeError:
+    except TypeError as exc:
+        message = str(exc).lower()
+        unsupported_weights_only = (
+            "weights_only" in message
+            and (
+                "unexpected" in message
+                or "keyword" in message
+                or "got an unexpected" in message
+            )
+        )
+        if not unsupported_weights_only:
+            raise
         if weights_only:
+            allow_unsafe = str(os.environ.get(ALLOW_LEGACY_TORCH_LOAD_ENV, "")).strip().lower()
+            if allow_unsafe not in {"1", "true", "yes"}:
+                raise RuntimeError(
+                    "Installed PyTorch does not support weights_only=True. "
+                    "Refusing unsafe legacy torch.load for checkpoint "
+                    f"{path!r}. Upgrade PyTorch or set {ALLOW_LEGACY_TORCH_LOAD_ENV}=1 "
+                    "only for trusted local checkpoints."
+                )
             logger.warning(
-                "Installed PyTorch does not support weights_only=True; falling back to legacy torch.load."
+                "Using unsafe legacy torch.load for trusted local checkpoint because %s is set.",
+                ALLOW_LEGACY_TORCH_LOAD_ENV,
             )
         return torch.load(path, map_location=map_location)
 

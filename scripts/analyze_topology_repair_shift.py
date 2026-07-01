@@ -11,10 +11,15 @@ import networkx as nx
 import numpy as np
 
 
-def _load_graph(path: Path) -> nx.Graph:
+def _load_graph(path: Path, *, trust_pickle: bool = False) -> nx.Graph:
     if path.suffix.lower() == ".graphml":
         return nx.read_graphml(path)
     if path.suffix.lower() in {".gpickle", ".pickle", ".pkl"}:
+        if not trust_pickle:
+            raise ValueError(
+                f"Refusing to unpickle {path}. Pickle can execute code; "
+                "rerun with --trust-pickle only for trusted local artifacts."
+            )
         import pickle
 
         with open(path, "rb") as handle:
@@ -41,11 +46,11 @@ def _repair_record(graph: nx.Graph) -> Dict[str, Any]:
     return dict(record) if isinstance(record, dict) else {}
 
 
-def summarize(paths: Iterable[Path]) -> Dict[str, Any]:
+def summarize(paths: Iterable[Path], *, trust_pickle: bool = False) -> Dict[str, Any]:
     rows: List[Dict[str, Any]] = []
     for path in paths:
         try:
-            graph = _load_graph(path)
+            graph = _load_graph(path, trust_pickle=trust_pickle)
             record = _repair_record(graph)
         except (OSError, ValueError, TypeError) as exc:
             rows.append({"path": str(path), "error": str(exc)})
@@ -80,9 +85,14 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Analyze post-hoc topology repair shifts.")
     parser.add_argument("--input", required=True, type=Path, help="Graph artifact file or directory.")
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument(
+        "--trust-pickle",
+        action="store_true",
+        help="Allow loading .pkl/.pickle/.gpickle graph artifacts from trusted local runs.",
+    )
     args = parser.parse_args()
 
-    payload = summarize(_iter_graph_files(args.input))
+    payload = summarize(_iter_graph_files(args.input), trust_pickle=bool(args.trust_pickle))
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 

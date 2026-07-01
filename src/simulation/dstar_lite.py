@@ -4,7 +4,8 @@ D* Lite Implementation for Real-Time Replanning
 
 Based on: Koenig, S., & Likhachev, M. (2002). "D* Lite." AAAI Conference.
 
-D* Lite is an incremental heuristic search algorithm that:
+D* Lite is an incremental heuristic search algorithm. This module implements
+a forward LPA*/D* Lite-style variant over Zelda game states:
 1. Efficiently replans when the environment changes
 2. Maintains g(s) and rhs(s) values for all states
 3. Uses priority queue with two-component keys
@@ -12,7 +13,9 @@ D* Lite is an incremental heuristic search algorithm that:
 
 Key Concepts:
 - g(s): Current best cost from start to s
-- rhs(s): One-step lookahead value (min over predecessors)
+- rhs(s): One-step lookahead value (min over predecessors); the start state
+  has rhs=0 in this forward variant, unlike the textbook backward-to-start
+  D* Lite presentation.
 - Locally inconsistent: g(s) != rhs(s)
 - Priority queue key: [min(g,rhs) + h, min(g,rhs)]
 """
@@ -29,6 +32,8 @@ from .validator import (
     CONDITIONAL_IDS,
     PUSHABLE_IDS,
     WATER_IDS,
+    CARDINAL_COST,
+    DIAGONAL_COST,
     game_state_key,
 )
 
@@ -139,7 +144,7 @@ class DStarLiteSolver:
         if self.allow_diagonals:
             diagonal = min(dr, dc)
             straight = max(dr, dc) - diagonal
-            return float((1.414 * diagonal) + straight)
+            return float((DIAGONAL_COST * diagonal) + (CARDINAL_COST * straight))
         return float(dr + dc)
     
     def update_vertex(self, state: GameState, state_hash: int):
@@ -667,9 +672,9 @@ class DStarLiteSolver:
         dc = abs(to_state.position[1] - from_state.position[1])
         
         if dr + dc == 2:  # Diagonal
-            return 1.414
+            return float(DIAGONAL_COST)
         else:  # Cardinal
-            return 1.0
+            return float(CARDINAL_COST)
     
     def _can_reach(self, from_state: GameState, to_state: GameState, target_tile: int) -> bool:
         """

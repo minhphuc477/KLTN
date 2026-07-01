@@ -174,8 +174,24 @@ These exist in codebase but are not all fully wired into main auto-solve path:
 Canonical export validation uses:
 
 - hard oracle: `A*`, graph progression validation, softlock check
-- comparison solvers: `BFS`, `Dijkstra`, `Greedy`, `D* Lite`, `DFS/IDDFS`, `Bidirectional A*`
+- exact fallback/baseline: `Dijkstra`
+- diagnostics only: `BFS`, `Greedy`, `D* Lite`, `DFS/IDDFS`, `Bidirectional A*`
 - behavioral probe: `CognitiveBoundedSearch`
+- benchmark artifact: `scripts/run_search_role_benchmark.py`
+
+`src/simulation/search_factory.py` now exposes
+`recommended_game_state_algorithm_specs(...)` so report-facing validation can
+select algorithms by environment class. On maps with Zelda state mechanics
+such as keys, bombs, doors, pickups, push blocks, enemies, puzzles, staged
+semantics, or graph transitions, the publication-safe hard oracle is full-state
+`A*`. `Bidirectional A*` is only an independent diagnostic on reversible,
+stateless grids; `D* Lite` is only a replanning diagnostic.
+
+For MAP-Elites / Quality-Diversity reporting, the archive may use graph
+topology as behavior descriptors, but the quality score must come from a
+progression-aware validator or a validated semantic grid. Undirected
+START-to-GOAL connectivity is not sufficient when locks, keys, switches,
+tokens, item gates, or consumable resources are present.
 
 More precise search roles in current code:
 
@@ -183,9 +199,9 @@ More precise search roles in current code:
 - `BFS`: `exact_baseline`
 - `Dijkstra`: `exact_fallback`
 - `Greedy`: `heuristic_baseline`
-- `D* Lite`: `incremental_replanning`
+- `D* Lite`: `incremental_replanning` / `replanning_diagnostic`
 - `DFS/IDDFS`: `exhaustive_probe`
-- `Bidirectional A*`: `comparison`
+- `Bidirectional A*`: `reversible_grid_comparison`
 
 `ParallelAStarSolver` currently shares a race-ordered closed set and stops after
 the first reported goal. It may be useful as a feasibility utility, but its

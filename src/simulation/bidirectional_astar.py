@@ -33,7 +33,8 @@ from dataclasses import dataclass, field
 
 from .validator import (
     GameState, ZeldaLogicEnv, SEMANTIC_PALETTE, WALKABLE_IDS, BLOCKING_IDS,
-    CONDITIONAL_IDS, PUSHABLE_IDS, WATER_IDS, PICKUP_IDS, game_state_key,
+    CONDITIONAL_IDS, PUSHABLE_IDS, WATER_IDS, PICKUP_IDS, CARDINAL_COST,
+    DIAGONAL_COST, game_state_key,
 )
 
 logger = logging.getLogger(__name__)
@@ -193,6 +194,19 @@ class BidirectionalAStar:
                     max_iterations,
                 )
                 break
+
+            if (
+                best_forward_node is not None
+                and best_backward_node is not None
+                and best_meeting_cost <= self._frontier_lower_bound() + 1e-6
+            ):
+                path = self._reconstruct_path(best_forward_node, best_backward_node)
+                logger.debug(
+                    "Bidirectional A* certified incumbent path: cost=%.3f, states=%d",
+                    best_meeting_cost,
+                    self.states_explored,
+                )
+                return True, path, self.states_explored
             
             # Alternate between forward and backward expansion
             if len(self.forward_open) <= len(self.backward_open) and self.forward_open:
@@ -200,7 +214,12 @@ class BidirectionalAStar:
                 success, meeting_node_f, meeting_node_b = self._expand_forward(counter)
                 if success:
                     path = self._reconstruct_path(meeting_node_f, meeting_node_b)
-                    if self._candidate_is_provably_optimal(path):
+                    cost = meeting_node_f.g_score + meeting_node_b.g_score
+                    if cost < best_meeting_cost:
+                        best_meeting_cost = cost
+                        best_forward_node = meeting_node_f
+                        best_backward_node = meeting_node_b
+                    if self._candidate_is_provably_optimal(path, candidate_cost=cost):
                         logger.debug(
                             "Bidirectional A* certified a shortest path: path_len=%d, states=%d",
                             len(path),
@@ -208,10 +227,11 @@ class BidirectionalAStar:
                         )
                         return True, path, self.states_explored
                     logger.debug(
-                        "Bidirectional first meeting was not lower-bound optimal; "
-                        "using canonical A*"
+                        "Bidirectional meeting cost %.3f is not yet certified; continuing",
+                        cost,
                     )
-                    return self._fallback_to_astar()
+                    counter += 1
+                    continue
                 
                 # Update best meeting point
                 if meeting_node_f and meeting_node_b:
@@ -228,7 +248,12 @@ class BidirectionalAStar:
                 success, meeting_node_b, meeting_node_f = self._expand_backward(counter)
                 if success:
                     path = self._reconstruct_path(meeting_node_f, meeting_node_b)
-                    if self._candidate_is_provably_optimal(path):
+                    cost = meeting_node_f.g_score + meeting_node_b.g_score
+                    if cost < best_meeting_cost:
+                        best_meeting_cost = cost
+                        best_forward_node = meeting_node_f
+                        best_backward_node = meeting_node_b
+                    if self._candidate_is_provably_optimal(path, candidate_cost=cost):
                         logger.debug(
                             "Bidirectional A* certified a shortest path: path_len=%d, states=%d",
                             len(path),
@@ -236,10 +261,11 @@ class BidirectionalAStar:
                         )
                         return True, path, self.states_explored
                     logger.debug(
-                        "Bidirectional first meeting was not lower-bound optimal; "
-                        "using canonical A*"
+                        "Bidirectional meeting cost %.3f is not yet certified; continuing",
+                        cost,
                     )
-                    return self._fallback_to_astar()
+                    counter += 1
+                    continue
                 
                 # Update best meeting point
                 if meeting_node_f and meeting_node_b:
@@ -291,12 +317,42 @@ class BidirectionalAStar:
     def _candidate_is_provably_optimal(
         self,
         path: List[Tuple[int, int]],
+        *,
+        candidate_cost: Optional[float] = None,
     ) -> bool:
-        """Certify only paths whose action count attains the grid lower bound."""
+        """Certify a reversible-grid candidate against frontier lower bounds."""
         if not path or path[0] != self.env.start_pos or path[-1] != self.env.goal_pos:
             return False
-        lower_bound = self._grid_distance(self.env.start_pos, self.env.goal_pos)
-        return float(len(path) - 1) == float(lower_bound)
+        candidate = float(candidate_cost if candidate_cost is not None else self._path_cost(path))
+        geometric_lower_bound = self._grid_distance(self.env.start_pos, self.env.goal_pos)
+        if candidate <= geometric_lower_bound + 1e-6:
+            return True
+        frontier_lower_bound = self._frontier_lower_bound()
+        return candidate <= frontier_lower_bound + 1e-6
+
+    def _path_cost(self, path: List[Tuple[int, int]]) -> float:
+        cost = 0.0
+        for a, b in zip(path[:-1], path[1:]):
+            cost += self._step_cost(a, b)
+        return float(cost)
+
+    def _step_cost(self, a: Tuple[int, int], b: Tuple[int, int]) -> float:
+        dr = abs(int(a[0]) - int(b[0]))
+        dc = abs(int(a[1]) - int(b[1]))
+        return float(DIAGONAL_COST if dr == 1 and dc == 1 else CARDINAL_COST)
+
+    def _frontier_lower_bound(self) -> float:
+        """Return the best remaining full-path lower bound from either frontier."""
+        candidates: List[float] = []
+        for heap, closed in (
+            (self.forward_open, self.forward_closed),
+            (self.backward_open, self.backward_closed),
+        ):
+            while heap and heap[0][2] in closed:
+                heapq.heappop(heap)
+            if heap:
+                candidates.append(float(heap[0][0]))
+        return min(candidates) if candidates else float("inf")
 
     def _fallback_to_astar(self) -> Tuple[bool, List[Tuple[int, int]], int]:
         """Fallback to canonical A* when bidirectional search cannot complete reliably."""
@@ -324,6 +380,11 @@ class BidirectionalAStar:
         Returns:
             GameState at goal position with maximal inventory
         """
+        if not self._requires_canonical_fallback():
+            goal_state = self.env.state.copy()
+            goal_state.position = self.env.goal_pos
+            return goal_state
+
         # Count all collectable items in dungeon
         all_keys = len(self.env.find_all_positions(SEMANTIC_PALETTE['KEY_SMALL']))
         all_bombs = len(self.env.find_all_positions(SEMANTIC_PALETTE['ITEM_MINOR'])) * 4
@@ -408,7 +469,7 @@ class BidirectionalAStar:
             if next_hash in self.forward_closed:
                 continue
             
-            g_score = current_node.g_score + 1  # Uniform cost
+            g_score = current_node.g_score + self._step_cost(current_node.state.position, next_state.position)
             
             if next_hash in self.forward_g_scores and \
                g_score >= self.forward_g_scores[next_hash]:
@@ -480,7 +541,7 @@ class BidirectionalAStar:
             if prev_hash in self.backward_closed:
                 continue
             
-            g_score = current_node.g_score + 1  # Uniform cost
+            g_score = current_node.g_score + self._step_cost(prev_state.position, current_node.state.position)
             
             if prev_hash in self.backward_g_scores and \
                g_score >= self.backward_g_scores[prev_hash]:
@@ -772,8 +833,9 @@ class BidirectionalAStar:
         dr = abs(int(a[0]) - int(b[0]))
         dc = abs(int(a[1]) - int(b[1]))
         if self.allow_diagonals:
-            # Each cardinal or diagonal transition costs one search action.
-            return float(max(dr, dc))
+            diagonal = min(dr, dc)
+            straight = max(dr, dc) - diagonal
+            return float((DIAGONAL_COST * diagonal) + (CARDINAL_COST * straight))
         return float(dr + dc)
 
     def _heuristic_forward(self, state: GameState) -> float:

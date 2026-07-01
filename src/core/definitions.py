@@ -348,6 +348,8 @@ EDGE_TYPE_MAP: Dict[str, str] = {
     'S': 'switch',           # Switch/puzzle required
     'S1': 'switch',          # Switch variant
     'I': 'item_locked',      # Key item required
+    'hazard': 'hazard',      # Risk-reward path; traversable, scored separately
+    'multi_lock': 'key_locked',
 }
 
 # Edge types that consume resources
@@ -419,6 +421,9 @@ EDGE_LABEL_ALIASES: Dict[str, List[str]] = {
     'stair': ['stair'],
     'warp': ['stair'],
     'item_locked': ['item_locked'],
+    'item_gate': ['item_locked'],
+    'hazard': ['hazard'],
+    'multi_lock': ['key_locked'],
     's1': ['switch'],
 }
 
@@ -430,6 +435,7 @@ EDGE_TYPE_PRIORITY: Dict[str, int] = {
     'bombable': 40,
     'switch': 30,
     'soft_locked': 20,
+    'hazard': 15,
     'stair': 10,
     'open': 0,
 }

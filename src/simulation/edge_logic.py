@@ -28,6 +28,7 @@ def edge_type_from_data(edge_data: Optional[Dict[str, Any]]) -> str:
         "shutter": "switch",
         "puzzle": "switch",
         "one_way": "soft_locked",
+        "hazard": "hazard",
     }
     return traversal_aliases.get(primary, primary)
 
@@ -40,6 +41,7 @@ def combine_edge_types(type1: str, type2: str) -> str:
         "locked": 3,
         "key_locked": 3,
         "puzzle": 2,
+        "hazard": 1,
         "open": 1,
         "": 1,
     }
@@ -59,7 +61,7 @@ def can_traverse_edge_type(
     """Check whether current state can traverse a graph edge type."""
     normalized = str(edge_type or "").strip().lower()
 
-    if normalized in ("open", "", "path", "stair"):
+    if normalized in ("open", "", "path", "stair", "hazard"):
         return True
     if normalized in ("locked", "key_locked"):
         return state.keys > 0

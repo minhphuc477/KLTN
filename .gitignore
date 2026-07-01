@@ -68,6 +68,24 @@ build/
 # Logs
 *.log
 
+# Local secrets and credentials
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+*.pfx
+*.crt
+*.cer
+id_rsa
+id_dsa
+id_ecdsa
+id_ed25519
+*_api_key*
+*secrets*.json
+*credentials*.json
+
 # LaTeX generated artifacts (build only from REPORT_LATEX/)
 REPORT_LATEX/*.aux
 REPORT_LATEX/*.bbl

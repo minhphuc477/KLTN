@@ -176,15 +176,15 @@ ACTION_DELTAS = {
     Action.DOWN: (1, 0),
     Action.LEFT: (0, -1),
     Action.RIGHT: (0, 1),
-    Action.UP_LEFT: (-1, -1),     # Cost: √2 ≈ 1.414
-    Action.UP_RIGHT: (-1, 1),     # Cost: √2 ≈ 1.414
-    Action.DOWN_LEFT: (1, -1),    # Cost: √2 ≈ 1.414
-    Action.DOWN_RIGHT: (1, 1),    # Cost: √2 ≈ 1.414
+    Action.UP_LEFT: (-1, -1),     # Cost: sqrt(2) ~= 1.414
+    Action.UP_RIGHT: (-1, 1),     # Cost: sqrt(2) ~= 1.414
+    Action.DOWN_LEFT: (1, -1),    # Cost: sqrt(2) ~= 1.414
+    Action.DOWN_RIGHT: (1, 1),    # Cost: sqrt(2) ~= 1.414
 }
 
 # Movement costs (Euclidean distance)
 CARDINAL_COST = 1.0      # UP/DOWN/LEFT/RIGHT
-DIAGONAL_COST = 1.414    # √2 for diagonal moves
+DIAGONAL_COST = math.sqrt(2.0)
 
 
 # ==========================================
@@ -314,159 +314,6 @@ def is_push_destination_available(state: GameState, pos: Tuple[int, int], static
 
 
 # ==========================================
-# BITSET-OPTIMIZED GAME STATE (10x FASTER HASHING)
-# ==========================================
-# Research: Holte et al. (2010) - "Efficient State Representation in A* Search"
-# Replaces frozenset with 64-bit integer bitsets for 5-10x speedup
-
-class BitsetStateManager:
-    """
-    Manages position-to-bit mappings for bitset state representation.
-    
-    Bit allocation (64-bit integer):
-    - Bits 0-29:  Doors (30 doors max)
-    - Bits 30-49: Items (20 items max)  
-    - Bits 50-63: Blocks (14 blocks max)
-    
-    This allows encoding all dungeon state in a single 64-bit integer.
-    """
-    
-    def __init__(self, grid: np.ndarray):
-        """Initialize bit mappings from dungeon grid."""
-        self.door_to_bit: Dict[Tuple[int, int], int] = {}
-        self.item_to_bit: Dict[Tuple[int, int], int] = {}
-        self.block_to_bit: Dict[Tuple[Tuple[int, int], Tuple[int, int]], int] = {}
-        
-        # Find all door positions and assign bits 0-29
-        door_ids = {SEMANTIC_PALETTE['DOOR_LOCKED'], SEMANTIC_PALETTE['DOOR_BOMB'], 
-                    SEMANTIC_PALETTE['DOOR_BOSS'], SEMANTIC_PALETTE['DOOR_PUZZLE']}
-        door_bit = 0
-        for tile_id in door_ids:
-            positions = np.where(grid == tile_id)
-            for r, c in zip(positions[0], positions[1]):
-                if door_bit < 30:
-                    self.door_to_bit[(int(r), int(c))] = door_bit
-                    door_bit += 1
-        
-        # Find all item positions and assign bits 30-49
-        item_ids = {SEMANTIC_PALETTE['KEY_SMALL'], SEMANTIC_PALETTE['KEY_BOSS'],
-                    SEMANTIC_PALETTE['KEY_ITEM'], SEMANTIC_PALETTE['ITEM_MINOR']}
-        item_bit = 30
-        for tile_id in item_ids:
-            positions = np.where(grid == tile_id)
-            for r, c in zip(positions[0], positions[1]):
-                if item_bit < 50:
-                    self.item_to_bit[(int(r), int(c))] = item_bit
-                    item_bit += 1
-        
-        # Blocks are rare - assign bits 50-63 (14 max)
-        # Note: pushed_blocks track (from_pos, to_pos) tuples
-        # For now, we'll use original set for blocks (low frequency in Zelda)
-
-
-@dataclass  
-class GameStateBitset:
-    """
-    Memory-optimized GameState using bitsets instead of frozensets.
-    
-    Performance improvement:
-    - Hash time: 5-10x faster (integer hash vs frozenset hash)
-    - Memory: 50% reduction (64-bit int vs set overhead)
-    - Search speed: 10-20% faster A* due to reduced hash collisions
-    
-    Scientific basis: Holte et al. (2010) showed bitset hashing reduces
-    state space overhead by 10-20x in grid-based pathfinding games.
-    """
-    position: Tuple[int, int]
-    keys: int = 0
-    bomb_count: int = 0  # Consumable bombs (was has_bomb: bool)
-    has_boss_key: bool = False
-    has_item: bool = False
-    state_bits: int = 0  # Single 64-bit integer encoding all sets
-    pushed_blocks: Set[Tuple[Tuple[int, int], Tuple[int, int]]] = field(default_factory=set)  # Rare, keep as set
-    defeated_enemies: Set[Tuple[int, int]] = field(default_factory=set)
-    _manager: Optional['BitsetStateManager'] = field(default=None, repr=False, compare=False)
-
-    # Backward-compatible property
-    @property
-    def has_bomb(self) -> bool:
-        return self.bomb_count > 0
-
-    @has_bomb.setter
-    def has_bomb(self, value: bool):
-        if value and self.bomb_count <= 0:
-            self.bomb_count = 1
-        elif not value:
-            self.bomb_count = 0
-    
-    def __hash__(self):
-        """MUCH faster than frozenset-based hash."""
-        return hash((
-            self.position,
-            self.keys,
-            self.bomb_count,
-            self.has_boss_key,
-            self.has_item,
-            self.state_bits,  # Single integer instead of 3 frozensets!
-            frozenset(self.pushed_blocks),  # Rare in Zelda, minimal impact
-            frozenset(self.defeated_enemies),
-        ))
-    
-    def __eq__(self, other):
-        if not isinstance(other, GameStateBitset):
-            return False
-        return (
-            self.position == other.position and
-            self.keys == other.keys and
-            self.bomb_count == other.bomb_count and
-            self.has_boss_key == other.has_boss_key and
-            self.has_item == other.has_item and
-            self.state_bits == other.state_bits and
-            self.pushed_blocks == other.pushed_blocks and
-            self.defeated_enemies == other.defeated_enemies
-        )
-    
-    def copy(self) -> 'GameStateBitset':
-        return GameStateBitset(
-            position=self.position,
-            keys=self.keys,
-            bomb_count=self.bomb_count,
-            has_boss_key=self.has_boss_key,
-            has_item=self.has_item,
-            state_bits=self.state_bits,
-            pushed_blocks=self.pushed_blocks.copy(),
-            defeated_enemies=self.defeated_enemies.copy(),
-            _manager=self._manager
-        )
-    
-    def open_door(self, pos: Tuple[int, int]):
-        """Mark door as opened using bitset."""
-        if self._manager and pos in self._manager.door_to_bit:
-            bit_idx = self._manager.door_to_bit[pos]
-            self.state_bits |= (1 << bit_idx)
-    
-    def is_door_open(self, pos: Tuple[int, int]) -> bool:
-        """Check if door is opened using bitset."""
-        if self._manager and pos in self._manager.door_to_bit:
-            bit_idx = self._manager.door_to_bit[pos]
-            return (self.state_bits & (1 << bit_idx)) != 0
-        return False
-    
-    def collect_item(self, pos: Tuple[int, int]):
-        """Mark item as collected using bitset."""
-        if self._manager and pos in self._manager.item_to_bit:
-            bit_idx = self._manager.item_to_bit[pos]
-            self.state_bits |= (1 << bit_idx)
-    
-    def is_item_collected(self, pos: Tuple[int, int]) -> bool:
-        """Check if item is collected using bitset."""
-        if self._manager and pos in self._manager.item_to_bit:
-            bit_idx = self._manager.item_to_bit[pos]
-            return (self.state_bits & (1 << bit_idx)) != 0
-        return False
-
-
-# ==========================================
 # STATE DOMINATION (PRUNING OPTIMIZATION)
 # ==========================================
 # Research: Felner et al. (2012) - "Partial Expansion A*"
@@ -536,40 +383,6 @@ def dominates(state_a: GameState, state_b: GameState) -> bool:
         return False
     
     # All checks passed: A dominates B
-    return True
-
-
-def dominates_bitset(state_a: GameStateBitset, state_b: GameStateBitset) -> bool:
-    """
-    Bitset version of domination check (even faster).
-    
-    Uses bitwise operations for O(1) superset checking.
-    """
-    if state_a.position != state_b.position:
-        return False
-    
-    if state_a.keys < state_b.keys:
-        return False
-    
-    # Bombs: A must have at least as many as B (consumable)
-    if state_a.bomb_count < state_b.bomb_count:
-        return False
-    if not state_a.has_boss_key and state_b.has_boss_key:
-        return False
-    if not state_a.has_item and state_b.has_item:
-        return False
-    
-    # Bitset superset check: (A & B) == B means A contains all bits in B
-    if (state_a.state_bits & state_b.state_bits) != state_b.state_bits:
-        return False
-    
-    # Pushed blocks (rare, keep set check)
-    if not state_a.pushed_blocks.issuperset(state_b.pushed_blocks):
-        return False
-
-    if not state_a.defeated_enemies.issuperset(state_b.defeated_enemies):
-        return False
-
     return True
 
 
@@ -3284,7 +3097,7 @@ class StateSpaceAStar:
                 neighbors.append((target_pos, target_tile, CARDINAL_COST, False, None))
             
             # PERFORMANCE: Diagonal movement only if enabled (disabled by default for 2x speedup)
-            # Diagonal movement (cost = √2 ≈ 1.414)
+            # Diagonal movement (cost = sqrt(2))
             # CRITICAL: Prevent corner-cutting through walls
             if self.allow_diagonals:
                 for dr, dc in diagonal_deltas:
@@ -3830,7 +3643,7 @@ class StateSpaceAStar:
             )
         )
         normalized = str(edge_type or "open").strip().lower()
-        if normalized in {"open", "path", "stair", "soft_locked", "one_way", "switch", "puzzle"}:
+        if normalized in {"open", "path", "stair", "hazard", "soft_locked", "one_way", "switch", "puzzle"}:
             return True, state.copy()
         if edge_key in state.opened_graph_edges:
             return True, state.copy()
@@ -4206,7 +4019,7 @@ class StateSpaceAStar:
                 current_room = self.env.get_room_for_position(state.position)
                 return self.env.is_room_cleared(current_room, state)
             return True
-        if normalized in ('open', 'path', 'stair'):
+        if normalized in ('open', 'path', 'stair', 'hazard'):
             return True
         elif normalized == 'bombable':
             return state.bomb_count > 0

@@ -421,6 +421,8 @@ class MLHeuristicAStar:
         """
         self.env = env
         self.model = None
+        self.map_height = int(getattr(env, "height", 1) or 1)
+        self.map_width = int(getattr(env, "width", 1) or 1)
         
         if model_path and os.path.exists(model_path) and TORCH_AVAILABLE:
             try:
@@ -428,6 +430,38 @@ class MLHeuristicAStar:
                 logger.info("ML heuristic loaded successfully")
             except (AttributeError, RuntimeError, ValueError, TypeError) as e:
                 logger.warning(f"Failed to load ML model: {e}")
+
+    def _featurize_runtime_state(self, state) -> np.ndarray:
+        """Featurize a live search state without constructing training modules."""
+        features = np.zeros(10, dtype=np.float32)
+
+        position = tuple(getattr(state, "position", (0, 0)))
+        features[0] = float(position[1]) / float(max(1, self.map_width))
+        features[1] = float(position[0]) / float(max(1, self.map_height))
+
+        keys = int(getattr(state, "keys", 0) or 0)
+        bomb_count = int(getattr(state, "bomb_count", 0) or 0)
+        features[2] = min(float(keys) / 5.0, 1.0)
+        features[3] = float(bomb_count > 0 or bool(getattr(state, "has_bomb", False)))
+        features[4] = float(bool(getattr(state, "has_boss_key", False)))
+        features[5] = float(bool(getattr(state, "has_item", False)))
+
+        if self.env.goal_pos:
+            dist = abs(position[0] - self.env.goal_pos[0]) + abs(position[1] - self.env.goal_pos[1])
+            features[6] = float(dist) / float(max(1, self.map_height + self.map_width))
+
+        from src.core.definitions import SEMANTIC_PALETTE
+
+        locked_doors = np.sum(self.env.grid == SEMANTIC_PALETTE['DOOR_LOCKED'])
+        features[7] = float(locked_doors) / 10.0
+        features[8] = float(keys) / 10.0
+
+        start_pos = getattr(self.env, "start_pos", None)
+        if start_pos is not None:
+            progress = abs(position[0] - start_pos[0]) + abs(position[1] - start_pos[1])
+            features[9] = min(float(progress) / float(max(1, self.map_height + self.map_width)), 1.0)
+
+        return features
     
     def heuristic(self, state) -> float:
         """
@@ -447,18 +481,7 @@ class MLHeuristicAStar:
         if self.model is None:
             return geometric_fallback
         
-        # Use ML heuristic
-        trainer = HeuristicTrainer(self.env.height, self.env.width)
-        example = TrainingExample(
-            position=state.position,
-            keys=state.keys,
-            has_bomb=state.has_bomb,
-            has_boss_key=state.has_boss_key,
-            has_item=state.has_item,
-            remaining_cost=0  # Not used for prediction
-        )
-        features = trainer.featurize_state(example, self.env)
-        
+        features = self._featurize_runtime_state(state)
         prediction = float(self.model.predict_cost(features))
         if not math.isfinite(prediction):
             return geometric_fallback

@@ -68,7 +68,13 @@ from .parallel_astar import ParallelAStarSolver
 from .solver_comparison import SolverComparison
 from .map_elites import MAPElitesEvaluator, run_map_elites_on_maps, plot_heatmap
 from .search_base import SearchRepresentation, GameStateSearchConfig, GameStateSearchResult
-from .search_factory import SUPPORTED_GAME_STATE_ALGORITHMS, run_game_state_solver
+from .search_factory import (
+    SUPPORTED_GAME_STATE_ALGORITHMS,
+    environment_requires_full_state_oracle,
+    recommended_game_state_algorithm_specs,
+    run_game_state_solver,
+    run_recommended_game_state_solver,
+)
 
 __all__ = [
     # Core validator components
@@ -123,5 +129,8 @@ __all__ = [
     'GameStateSearchConfig',
     'GameStateSearchResult',
     'SUPPORTED_GAME_STATE_ALGORITHMS',
+    'environment_requires_full_state_oracle',
+    'recommended_game_state_algorithm_specs',
     'run_game_state_solver',
+    'run_recommended_game_state_solver',
 ]

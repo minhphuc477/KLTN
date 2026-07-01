@@ -9,6 +9,7 @@ from scripts.run_synthetic_metroidvania_ood_probe import (
     build_chain_control_graph,
     build_metroidvania_ood_graph,
 )
+from scripts.analyze_topology_repair_shift import summarize as summarize_topology_repair_shift
 from scripts.validate_human_playtest_telemetry import validate_human_session
 from scripts.visualize_qd_archive import analyze_records, extract_archive_records
 from src.core.definitions import SEMANTIC_PALETTE
@@ -38,6 +39,16 @@ def _branch_graph() -> nx.DiGraph:
     graph.add_edge(1, 4, edge_type="PATH")
     graph.add_edge(4, 2, edge_type="PATH")
     return graph
+
+
+def test_topology_repair_shift_refuses_pickle_without_explicit_trust(tmp_path):
+    graph_path = tmp_path / "graph.pkl"
+    graph_path.write_bytes(b"not a trusted pickle")
+
+    payload = summarize_topology_repair_shift([graph_path])
+
+    assert payload["summary"]["error_count"] == 1
+    assert "Refusing to unpickle" in payload["rows"][0]["error"]
 
 
 def test_runtime_map_elites_prefers_macro_graph_descriptors():

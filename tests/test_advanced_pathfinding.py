@@ -11,6 +11,7 @@ Usage:
 
 import numpy as np
 import logging
+import math
 from typing import Tuple
 
 import pytest
@@ -185,7 +186,7 @@ def verify_path_validity(env: ZeldaLogicEnv, path: list) -> Tuple[bool, str]:
 
 class TestDStarLite:
     """Test D* Lite incremental replanning."""
-    
+
     def test_simple_dungeon(self):
         """Test D* Lite on simple dungeon."""
         logger.info("==== Testing D* Lite: Simple Dungeon ====")
@@ -226,7 +227,7 @@ class TestDStarLite:
         env = ZeldaLogicEnv(grid)
         solver = DStarLiteSolver(env, allow_diagonals=True)
 
-        assert solver._heuristic(GameState(position=(1, 1))) == pytest.approx(1.414 * 7, rel=1e-3)
+        assert solver._heuristic(GameState(position=(1, 1))) == pytest.approx(math.sqrt(2.0) * 7, rel=1e-3)
 
     def test_locked_door_predecessor_restores_consumed_key(self):
         grid = create_simple_dungeon()
@@ -339,6 +340,27 @@ class TestBidirectionalAStar:
         logger.info(f"  Meeting point: {solver.meeting_point}")
         logger.info(f"  Collision checks: {solver.collision_checks}")
     
+    def test_reversible_detour_does_not_fallback_just_for_obstacle_length(self):
+        grid = np.full((7, 9), SEMANTIC_PALETTE['FLOOR'], dtype=np.int64)
+        grid[0, :] = SEMANTIC_PALETTE['WALL']
+        grid[-1, :] = SEMANTIC_PALETTE['WALL']
+        grid[:, 0] = SEMANTIC_PALETTE['WALL']
+        grid[:, -1] = SEMANTIC_PALETTE['WALL']
+        grid[3, 1:7] = SEMANTIC_PALETTE['WALL']
+        grid[3, 6] = SEMANTIC_PALETTE['DOOR_OPEN']
+        grid[1, 1] = SEMANTIC_PALETTE['START']
+        grid[5, 1] = SEMANTIC_PALETTE['TRIFORCE']
+        env = ZeldaLogicEnv(grid)
+        solver = BidirectionalAStar(env, timeout=100000)
+
+        success, path, _nodes = solver.solve()
+
+        assert success
+        assert path[0] == env.start_pos
+        assert path[-1] == env.goal_pos
+        assert len(path) - 1 > solver._grid_distance(env.start_pos, env.goal_pos)
+        assert solver.used_fallback is False
+
     def test_simple_dungeon(self):
         """Test Bidirectional A* on simple dungeon."""
         logger.info("==== Testing Bidirectional A*: Simple Dungeon ====")
@@ -367,12 +389,12 @@ class TestBidirectionalAStar:
 
         assert collision is None
 
-    def test_diagonal_heuristic_matches_unit_action_cost(self):
+    def test_diagonal_heuristic_matches_validator_diagonal_cost(self):
         grid = create_simple_dungeon()
         env = ZeldaLogicEnv(grid)
         solver = BidirectionalAStar(env, timeout=100000, allow_diagonals=True)
 
-        assert solver._heuristic_forward(GameState(position=(1, 1))) == pytest.approx(7.0)
+        assert solver._heuristic_forward(GameState(position=(1, 1))) == pytest.approx(math.sqrt(2.0) * 7, rel=1e-3)
 
     def test_stateful_map_uses_canonical_fallback(self):
         grid = np.full((5, 7), SEMANTIC_PALETTE['WALL'], dtype=np.int64)

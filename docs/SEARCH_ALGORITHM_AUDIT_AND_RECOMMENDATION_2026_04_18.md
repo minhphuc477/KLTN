@@ -1,220 +1,139 @@
 # Search Algorithm Audit And Recommendation
 
-Last updated: 2026-04-18
+Last updated: 2026-07-02.
 
-This note answers a specific question:
+This note answers which pathfinding algorithms should be used in H-MOLQD and
+which algorithms should remain diagnostics or ablations. It is intentionally
+conservative: a solver is only a hard oracle when its assumptions match the
+Zelda state model implemented in `src/simulation/validator.py`.
 
-- is `D* Lite` actually the primary search algorithm in this repo?
-- if not, what should be the primary search stack for the current
-  `H-MOLQD` architecture?
+## Bottom Line
 
-Short answer:
+- Use full-state `A*` as the report-facing mechanical oracle.
+- Use `Dijkstra` as an exact cost fallback/baseline when heuristic behavior is
+  under scrutiny.
+- Use `Bidirectional A*` only for reversible, stateless grid comparisons.
+- Use `D* Lite` only for incremental replanning experiments.
+- Use `P-CBS` as a bounded-agent behavioral probe, not as a hard solvability
+  oracle.
+- Use `JPS`, `HPA*`, or `Theta*` only in separate ablations whose assumptions
+  are explicitly restricted to static grids or any-angle movement.
 
-- `No`, `D* Lite` is not the repo's hard oracle.
-- the correct primary stack is still:
-  - `graph_guided_oracle`
-  - `A*` / hybrid A* tile-state validation
-  - `Dijkstra` exact fallback when heuristic A* underperforms on staged puzzles
-- `D* Lite` should remain a `replanning probe`, not the primary static
-  correctness oracle.
+## Code Truth
 
-## 1. Code Truth
+The current selector lives in
+[`src/simulation/search_factory.py`](../src/simulation/search_factory.py):
 
-Current code says:
+- `A*`: `validation_role="oracle"`, `canonical_use="hard_oracle"`.
+- `Dijkstra`: exact fallback and baseline.
+- `D* Lite`: `validation_role="replanning_diagnostic"`.
+- `Bidirectional A*`: `validation_role="reversible_grid_diagnostic"`.
+- `recommended_game_state_algorithm_specs(...)` selects algorithms by
+  environment class.
+- `environment_requires_full_state_oracle(...)` returns true when the map
+  includes inventory, pickups, doors, water/item traversal, push blocks,
+  enemies, puzzles, graph transitions, or staged puzzle lookup.
 
-- [`src/simulation/search_factory.py`](../src/simulation/search_factory.py)
-  marks:
-  - `A*` as `validation_role="oracle"` and `canonical_use="hard_oracle"`
-  - `D* Lite` as `validation_role="replanning"` and
-    `canonical_use="incremental_replanning"`
-- [`src/simulation/dstar_search.py`](../src/simulation/dstar_search.py)
-  explicitly labels `D* Lite` as:
-  - `intended_use="incremental_replanning"`
-  - `independent_oracle=False`
-- [`src/simulation/validator.py`](../src/simulation/validator.py)
-  runs:
-  - primary `A*` / hybrid A*
-  - then `Dijkstra` fallback if needed
-- [`scripts/run_fast_sampler_visual_audit.py`](../scripts/run_fast_sampler_visual_audit.py)
-  explicitly states:
-  - `A* remains the hard grid-level oracle in this suite.`
+This means the code no longer exposes all solvers as equivalent validators.
 
-So the repo’s actual primary correctness contract is not `D* Lite`.
+## Literature Basis
 
-## 2. Why D* Lite Is Not The Best Primary Oracle Here
+Primary references checked:
 
-The current architecture does not validate simple static occupancy grids only.
-It validates:
+- Hart, Nilsson, and Raphael, "A Formal Basis for the Heuristic Determination
+  of Minimum Cost Paths" (1968): basis for admissible A* path search.
+- Koenig and Likhachev, "D* Lite" (AAAI 2002): incremental heuristic search
+  for repeated similar replanning tasks.
+- Harabor and Grastien, "Online Graph Pruning for Pathfinding on Grid Maps"
+  (AAAI 2011): Jump Point Search for uniform-cost grid maps.
+- Botea, Mueller, and Schaeffer, "Near Optimal Hierarchical Path-Finding"
+  (Journal of Game Development, 2004): HPA* for large static game maps.
 
-- inventory state
-- key / lock progression
-- staged puzzle semantics
-- room-to-room graph guidance
-- stateful multi-step puzzle plans
+The important mismatch is state representation. H-MOLQD validation states are
+not only `(row, col)`: they include keys, bombs, opened doors, collected items,
+pushed blocks, defeated enemies, puzzle stages, floors, and opened graph edges.
+Two visits to the same tile can have different legal futures. Plain-grid
+symmetry pruning and one-shot backward search are therefore diagnostics unless
+the environment is proven stateless and reversible.
 
-That breaks the clean assumptions behind most grid-speedup papers.
+## Algorithm Roles
 
-### 2.1 Why `JPS` is not the hard oracle here
+| Algorithm | Use in this repo | Do not claim |
+|---|---|---|
+| Full-state A* | Hard mechanical oracle | Human playability |
+| Dijkstra | Exact no-heuristic baseline/fallback | Fast default |
+| BFS | Small uniform-cost sanity baseline | Scalable validator |
+| Greedy | Inadmissible heuristic baseline | Correctness oracle |
+| D* Lite | Dynamic replanning diagnostic | Primary static oracle |
+| DFS/IDDFS | Bounded exhaustive probe | Optimal default |
+| Bidirectional A* | Reversible stateless-grid comparison | Valid on inventory maps |
+| P-CBS | Bounded-agent behavioral/readability probe | Mechanical oracle |
+| JPS | Future static-grid speed ablation | Valid on stateful Zelda mechanics |
+| HPA* | Future large static-map speed ablation | Exact optimal oracle |
+| Theta* | Future any-angle geometry ablation | Zelda tile-interaction oracle |
 
-`JPS` is excellent for static, uniform-cost, plain occupancy grids. But the
-repo’s full game-state search space is not that:
+## Implementation Notes
 
-- state includes keys, opened doors, items, and puzzle-stage completion
-- two identical `(x, y)` tiles can represent different legal futures
-- symmetry pruning assumptions become unreliable once the transition model is
-  stateful rather than purely geometric
+Current fixes applied:
 
-So `JPS` is a good future research branch for simple static tile validation, but
-not the right hard oracle for the current stateful dungeon validator.
+- Runtime algorithm recommendation is centralized in `search_factory.py`.
+- The role-separated benchmark entry point is
+  [`scripts/run_search_role_benchmark.py`](../scripts/run_search_role_benchmark.py).
+- Bidirectional A* now continues after the first frontier meeting until the
+  incumbent path is certified against the remaining frontier lower bound.
+- Reversible-grid bidirectional search initializes backward inventory from the
+  start state, avoiding false collision rejection on stateless maps.
+- D* Lite documentation now explicitly states this implementation is a forward
+  LPA*/D* Lite-style variant.
+- Diagonal movement uses the canonical `sqrt(2)` cost consistently across
+  validator, D* Lite, and Bidirectional A*.
+- Hazard graph edges parse and traverse as risk-bearing open edges rather than
+  silently becoming non-traversable.
+- Graph-level QD fitness now checks progression solvability through
+  `ExternalValidator` before scoring graph cognitive proxies. Undirected
+  connectivity is not treated as enough for lock/key mission graphs.
 
-### 2.2 Why `Theta*` is not the hard oracle here
+### Benchmark Commands
 
-`Theta*` is useful when any-angle movement matters. But Zelda dungeon movement
-in this repo is tile-semantic and interaction-heavy:
+Use a smoke run only to verify wiring:
 
-- doors
-- locks
-- puzzle gates
-- push-block semantics
+```bash
+python scripts/run_search_role_benchmark.py --synthetic-smoke --include-diagnostics --include-static-grid-ablation --output-dir results/search_role_benchmark_smoke --timeout 5000
+```
 
-The key problem is not path smoothing. It is exact state transition validity.
-So `Theta*` is not the right report-facing correctness oracle either.
+Use final generated artifacts for report tables:
 
-### 2.3 Why `D* Lite` is still valuable
+```bash
+python scripts/run_search_role_benchmark.py --input results/final_generated_maps --include-diagnostics --include-static-grid-ablation --pcbs-personas novice,balanced,expert --output-dir results/search_role_benchmark_final
+```
 
-`D* Lite` is valuable when:
+The CSV/JSON outputs include `validation_role` and `canonical_use` columns.
+Keep those columns in downstream tables.
 
-- the map changes online
-- hidden obstacles are revealed incrementally
-- the planner must repair paths repeatedly instead of solving one fixed static
-  state-space instance
+## Publication Contract
 
-That matches the GUI replanning story and dynamic probe story.
-It does not match the repo’s main export-time correctness contract.
+For final tables:
 
-## 3. Literature Basis
+1. Report hard solvability with full-state A* plus graph progression and
+   softlock checks.
+2. Report Dijkstra only as an exact comparator or fallback.
+3. Report D* Lite under a replanning section with dynamic-change scenarios.
+4. Report Bidirectional A* only on reversible stateless grids, or explicitly
+   mark `fallback_used=True` when it delegates to A*.
+5. Report P-CBS separately as bounded-agent readability and difficulty.
+6. Do not merge these into one "solver success" metric without role labels.
+7. For Quality-Diversity evolution, archive quality must be based on
+   progression-solvable mission graphs or validated semantic grids. Behavioral
+   descriptors can be topological, but the quality score must not reward a
+   graph that is only connected after ignoring gates, keys, switches, or
+   consumable locks.
 
-Primary sources:
+## Remaining Search Work
 
-- Koenig and Likhachev, *D* Lite*, AAAI 2002:
-  <https://aaai-25.aaai.org/Papers/AAAI/2002/AAAI02-072.pdf>
-- Koenig, Likhachev, Furcy, *Lifelong Planning A**,
-  Artificial Intelligence 2004:
-  <https://doi.org/10.1016/j.artint.2003.12.001>
-- Harabor and Grastien, *Online Graph Pruning for Pathfinding on Grid Maps*,
-  AAAI 2011:
-  <https://pathfinding.ai/pdf/harabor-grastien-aaai11.pdf>
-- Daniel, Nash, Koenig, Felner, *Theta*: Any-Angle Path Planning on Grids*:
-  <https://arxiv.org/abs/1401.3843>
-- Botea, Müller, Schaeffer, *Near Optimal Hierarchical Path-Finding*:
-  <https://webdocs.cs.ualberta.ca/~jonathan/publications/ai_publications/jogd.pdf>
-- Björnsson et al., *Fringe Search: Beating A* at Pathfinding on Game Maps*:
-  archived at:
-  <https://web.archive.org/web/20090219220415/http://www.cs.ualberta.ca/~games/pathfind/publications/cig2005.pdf>
-
-Research conclusion:
-
-- `D* Lite` is strong for incremental replanning.
-- `JPS` is strong for static uniform grids.
-- `Theta*` is strong for any-angle geometry.
-- `HPA*` and `Fringe Search` are strong game-AI speedups in large static maps.
-- none of those automatically dominate `A*` when the search state includes
-  inventory, door state, and staged puzzle progress.
-
-## 4. Best Search Stack For This Repo
-
-### 4.1 Hard correctness oracle
-
-Keep:
-
-1. `graph_guided_oracle`
-2. `hybrid A*`
-3. `Dijkstra` exact fallback
-4. `graph_progression`
-5. `softlock_check`
-
-Reason:
-
-- this stack matches the actual stateful mechanics
-- it is conservative and thesis-safe
-- it already aligns with the repo’s current validation contract
-
-### 4.2 Comparison / ablation solvers
-
-Keep:
-
-- `BFS`
-- `Dijkstra`
-- `Greedy`
-- `D* Lite`
-- `DFS/IDDFS`
-- `Bidirectional A*`
-
-Reason:
-
-- they help characterize the search space
-- they should not be promoted to hard oracle status without stronger evidence
-
-### 4.3 Behavioral validator
-
-Keep:
-
-- `P-CBS`
-
-Reason:
-
-- it measures bounded-rational player-like difficulty
-- it is not the hard oracle
-
-### 4.4 Optional future research additions
-
-Promising but not implemented as primary oracle:
-
-- `JPS` for simple static occupancy-grid validation only
-- `HPA*` for very large static stitched maps if a clean abstraction layer is
-  built
-- `Theta*` only if the movement model becomes any-angle and not strictly
-  tile-semantic
-
-## 5. Concrete Fixes Applied In This Pass
-
-Implemented:
-
-- solver registry now exposes explicit canonical-use metadata
-- `D* Lite` is now labeled `replanning`, not generic comparison-only metadata
-- export search-suite payloads now carry `canonical_use`
-- GUI `D* Lite` logging now says `incremental replanning probe` and makes the
-  `A*` fallback explicit
-
-Main files:
-
-- [`src/simulation/search_factory.py`](../src/simulation/search_factory.py)
-- [`scripts/run_fast_sampler_visual_audit.py`](../scripts/run_fast_sampler_visual_audit.py)
-- [`src/gui/gameplay/path_strategies.py`](../src/gui/gameplay/path_strategies.py)
-
-## 6. Honest Remaining Search Gaps
-
-Still not done:
-
-1. full latest-code rerun of the long persona benchmark
-2. a dedicated search-only benchmark table comparing the canonical solvers on
-   the current staged puzzle slice
-3. a clean research branch for `JPS` or `HPA*` on simplified static grids
-
-What is *not* needed right now:
-
-- replacing the current hard oracle with `D* Lite`
-- replacing the current hard oracle with `Theta*`
-- replacing the current hard oracle with sampling planners
-
-## 7. Bottom Line
-
-If the question is:
-
-- `what is the best search for this current model/architecture?`
-
-then the answer is:
-
-- `A* + graph guidance + Dijkstra exact fallback` for correctness
-- `D* Lite` only for incremental replanning experiments / GUI dynamic behavior
-- `P-CBS` only for bounded-rational behavioral evaluation
+- Run the search-only benchmark over final generated maps with `A*`,
+  `Dijkstra`, `P-CBS` personas, and diagnostic solvers separated by role.
+- If large stitched maps become a runtime bottleneck, extend the static-grid
+  ablation with HPA*. Keep it separate from Zelda-state validation just like
+  the current JPS ablation.
+- Keep human/player claims separate from oracle claims until calibrated
+  playtest data exists.
