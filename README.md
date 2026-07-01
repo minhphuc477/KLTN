@@ -289,7 +289,8 @@ Expected evidence artifacts:
 - **Current Architecture**: `docs/CURRENT_ARCHITECTURE.md`
 - **Canonical Model Rationale**: `docs/CANONICAL_MODEL_RATIONALE_ABLATION_AND_COMPLEXITY_GUIDE.md`
 - **Claim Traceability**: `docs/TRACEABILITY_AND_CLAIM_VALIDATION.md`
-- **Architecture & Benchmarks**: `docs/SOTA_COMPARISON_AND_BENCHMARKS.md`
+- **Publication Guidance & Cards**: `docs/PUBLICATION_GUIDANCE_AND_CARDS.md`
+- **External Baselines & Benchmarks**: `docs/SOTA_COMPARISON_AND_BENCHMARKS.md`
 - **Full Training/Ablation Runbook**: `docs/FULL_TRAINING_ABLATION_AND_EVAL_COMMAND_BOOK_2026_04_18.md`
 - **VQ-VAE-2 / LogicNet / Repair Protocol**: `docs/VQVAE2_LOGICNET_REPAIR_ABLATION_PROTOCOL_2026_05_23.md`
 - **Kaggle Training Suite**: `docs/KAGGLE_T4_X2_TRAINING.md`

@@ -1,9 +1,18 @@
 # Architecture Audit Research Notes
 
-Last consolidated: 2026-07-01.
+Last consolidated: 2026-07-02.
 
 This is the current non-GUI audit ledger for H-MOLQD. It replaces the previous
 chronological append-only log. Historical reviews remain under `docs/archive/`.
+
+Publication-facing claim boundaries now live in
+[`PUBLICATION_GUIDANCE_AND_CARDS.md`](PUBLICATION_GUIDANCE_AND_CARDS.md) and
+the matching machine-readable
+[`publication_guidance_card.json`](publication_guidance_card.json). This ledger
+tracks implementation/evidence status; the publication card defines the
+research question, system boundary, data card, artifact card, metric contract,
+baseline taxonomy, failure taxonomy, human-calibration stance, reproducibility
+requirements, and IP note.
 
 ## Scope
 
@@ -384,6 +393,16 @@ Required final evidence:
 5. P-CBS persona/component results with oracle status separated from timeout.
 6. Paired significance tests and effect sizes.
 7. Human calibration or appropriately limited proxy-language.
+
+Non-experiment publication contract work now completed:
+
+- A canonical publication guidance/card document was added.
+- A machine-readable publication card was generated and validated.
+- `scripts/validate_publication_readiness.py` now checks card completeness,
+  artifact status/hash discipline, required metric names, human-calibration
+  status, and conservative claim-language boundaries.
+- Documentation entrypoints now route readers to the publication contract before
+  older benchmark/SOTA-named notes.
 
 ## External Pathfinding And SOTA Audit Triage
 

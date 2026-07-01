@@ -294,7 +294,7 @@ Route export includes:
 1. Use `Solver=A*` + `Search Space=Hybrid` as baseline for solvability validation.
 2. Enable `priority_tie_break` and `priority_key_boost` for lock-heavy dungeons.
 3. Enable `enable_ara` and tune `ARA* weight` only when speed is more important than strict optimality.
-4. Use CBS personas when you want human-like behavior metrics, not shortest-path optimality.
+4. Use CBS personas when you want bounded-agent proxy metrics, not shortest-path optimality.
 5. Treat `parallel_search`, `multi_goal`, and `dynamic_difficulty` as experimental/scaffolded until fully wired.
 
 ## 8. Notes on Legacy Docs

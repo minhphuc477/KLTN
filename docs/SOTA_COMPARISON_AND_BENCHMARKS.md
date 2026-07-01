@@ -1,6 +1,11 @@
-# SOTA Comparison, Architecture Audit, and Benchmark Protocol
+# External Baselines, Architecture Audit, and Benchmark Protocol
 
 Last updated: 2026-03-30
+
+This document is retained as a benchmark and provenance note. It is not a
+current claim that the repository is state of the art. Publication-facing claim
+language is governed by
+[`PUBLICATION_GUIDANCE_AND_CARDS.md`](PUBLICATION_GUIDANCE_AND_CARDS.md).
 
 This is the research baseline for this repository:
 - what is already implemented,

@@ -1,0 +1,199 @@
+{
+  "schema_version": "1.0",
+  "research_question": "Can a graph-conditioned neural-symbolic PCG pipeline generate Zelda-like dungeons while separating raw neural validity, symbolic repair, hard oracle validation, and bounded-agent diagnostics?",
+  "publishable_direction": {
+    "primary": "repair-aware graph-conditioned neural-symbolic PCG system",
+    "not_primary": [
+      "generic dungeon generator",
+      "standalone SOTA diffusion model",
+      "validated human-likeness model",
+      "paper-faithful LCM-LoRA implementation"
+    ]
+  },
+  "system_boundary": {
+    "proposed_method_blocks": [
+      "Block 0 data and graph extraction",
+      "Block I mission-graph generation",
+      "Block II tokenizer",
+      "Block III condition encoder",
+      "Block IV room generator",
+      "Block V LogicNet diagnostics/guidance",
+      "Block VI symbolic repair",
+      "Block VII hard oracle and P-CBS diagnostics"
+    ],
+    "baselines_or_ablations": [
+      "random topology",
+      "grammar-only topology",
+      "flat-prior WFC",
+      "weighted-prior WFC",
+      "no graph conditioning",
+      "no LogicNet",
+      "no repair",
+      "categorical/codebook prior",
+      "masked-token generator",
+      "few-step consistency adapter"
+    ]
+  },
+  "claim_language": {
+    "allowed": [
+      "graph-conditioned",
+      "repair-aware",
+      "bounded-agent proxy",
+      "matched-budget ablation",
+      "raw/pre-repair validity",
+      "post-repair validity"
+    ],
+    "forbidden_without_extra_evidence": [
+      "state-of-the-art",
+      "sota",
+      "surpasses publications",
+      "human-like",
+      "humanlike",
+      "paper-faithful lcm-lora"
+    ]
+  },
+  "data_card": {
+    "dataset": "VGLC The Legend of Zelda",
+    "dataset_manifest_path": "Data/The Legend of Zelda/dataset_manifest.json",
+    "train_dungeon_ids": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8
+    ],
+    "test_dungeon_ids": [
+      9
+    ],
+    "room_shape": [
+      16,
+      11
+    ],
+    "tile_classes": 44,
+    "leakage_policy": "Dungeon 9 is held out from training and model selection.",
+    "augmentation_policy": "Document exact augmentation commands before use."
+  },
+  "artifact_manifest": {
+    "required_status_values": [
+      "current",
+      "blocked",
+      "stale",
+      "invalid",
+      "smoke_only"
+    ],
+    "artifacts": [
+      {
+        "name": "vqvae",
+        "path": "",
+        "sha256": "",
+        "status": "blocked",
+        "notes": "Must be a valid tokenizer checkpoint, not a diffusion bundle."
+      },
+      {
+        "name": "diffusion",
+        "path": "",
+        "sha256": "",
+        "status": "blocked",
+        "notes": "Must be trained on the locked split and paired with the tokenizer above."
+      }
+    ]
+  },
+  "metric_contract": {
+    "required_metrics": [
+      "raw_oracle_solved_rate",
+      "post_oracle_solved_rate",
+      "raw_pcbs_valid_rate",
+      "post_pcbs_valid_rate",
+      "repair_rate",
+      "tiles_repaired_mean",
+      "generation_time_sec",
+      "diversity",
+      "controllability_error"
+    ],
+    "raw_vs_repaired_policy": "Raw/pre-repair and post-repair oracle/P-CBS rates must be reported separately.",
+    "timeout_policy": "Timeout, unsolved, and invalid-input outcomes are separate labels."
+  },
+  "baseline_taxonomy": {
+    "symbolic": [
+      "random graph",
+      "grammar-only",
+      "flat WFC",
+      "weighted WFC"
+    ],
+    "neural": [
+      "categorical prior",
+      "masked token",
+      "latent diffusion"
+    ],
+    "pipeline": [
+      "no graph",
+      "no LogicNet",
+      "no repair",
+      "full stack"
+    ],
+    "external_alignment": [
+      "PCG Benchmark quality",
+      "diversity",
+      "controllability"
+    ]
+  },
+  "failure_taxonomy": [
+    "disconnected_graph",
+    "missing_key_or_token",
+    "door_mismatch",
+    "raw_room_unsolvable",
+    "repair_failed",
+    "oracle_timeout",
+    "pcbs_timeout",
+    "teacher_fallback_used",
+    "invalid_checkpoint"
+  ],
+  "human_calibration": {
+    "status": "proxy_only",
+    "allowed_claim": "P-CBS is a bounded-agent diagnostic.",
+    "blocked_claim": "P-CBS is human-like or human-calibrated.",
+    "required_for_human_claims": "Consent-marked human telemetry plus persona calibration."
+  },
+  "reproducibility": {
+    "required_per_table": [
+      "command",
+      "config",
+      "seed_list",
+      "git_commit",
+      "checkpoint_hashes",
+      "hardware",
+      "runtime",
+      "output_paths"
+    ]
+  },
+  "ethics_ip": {
+    "data_provenance_note_required": true,
+    "zelda_copyright_note_required": true,
+    "recommended_scope": "research-use evaluation on VGLC-derived data"
+  },
+  "literature_basis": [
+    {
+      "topic": "PCGML and repair/evaluation framing",
+      "source": "Summerville et al., Procedural Content Generation via Machine Learning",
+      "url": "https://arxiv.org/abs/1702.00539"
+    },
+    {
+      "topic": "quality/diversity/controllability benchmark axes",
+      "source": "Khalifa et al., The Procedural Content Generation Benchmark",
+      "url": "https://arxiv.org/abs/2503.21474"
+    },
+    {
+      "topic": "WFC as constraint solving",
+      "source": "Karth and Smith, WaveFunctionCollapse is Constraint Solving in the Wild",
+      "url": "https://doi.org/10.1145/3102071.3110566"
+    },
+    {
+      "topic": "procedural personas as synthetic playtesters",
+      "source": "Holmgard et al., Automated Playtesting with Procedural Personas",
+      "url": "https://arxiv.org/abs/1802.06881"
+    }
+  ]
+}

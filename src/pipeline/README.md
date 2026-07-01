@@ -38,5 +38,6 @@ pytest tests/test_neural_pipeline.py -v
 
 - **Documentation Index**: [`docs/INDEX.md`](../../docs/INDEX.md)
 - **Current Architecture**: [`docs/CURRENT_ARCHITECTURE.md`](../../docs/CURRENT_ARCHITECTURE.md)
-- **Architecture & Benchmarks**: [`docs/SOTA_COMPARISON_AND_BENCHMARKS.md`](../../docs/SOTA_COMPARISON_AND_BENCHMARKS.md)
+- **Publication Guidance & Cards**: [`docs/PUBLICATION_GUIDANCE_AND_CARDS.md`](../../docs/PUBLICATION_GUIDANCE_AND_CARDS.md)
+- **External Baselines & Benchmarks**: [`docs/SOTA_COMPARISON_AND_BENCHMARKS.md`](../../docs/SOTA_COMPARISON_AND_BENCHMARKS.md)
 - **Block-by-Block Audit**: [`docs/BLOCK_BY_BLOCK_ARCHITECTURE_AND_IMPLEMENTATION_AUDIT.md`](../../docs/BLOCK_BY_BLOCK_ARCHITECTURE_AND_IMPLEMENTATION_AUDIT.md)

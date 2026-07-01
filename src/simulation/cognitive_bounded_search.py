@@ -78,7 +78,7 @@ from src.simulation.validator import (
 @dataclass
 class CBSMetrics:
     """
-    Metrics capturing human-like navigation behavior.
+    Metrics capturing bounded-agent navigation behavior.
     
     These metrics are inspired by cognitive science research on spatial
     navigation, decision-making under uncertainty, and memory limitations.

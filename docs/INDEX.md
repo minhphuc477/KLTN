@@ -1,6 +1,6 @@
 # KLTN Documentation Index
 
-Last updated: 2026-06-30
+Last updated: 2026-07-02
 
 This is the canonical navigation page for `docs/`. Top-level files should be
 current references, executable protocols, or stable thesis/report materials.
@@ -9,10 +9,22 @@ Superseded notes belong under `docs/archive/`.
 ## Start Here
 
 1. [`../README.md`](../README.md)
-2. [`architecture_audit_research_notes.md`](architecture_audit_research_notes.md)
-3. [`CURRENT_ARCHITECTURE.md`](CURRENT_ARCHITECTURE.md)
-4. [`TRACEABILITY_AND_CLAIM_VALIDATION.md`](TRACEABILITY_AND_CLAIM_VALIDATION.md)
-5. [`LOCAL_RESEARCH_EVIDENCE_RUNBOOK.md`](LOCAL_RESEARCH_EVIDENCE_RUNBOOK.md)
+2. [`PUBLICATION_GUIDANCE_AND_CARDS.md`](PUBLICATION_GUIDANCE_AND_CARDS.md)
+3. [`architecture_audit_research_notes.md`](architecture_audit_research_notes.md)
+4. [`CURRENT_ARCHITECTURE.md`](CURRENT_ARCHITECTURE.md)
+5. [`TRACEABILITY_AND_CLAIM_VALIDATION.md`](TRACEABILITY_AND_CLAIM_VALIDATION.md)
+6. [`LOCAL_RESEARCH_EVIDENCE_RUNBOOK.md`](LOCAL_RESEARCH_EVIDENCE_RUNBOOK.md)
+
+## Publication Contract
+
+- Canonical research question, system boundary, claim language, data card,
+  artifact card, metric contract, baseline taxonomy, failure taxonomy,
+  reproducibility checklist, and IP note:
+  [`PUBLICATION_GUIDANCE_AND_CARDS.md`](PUBLICATION_GUIDANCE_AND_CARDS.md)
+- Machine-readable publication card:
+  [`publication_guidance_card.json`](publication_guidance_card.json)
+- Validator:
+  [`../scripts/validate_publication_readiness.py`](../scripts/validate_publication_readiness.py)
 
 ## Current Protocols
 
@@ -34,7 +46,8 @@ Superseded notes belong under `docs/archive/`.
   [`MATCHED_BUDGET_BENCHMARK_PROTOCOL.md`](MATCHED_BUDGET_BENCHMARK_PROTOCOL.md)
 - OOD scaling and blinded evaluation:
   [`OOD_SCALING_AND_BLINDED_EVAL_PROTOCOL.md`](OOD_SCALING_AND_BLINDED_EVAL_PROTOCOL.md)
-- PCG benchmark and external comparison:
+- PCG benchmark and external comparison. This is a benchmark protocol, not
+  current proof of state-of-the-art superiority:
   [`SOTA_COMPARISON_AND_BENCHMARKS.md`](SOTA_COMPARISON_AND_BENCHMARKS.md)
 - CNN versus Bellman-Ford LogicNet ablation:
   [`pathfinder_ablation_protocol.md`](pathfinder_ablation_protocol.md)
