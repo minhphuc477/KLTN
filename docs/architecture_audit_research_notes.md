@@ -121,6 +121,8 @@ better than the referenced methods.
 - Active ablation manifests now fail closed on evidence. A zero exit code
   without required metric artifacts is labelled
   `completed_needs_metric_artifact`, not treated as passed scientific evidence.
+- The canonical rationale guide now matches the active config: teacher fallbacks
+  default off and are only enabled for explicit guarded-runtime ablations.
 
 ### Model and training
 
@@ -335,6 +337,51 @@ Required final evidence:
 5. P-CBS persona/component results with oracle status separated from timeout.
 6. Paired significance tests and effect sizes.
 7. Human calibration or appropriately limited proxy-language.
+
+## External Pathfinding And SOTA Audit Triage
+
+The attached broad audit was checked against the current source and primary
+literature. Its recommendations cannot be accepted as a single upgrade plan:
+
+- P-CBS in this repository is **Persona-Driven Cognitive Bounded Search**, a
+  single-agent behavioral simulator. It is not Conflict-Based Search for
+  multi-agent path finding, so ECBS/EECBS optimality claims do not apply.
+- Bidirectional search had a real correctness boundary: first-frontier meeting
+  was not an optimality certificate, and one guessed goal inventory cannot
+  define complete reverse transitions for keys, blocks, staged puzzles, or
+  directed warps. It now uses the reversible-grid path only when a returned path
+  attains the geometric lower bound; stateful cases use canonical full-state A*.
+- CVT-MAP-Elites is already implemented in
+  `src/evaluation/map_elites.py`; describing it as absent was stale.
+- MaskGIT-style discrete generation and a DiT rectified-flow objective/sampler
+  ablation are already implemented. Neither has publication evidence without
+  trained matched-budget checkpoints.
+- Theta* is an any-angle planner for continuous line-of-sight motion. Zelda tile
+  actions and door/item transitions are discrete, so adding it would change the
+  game rules rather than improve the current oracle.
+- The name `PCGBench` is ambiguous: a 2024 work uses it for parallel code
+  generation, while Khalifa et al.'s FDG 2025 **PCG Benchmark** is a relevant
+  game-content testbed with quality, diversity, and controllability criteria.
+  Its Zelda task is a small key-door maze, so it is a useful external baseline
+  but not a drop-in replacement for this repository's multi-room rule set.
+- SAT/SMT/CDCL and learned probabilistic graph grammars remain possible separate
+  baselines. They are hypotheses requiring explicit encodings, budgets, and
+  paired evidence, not correctness patches for Weighted Bayesian WFC.
+- `FunMetricsEvaluator` remains a compatibility name. Its values are structural
+  experience proxies and cannot support human-fun claims without calibration.
+
+Primary references used for this triage:
+
+- Li, Ruml, and Koenig, EECBS: https://arxiv.org/abs/2010.01367
+- Vassiliades et al., CVT-MAP-Elites:
+  https://doi.org/10.1109/TEVC.2017.2735550
+- Chang et al., MaskGIT: https://arxiv.org/abs/2202.04200
+- Lipman et al., Flow Matching: https://arxiv.org/abs/2210.02747
+- Nash et al., Theta*: https://doi.org/10.1609/aaai.v21i1.788
+- Khalifa et al., PCGRL: https://arxiv.org/abs/2001.09212
+- Earle et al., PCGRL+: https://arxiv.org/abs/2408.12525
+- Khalifa et al., PCG Benchmark:
+  https://github.com/amidos2006/pcg_benchmark
 
 ## Verification Policy
 

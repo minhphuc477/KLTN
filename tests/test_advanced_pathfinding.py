@@ -26,6 +26,35 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+def _corner_cut_grid(adjacent_tile: int) -> np.ndarray:
+    grid = np.full((4, 4), SEMANTIC_PALETTE['FLOOR'], dtype=np.int64)
+    grid[0, :] = SEMANTIC_PALETTE['WALL']
+    grid[-1, :] = SEMANTIC_PALETTE['WALL']
+    grid[:, 0] = SEMANTIC_PALETTE['WALL']
+    grid[:, -1] = SEMANTIC_PALETTE['WALL']
+    grid[1, 1] = SEMANTIC_PALETTE['START']
+    grid[2, 2] = SEMANTIC_PALETTE['TRIFORCE']
+    grid[1, 2] = adjacent_tile
+    grid[2, 1] = adjacent_tile
+    return grid
+
+
+def test_state_space_astar_non_strict_heuristic_returns_numeric_value():
+    grid = create_simple_dungeon()
+    env = ZeldaLogicEnv(grid)
+    solver = StateSpaceAStar(
+        env,
+        timeout=1000,
+        search_mode="astar",
+        priority_options={"enable_ara": True, "ara_weight": 1.5},
+    )
+
+    value = solver._heuristic(env.state)
+
+    assert isinstance(value, float)
+    assert np.isfinite(value)
+
+
 # ==========================================
 # DUNGEON FIXTURES
 # ==========================================
@@ -224,6 +253,14 @@ class TestDStarLite:
 
         assert solver._has_consistent_goal_state()
 
+    def test_diagonal_successors_reject_wall_corner_cutting(self):
+        env = ZeldaLogicEnv(_corner_cut_grid(SEMANTIC_PALETTE['WALL']))
+        solver = DStarLiteSolver(env, allow_diagonals=True)
+
+        successors = solver._get_successors(env.state.copy())
+
+        assert all(state.position != env.goal_pos for state in successors)
+
 
 class TestStateSpaceDFS:
     """Test DFS/IDDFS implementations."""
@@ -328,12 +365,37 @@ class TestBidirectionalAStar:
 
         assert collision is None
 
-    def test_diagonal_heuristic_uses_octile_lower_bound(self):
+    def test_diagonal_heuristic_matches_unit_action_cost(self):
         grid = create_simple_dungeon()
         env = ZeldaLogicEnv(grid)
         solver = BidirectionalAStar(env, timeout=100000, allow_diagonals=True)
 
-        assert solver._heuristic_forward(GameState(position=(1, 1))) == pytest.approx(1.414 * 7, rel=1e-3)
+        assert solver._heuristic_forward(GameState(position=(1, 1))) == pytest.approx(7.0)
+
+    def test_stateful_map_uses_canonical_fallback(self):
+        grid = np.full((5, 7), SEMANTIC_PALETTE['WALL'], dtype=np.int64)
+        grid[2, 1] = SEMANTIC_PALETTE['START']
+        grid[2, 2] = SEMANTIC_PALETTE['KEY_SMALL']
+        grid[2, 3] = SEMANTIC_PALETTE['DOOR_LOCKED']
+        grid[2, 4] = SEMANTIC_PALETTE['FLOOR']
+        grid[2, 5] = SEMANTIC_PALETTE['TRIFORCE']
+        env = ZeldaLogicEnv(grid)
+        solver = BidirectionalAStar(env, timeout=100000)
+
+        success, path, _nodes = solver.solve()
+
+        assert success
+        assert path[0] == env.start_pos
+        assert path[-1] == env.goal_pos
+        assert solver.used_fallback is True
+
+    def test_diagonal_successors_reject_conditional_corner_cutting(self):
+        env = ZeldaLogicEnv(_corner_cut_grid(SEMANTIC_PALETTE['DOOR_LOCKED']))
+        solver = BidirectionalAStar(env, timeout=100000, allow_diagonals=True)
+
+        successors = solver._get_forward_successors(env.state.copy())
+
+        assert all(state.position != env.goal_pos for state in successors)
 
 
 class TestComparison:

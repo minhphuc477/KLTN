@@ -448,7 +448,7 @@ the diffusion or masked-room training budget.
 | `fast_sampler.num_inference_steps` | `4` | Main speed target for the student. |
 | `fast_sampler.lora_rank` | `8` | Keeps student lightweight while allowing meaningful adaptation. |
 | `fast_sampler.lora_alpha` | `8.0` | Standard low-rank scaling choice matched to rank. |
-| `generation.fast_sampler_teacher_fallback_enabled` | `true` | Prevents obviously bad student rooms from degrading the final dungeon. |
+| `generation.fast_sampler_teacher_fallback_enabled` | `false` | Default-off quality guard; enable only in explicit fallback ablations or demos that intentionally compare guarded versus standalone student quality. |
 
 ### Why the fallback exists
 
@@ -669,12 +669,12 @@ scientific behavior of the model.
 
 | Parameter | Current value | Rationale |
 |---|---:|---|
-| `generation.guidance_scale` | `3.0` | Runtime must match the teacher’s trained CFG regime. |
+| `generation.guidance_scale` | `3.0` | Runtime must match the teacher's trained CFG regime. |
 | `generation.logic_guidance_scale` | `0.0` | Extra inference-time gradient guidance is kept opt-in, because it is easy to overuse and distort results. |
 | `generation.semantic_role_prior_strength` | `0.15` | A light room-wide semantic prior helps the model without washing out localized anchors. |
 | `generation.semantic_anchor_threshold` | `0.5` | Reasonable midpoint for turning topology channels into fixed semantic anchors in masked-room training/ablation. |
 | `generation.semantic_puzzle_offset` | `2` | Keeps puzzle anchors away from exact central collision with other semantic markers. |
-| `generation.fast_sampler_teacher_fallback_enabled` | `true` | A practical quality guard to protect the pipeline from suspicious low-step rooms. |
+| `generation.fast_sampler_teacher_fallback_enabled` | `false` | Exposes standalone fast-sampler quality by default; enable only for guarded-runtime ablations. |
 
 ## 6.4 Masked-room config rationale
 

@@ -508,17 +508,18 @@ class DiscreteMaskedRoomModel(nn.Module):
 
         # --- boundary slice definitions and their door channels ---
         boundary_specs = [
-            ('N', slice(0, 1),        slice(None),  topo[:, self._topo_door_ch['N'], 0:1,  :]),
-            ('S', slice(H - 1, H),    slice(None),  topo[:, self._topo_door_ch['S'], H-1:H, :]),
-            ('W', slice(None),        slice(0, 1),  topo[:, self._topo_door_ch['W'], :,  0:1]),
-            ('E', slice(None),        slice(W - 1, W), topo[:, self._topo_door_ch['E'], :,  W-1:W]),
+            ('N', slice(0, 1),        slice(None)),
+            ('S', slice(H - 1, H),    slice(None)),
+            ('W', slice(None),        slice(0, 1)),
+            ('E', slice(None),        slice(W - 1, W)),
         ]
 
-        for direction, row_sl, col_sl, door_act in boundary_specs:
+        for direction, row_sl, col_sl in boundary_specs:
             ch_idx = self._topo_door_ch[direction]
             if ch_idx < 0 or ch_idx >= int(topo.shape[1]):
                 # Channel not present in this topology map - skip.
                 continue
+            door_act = topo[:, ch_idx, row_sl, col_sl]
 
             # door_act: [B, 1, boundary_len] or [B, boundary_len, 1]
             door_present = (door_act >= door_threshold)  # bool [B, h', w']

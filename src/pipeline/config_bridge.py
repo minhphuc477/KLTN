@@ -49,6 +49,7 @@ def generation_runtime_kwargs_from_resolved_config(config: Dict[str, Any]) -> Di
     """Build runtime room/dungeon generation defaults from the validated config payload."""
     stage = config["generation"]
     return {
+        "room_generator_mode": stage.get("room_generator_mode", "latent_diffusion"),
         "default_guidance_scale": stage.get("guidance_scale", 3.0),
         "default_logic_guidance_scale": stage.get("logic_guidance_scale", 0.0),
         "default_logic_guidance_strategy": stage.get("logic_guidance_strategy", "late"),
@@ -208,6 +209,9 @@ def pipeline_kwargs_from_resolved_config(config: Dict[str, Any]) -> Dict[str, An
     diffusion = config["diffusion"]
     fast_sampler = config["fast_sampler"]
     masked_room = config["masked_room"]
+    generation = config["generation"]
+    room_generator_mode = str(generation.get("room_generator_mode", "latent_diffusion")).strip().lower()
+    condition_source = masked_room if room_generator_mode == "discrete_masked" else diffusion
     topology_kwargs = topology_generation_kwargs_from_resolved_config(config)
     kwargs = {
         "topology_default_target_curve": list(topology_kwargs["target_curve"]),
@@ -234,12 +238,24 @@ def pipeline_kwargs_from_resolved_config(config: Dict[str, Any]) -> Dict[str, An
     kwargs.update(generation_runtime_kwargs_from_resolved_config(config))
     kwargs.update(
         {
-            "condition_gnn_type": diffusion["condition_gnn_type"],
-            "condition_use_reference_room_maps": diffusion["condition_use_reference_room_maps"],
-            "condition_reference_tile_vocab_size": diffusion["condition_reference_tile_vocab_size"],
-            "condition_reference_embedding_dim": diffusion["condition_reference_embedding_dim"],
-            "condition_reference_hidden_dim": diffusion["condition_reference_hidden_dim"],
-            "condition_use_rrwp_edge_features": diffusion.get("condition_use_rrwp_edge_features", True),
+            "condition_gnn_type": condition_source.get("condition_gnn_type", diffusion["condition_gnn_type"]),
+            "condition_use_reference_room_maps": condition_source.get(
+                "condition_use_reference_room_maps",
+                diffusion["condition_use_reference_room_maps"],
+            ),
+            "condition_reference_tile_vocab_size": condition_source.get(
+                "condition_reference_tile_vocab_size",
+                diffusion["condition_reference_tile_vocab_size"],
+            ),
+            "condition_reference_embedding_dim": condition_source.get(
+                "condition_reference_embedding_dim",
+                diffusion["condition_reference_embedding_dim"],
+            ),
+            "condition_reference_hidden_dim": condition_source.get(
+                "condition_reference_hidden_dim",
+                diffusion["condition_reference_hidden_dim"],
+            ),
+            "condition_use_rrwp_edge_features": condition_source.get("condition_use_rrwp_edge_features", diffusion.get("condition_use_rrwp_edge_features", True)),
             "topology_refinement_mode": diffusion["topology_refinement_mode"],
             "diffusion_attention_mode": diffusion["attention_mode"],
             "diffusion_hedgehog_feature_dim": diffusion["hedgehog_feature_dim"],
@@ -248,22 +264,35 @@ def pipeline_kwargs_from_resolved_config(config: Dict[str, Any]) -> Dict[str, An
             "diffusion_cfg_schedule_power": diffusion["cfg_schedule_power"],
             "use_current_node_distance_features": diffusion["use_current_node_distance_features"],
             "current_node_distance_max": diffusion["current_node_distance_max"],
+            "room_generator_mode": room_generator_mode,
             "masked_sampling_steps": masked_room["masked_steps"],
             "fast_sampling_steps": fast_sampler["num_inference_steps"],
             "condition_encoder_fallback_config": {
                 "latent_dim": diffusion["latent_dim"],
-                "condition_hidden_dim": diffusion["condition_hidden_dim"],
-                "context_dim": diffusion["context_dim"],
-                "condition_gnn_type": diffusion["condition_gnn_type"],
-                "condition_num_gnn_layers": diffusion["condition_num_gnn_layers"],
-                "condition_num_attention_heads": diffusion["condition_num_attention_heads"],
-                "condition_dropout": diffusion["condition_dropout"],
-                "use_current_node_distance_features": diffusion["use_current_node_distance_features"],
-                "condition_use_reference_room_maps": diffusion["condition_use_reference_room_maps"],
-                "condition_reference_tile_vocab_size": diffusion["condition_reference_tile_vocab_size"],
-                "condition_reference_embedding_dim": diffusion["condition_reference_embedding_dim"],
-                "condition_reference_hidden_dim": diffusion["condition_reference_hidden_dim"],
-                "condition_use_rrwp_edge_features": diffusion.get("condition_use_rrwp_edge_features", True),
+                "condition_hidden_dim": condition_source.get("condition_hidden_dim", diffusion["condition_hidden_dim"]),
+                "context_dim": condition_source.get("context_dim", diffusion["context_dim"]),
+                "condition_gnn_type": condition_source.get("condition_gnn_type", diffusion["condition_gnn_type"]),
+                "condition_num_gnn_layers": condition_source.get("condition_num_gnn_layers", diffusion["condition_num_gnn_layers"]),
+                "condition_num_attention_heads": condition_source.get("condition_num_attention_heads", diffusion["condition_num_attention_heads"]),
+                "condition_dropout": condition_source.get("condition_dropout", diffusion["condition_dropout"]),
+                "use_current_node_distance_features": condition_source.get("use_current_node_distance_features", diffusion["use_current_node_distance_features"]),
+                "condition_use_reference_room_maps": condition_source.get(
+                    "condition_use_reference_room_maps",
+                    diffusion["condition_use_reference_room_maps"],
+                ),
+                "condition_reference_tile_vocab_size": condition_source.get(
+                    "condition_reference_tile_vocab_size",
+                    diffusion["condition_reference_tile_vocab_size"],
+                ),
+                "condition_reference_embedding_dim": condition_source.get(
+                    "condition_reference_embedding_dim",
+                    diffusion["condition_reference_embedding_dim"],
+                ),
+                "condition_reference_hidden_dim": condition_source.get(
+                    "condition_reference_hidden_dim",
+                    diffusion["condition_reference_hidden_dim"],
+                ),
+                "condition_use_rrwp_edge_features": condition_source.get("condition_use_rrwp_edge_features", diffusion.get("condition_use_rrwp_edge_features", True)),
             },
             "diffusion_fallback_config": {
                 "latent_dim": diffusion["latent_dim"],

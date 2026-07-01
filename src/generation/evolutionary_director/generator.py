@@ -583,9 +583,30 @@ class EvolutionaryTopologyGenerator:
             graph = constraint_grammar.ensure_anchor_nodes(graph)
             graph = constraint_grammar.fix_lock_key_ordering(graph)
             graph = constraint_grammar.repair_progression_constraints(graph)
-            graph = self._repair_pedagogical_progression(graph, constraint_grammar=constraint_grammar)
-            graph = self._repair_progression_balance(graph, constraint_grammar=constraint_grammar)
-            graph = self._repair_gate_economy(graph, constraint_grammar=constraint_grammar)
+            graph = self._bounded_optional_repair(
+                graph,
+                self._repair_pedagogical_progression(
+                    graph,
+                    constraint_grammar=constraint_grammar,
+                ),
+                repair_name="pedagogical progression",
+            )
+            graph = self._bounded_optional_repair(
+                graph,
+                self._repair_progression_balance(
+                    graph,
+                    constraint_grammar=constraint_grammar,
+                ),
+                repair_name="progression balance",
+            )
+            graph = self._bounded_optional_repair(
+                graph,
+                self._repair_gate_economy(
+                    graph,
+                    constraint_grammar=constraint_grammar,
+                ),
+                repair_name="gate economy",
+            )
             graph = constraint_grammar.ensure_anchor_nodes(graph)
             graph.sanitize()
 
@@ -623,9 +644,35 @@ class EvolutionaryTopologyGenerator:
             return best_networkx_physical
         return best_networkx_physical.to_undirected()
 
+    def _hard_output_node_cap(self) -> int:
+        """Return the documented post-repair room-count ceiling."""
+        return int(max(int(self.max_nodes) + 2, int(self.max_nodes * 1.5)))
+
+    def _bounded_optional_repair(
+        self,
+        original: MissionGraph,
+        candidate: MissionGraph,
+        *,
+        repair_name: str,
+    ) -> MissionGraph:
+        """Reject optional descriptor repairs that violate room-count control."""
+        hard_cap = self._hard_output_node_cap()
+        if len(candidate.nodes) <= hard_cap:
+            return candidate
+        logger.info(
+            "Skipped optional %s repair: candidate has %d nodes (hard cap=%d)",
+            repair_name,
+            len(candidate.nodes),
+            hard_cap,
+        )
+        original.generation_stats["node_cap_skipped_optional_repairs"] = int(
+            original.generation_stats.get("node_cap_skipped_optional_repairs", 0)
+        ) + 1
+        return original
+
     def _enforce_output_node_cap(self, graph: nx.Graph) -> nx.Graph:
         """Final safety pass for repairs that add nodes after evolutionary capping."""
-        hard_cap = int(max(int(self.max_nodes) + 2, int(self.max_nodes * 1.5)))
+        hard_cap = self._hard_output_node_cap()
         if graph.number_of_nodes() <= hard_cap:
             return graph
 

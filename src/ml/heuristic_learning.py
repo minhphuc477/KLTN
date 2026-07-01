@@ -25,6 +25,7 @@ Admissibility:
 
 import os
 import logging
+import math
 import numpy as np
 from typing import List, Tuple, Optional
 from dataclasses import dataclass
@@ -403,11 +404,11 @@ class HeuristicTrainer:
 
 class MLHeuristicAStar:
     """
-    A* search using ML-learned heuristic instead of Manhattan distance.
+    ML-learned heuristic adapter for A* search.
     
     Usage:
         solver = MLHeuristicAStar(env, model_path='models/heuristic_net.pth')
-        success, path, states = solver.solve(start_state)
+        h_value = solver.heuristic(state)
     """
     
     def __init__(self, env, model_path: Optional[str] = None):
@@ -438,13 +439,13 @@ class MLHeuristicAStar:
         Returns:
             Heuristic value (predicted remaining cost)
         """
+        if self.env.goal_pos is None:
+            return 0.0
+        pos = state.position
+        goal = self.env.goal_pos
+        geometric_fallback = float(abs(pos[0] - goal[0]) + abs(pos[1] - goal[1]))
         if self.model is None:
-            # Fallback to Manhattan distance
-            if self.env.goal_pos is None:
-                return 0
-            pos = state.position
-            goal = self.env.goal_pos
-            return abs(pos[0] - goal[0]) + abs(pos[1] - goal[1])
+            return geometric_fallback
         
         # Use ML heuristic
         trainer = HeuristicTrainer(self.env.height, self.env.width)
@@ -458,4 +459,7 @@ class MLHeuristicAStar:
         )
         features = trainer.featurize_state(example, self.env)
         
-        return self.model.predict_cost(features)
+        prediction = float(self.model.predict_cost(features))
+        if not math.isfinite(prediction):
+            return geometric_fallback
+        return float(max(0.0, min(prediction, geometric_fallback)))

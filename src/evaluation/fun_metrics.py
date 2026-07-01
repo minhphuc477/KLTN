@@ -1,11 +1,11 @@
 """
-Feature 4: Fun Metrics
-======================
-Quantify player experience: frustration, explorability, flow, pacing.
+Feature 4: Structural Experience Proxies
+========================================
+Compute graph-derived proxies for frustration, explorability, flow, and pacing.
 
-Problem:
-    Current metrics (solvability, difficulty) don't capture "fun".
-    Need objective measures of player engagement and experience quality.
+These values are not direct measurements of enjoyment or engagement. They must
+be calibrated against player traces or user studies before being interpreted as
+human-experience evidence.
 
 Solution:
     - Frustration Score: Backtracking, dead ends, unclear goals
@@ -53,7 +53,7 @@ __all__ = [
 
 class FunMetricsEvaluator:
     """
-    Master evaluator combining all fun metrics.
+    Combine structural experience proxies under the legacy ``FunMetrics`` API.
     
     Usage:
         evaluator = FunMetricsEvaluator()
@@ -64,7 +64,7 @@ class FunMetricsEvaluator:
             critical_path=critical_set
         )
         
-        print(f"Fun Score: {fun_metrics.overall_fun_score:.2f}")
+        print(f"Structural proxy score: {fun_metrics.overall_fun_score:.2f}")
     """
     
     def __init__(self):
@@ -81,7 +81,7 @@ class FunMetricsEvaluator:
         critical_path: Set[int]
     ) -> FunMetrics:
         """
-        Comprehensive fun evaluation.
+        Evaluate graph- and path-derived experience proxies.
         
         Returns:
             FunMetrics with all sub-metrics and overall score
@@ -103,8 +103,8 @@ class FunMetricsEvaluator:
             mission_graph, solution_path, room_contents
         )
         
-        # Overall fun score
-        # Fun = high explorability + high flow - high frustration
+        # Legacy aggregate proxy. Do not interpret as observed human enjoyment
+        # without an external calibration study.
         overall_fun_score = (
             0.3 * explorability.discovery_potential +
             0.3 * flow.flow_score +

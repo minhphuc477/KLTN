@@ -4664,6 +4664,7 @@ class StateSpaceAStar:
             lock_h = locked_edges_lb * 20.0
             if lock_h > h:
                 h = lock_h
+        return float(h)
 # ==========================================
 # MODULE 6: MAIN VALIDATOR
 # ==========================================

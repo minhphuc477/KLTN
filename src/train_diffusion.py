@@ -3325,6 +3325,7 @@ class DiffusionTrainer:
         rejected_graph_data: Optional[Dict[str, torch.Tensor]] = None,
         beta: float = 0.1,
         reference_model: Optional[nn.Module] = None,
+        force_optimizer_step: bool = False,
     ) -> Dict[str, float]:
         """
         Run one Diffusion-DPO update on preferred/rejected map pairs.
@@ -3379,7 +3380,7 @@ class DiffusionTrainer:
         self._backward_loss(loss)
         self._accumulation_micro_steps = self._accumulated_micro_steps() + 1
         micro_steps = self._accumulated_micro_steps()
-        should_step_optimizer = bool(micro_steps >= accum_steps)
+        should_step_optimizer = bool(force_optimizer_step or micro_steps >= accum_steps)
         metrics = {
             "loss": float(loss.detach().item()),
             "dpo_loss": float(loss.detach().item()),
@@ -3748,7 +3749,8 @@ class DiffusionTrainer:
                     logic_graph_data = diffusion_graph_data
 
                     # LogicNet: evaluate with graph topology
-                    logic_loss, _logic_info = self.logic_net(z_gen, graph_data=logic_graph_data)
+                    decoded_for_logic = self._decode_latent_for_logic(z_gen)
+                    logic_loss, _logic_info = self.logic_net(decoded_for_logic, graph_data=logic_graph_data)
                     if not self._tensor_is_finite(logic_loss):
                         skipped_nonfinite += int(batch_size)
                         self._warn_nonfinite(
@@ -3770,7 +3772,7 @@ class DiffusionTrainer:
                             num_logic_metric_eval += generated_batch
                         if hasattr(self, "vqvae") and hasattr(self.vqvae, "decode"):
                             try:
-                                decoded = self._decode_latent_for_logic(z_gen[:generated_batch])
+                                decoded = decoded_for_logic[:generated_batch]
                                 wfc_loss, wfc_samples, _wfc_mean = self._wfc_pseudo_label_loss(
                                     decoded,
                                     real_maps[:generated_batch],
@@ -3794,8 +3796,9 @@ class DiffusionTrainer:
                                         / float(max(1, int(self.config.num_classes) - 1))
                                     ).unsqueeze(1)
                                     z_repaired = self.encode_to_latent(repaired_maps.to(self.device))
+                                    repaired_tile_logits = self._decode_latent_for_logic(z_repaired)
                                     repaired_logic_loss, _repaired_logic_info = self.logic_net(
-                                        z_repaired,
+                                        repaired_tile_logits,
                                         graph_data=logic_graph_data,
                                     )
                                     if self._tensor_is_finite(repaired_logic_loss):

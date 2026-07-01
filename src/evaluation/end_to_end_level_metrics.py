@@ -48,6 +48,8 @@ def normalized_compression_distance(text_a: str, text_b: str) -> float:
     b = _sanitize_grid_text(text_b)
     if not a and not b:
         return 0.0
+    if a == b:
+        return 0.0
     ca = _compressed_size(a)
     cb = _compressed_size(b)
     cab = int(len(zlib.compress((a + "\n\0\n" + b).encode("utf-8", errors="ignore"), level=9)))

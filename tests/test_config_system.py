@@ -550,10 +550,27 @@ def test_stage_helpers_forward_checkpoint_retention_and_resume_defaults():
     assert "target_curve" not in pipeline_kwargs
     assert "num_rooms" not in pipeline_kwargs
     assert pipeline_kwargs["condition_gnn_type"] == resolved["diffusion"]["condition_gnn_type"]
+    assert pipeline_kwargs["room_generator_mode"] == "latent_diffusion"
     assert pipeline_kwargs["fast_sampling_steps"] == resolved["fast_sampler"]["num_inference_steps"]
     assert pipeline_kwargs["diffusion_fallback_config"]["model_channels"] == resolved["diffusion"]["model_channels"]
     assert pipeline_kwargs["condition_encoder_fallback_config"]["context_dim"] == resolved["diffusion"]["context_dim"]
     assert pipeline_kwargs["masked_room_fallback_config"]["model_channels"] == resolved["masked_room"]["model_channels"]
+
+
+def test_discrete_masked_pipeline_kwargs_use_masked_room_conditioner_config():
+    resolved = merge_config(
+        yaml_path=None,
+        cli_overrides={"generation": {"room_generator_mode": "discrete_masked"}},
+    )
+
+    pipeline_kwargs = pipeline_kwargs_from_resolved_config(resolved)
+
+    assert pipeline_kwargs["room_generator_mode"] == "discrete_masked"
+    assert pipeline_kwargs["condition_gnn_type"] == resolved["masked_room"]["condition_gnn_type"]
+    assert (
+        pipeline_kwargs["condition_encoder_fallback_config"]["condition_gnn_type"]
+        == resolved["masked_room"]["condition_gnn_type"]
+    )
 
 
 def test_diffusion_cli_forwards_memory_precision_controls():

@@ -609,3 +609,11 @@ def test_search_metrics_are_bounded_and_confusion_is_overhead():
     assert confusion_ratio_vs_oracle(10, 10, oracle_status="solved", candidate_success=True) == 0.0
     assert confusion_ratio_vs_oracle(10, 15, oracle_status="solved", candidate_success=True) == 0.5
     assert safe_positive_int(float("inf")) > 1_000_000
+
+
+def test_ncd_reports_zero_for_identical_level_texts():
+    from src.evaluation.end_to_end_level_metrics import normalized_compression_distance
+
+    room = "WWWW\nWSGW\nWWWW"
+
+    assert normalized_compression_distance(room, room) == 0.0

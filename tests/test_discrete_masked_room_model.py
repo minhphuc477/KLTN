@@ -394,12 +394,10 @@ def test_discrete_masked_model_sample_is_seeded_when_stochastic(monkeypatch):
     model = create_discrete_masked_model(
         num_classes=44,
         hidden_dim=32,
-        model_channels=32,
         context_dim=8,
         num_steps=3,
         unet_channel_mult=(1,),
         unet_num_res_blocks=1,
-        unet_attention_resolutions=(0,),
         unet_num_heads=1,
     )
     context = torch.zeros(1, 1, 8)
@@ -444,12 +442,10 @@ def test_discrete_masked_model_sample_can_disable_stochastic_decode(monkeypatch)
     model = create_discrete_masked_model(
         num_classes=44,
         hidden_dim=32,
-        model_channels=32,
         context_dim=8,
         num_steps=3,
         unet_channel_mult=(1,),
         unet_num_res_blocks=1,
-        unet_attention_resolutions=(0,),
         unet_num_heads=1,
     )
     context = torch.zeros(1, 1, 8)
@@ -932,12 +928,10 @@ def test_discrete_masked_model_training_loss_reports_topology_focus_term():
     model = create_discrete_masked_model(
         num_classes=44,
         hidden_dim=32,
-        model_channels=32,
         context_dim=8,
         num_steps=3,
         unet_channel_mult=(1,),
         unet_num_res_blocks=1,
-        unet_attention_resolutions=(0,),
         unet_num_heads=1,
     )
     context = torch.zeros(1, 1, 8)
@@ -958,6 +952,24 @@ def test_discrete_masked_model_training_loss_reports_topology_focus_term():
     assert metrics["base_loss"] >= 0.0
     assert metrics["topology_focus_loss"] >= 0.0
     assert metrics["topology_focus_fraction"] > 0.0
+
+
+def test_edge_aware_logit_bias_skips_missing_topology_channels():
+    model = create_discrete_masked_model(
+        num_classes=44,
+        hidden_dim=32,
+        context_dim=8,
+        num_steps=3,
+        unet_channel_mult=(1,),
+        unet_num_res_blocks=1,
+        unet_num_heads=1,
+    )
+    logits = torch.zeros(1, 44, ROOM_HEIGHT, ROOM_WIDTH)
+    context = {"room_topology_map": torch.zeros(1, 1, ROOM_HEIGHT, ROOM_WIDTH)}
+
+    biased = model._apply_edge_aware_logit_bias(logits, context)
+
+    assert torch.allclose(biased, logits)
 
 
 def test_masked_room_trainer_can_pass_reference_room_maps_into_condition_encoder():

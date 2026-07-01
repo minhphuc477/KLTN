@@ -142,6 +142,18 @@ def test_fast_sampler_timestep_pairs_always_advance_to_lower_noise():
     assert torch.all(current > previous)
 
 
+def test_teacher_ddim_step_anchors_zero_timestep_to_clean_prediction():
+    trainer = ConsistencyLoRATrainer.__new__(ConsistencyLoRATrainer)
+    trainer.ode_teacher = SimpleNamespace(alphas_cumprod=torch.tensor([0.25, 0.5], dtype=torch.float32))
+    pred_x0 = torch.tensor([[[[0.75]]]], dtype=torch.float32)
+    pred_noise = torch.tensor([[[[10.0]]]], dtype=torch.float32)
+    t_previous = torch.tensor([0], dtype=torch.long)
+
+    x_previous = ConsistencyLoRATrainer._teacher_ddim_step(trainer, pred_x0, pred_noise, t_previous)
+
+    assert torch.allclose(x_previous, pred_x0)
+
+
 def test_fast_sampler_deployable_adapter_exports_ema_target(monkeypatch):
     student = _TinyStudent()
     inject_lora_into_model(

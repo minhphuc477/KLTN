@@ -56,9 +56,11 @@ class _DummyLogicNet(torch.nn.Module):
     def __init__(self):
         super().__init__()
         self.last_graph_data = None
+        self.last_shape = None
 
     def forward(self, z_latent, graph_data=None):
         self.last_graph_data = graph_data
+        self.last_shape = tuple(z_latent.shape)
         return torch.tensor(0.25, dtype=torch.float32), {}
 
 
@@ -487,6 +489,7 @@ def _make_stub_trainer(context_dim: int = 8) -> DiffusionTrainer:
         graph_conditioning_mode="node_sequence",
         context_dim=context_dim,
         edge_feature_dim=GRAPH_EDGE_FEATURE_DIM,
+        num_classes=44,
         warmup_epochs=0,
         alpha_visual=1.0,
         alpha_logic=0.1,
@@ -509,6 +512,7 @@ def _make_stub_trainer(context_dim: int = 8) -> DiffusionTrainer:
     trainer.logic_net = _DummyLogicNet()
     trainer.ema_diffusion = _DummyEvalModel()
     trainer.diffusion = _DummyEvalModel()
+    trainer.vqvae = _DecodeTrackingVQVAE()
 
     trainer.scheduler = SimpleNamespace(step=lambda: None)
 
@@ -784,6 +788,7 @@ def test_validate_node_sequence_conditioning_is_batched_and_padded():
 
     assert tuple(trainer.ema_diffusion.last_conditioning.shape) == (2, 5, 8)
     _assert_batched_graph_sequence(trainer.ema_diffusion.last_graph_data, graph_list)
+    assert trainer.logic_net.last_shape == (2, 44, ROOM_HEIGHT, ROOM_WIDTH)
     assert _metrics["val_diffusion_loss"] == pytest.approx(0.5)
     assert _metrics["val_logic_loss"] == pytest.approx(0.25)
     assert _metrics["val_total_loss"] == pytest.approx(0.525)
@@ -1577,6 +1582,55 @@ def test_dpo_step_accumulates_gradients_before_optimizer_step():
     assert ema_calls == 1
     assert warmup_calls == 1
     assert trainer._accumulation_micro_steps == 0
+
+
+def test_dpo_step_force_optimizer_step_flushes_tail_accumulation():
+    trainer = DiffusionTrainer.__new__(DiffusionTrainer)
+    trainer.device = torch.device("cpu")
+    trainer.config = SimpleNamespace(
+        diffusion_training_objective="diffusion",
+        grad_clip_norm=0.0,
+        logic_net_trainable=False,
+        gradient_accumulation_steps=4,
+    )
+    trainer.diffusion = _DPOTrainingModule()
+    trainer.condition_encoder = _TinyModule()
+    trainer.logic_net = _DummyLogicNet()
+    trainer.ema_diffusion = _DummyEvalModel()
+    trainer.optimizer = torch.optim.SGD(
+        list(trainer.diffusion.parameters()) + list(trainer.condition_encoder.parameters()),
+        lr=1e-3,
+    )
+    trainer._accelerator = None
+    trainer.distributed_context = None
+    trainer.global_step = 0
+    trainer._accumulation_micro_steps = 0
+    trainer._nonfinite_warning_counts = {}
+    trainer.encode_to_latent = lambda maps: torch.zeros((maps.shape[0], 4, 2, 2), dtype=torch.float32)
+    trainer.get_dummy_conditioning = lambda batch_size: torch.zeros((batch_size, 1, 8), dtype=torch.float32)
+    trainer._gradients_are_finite = lambda: True
+
+    step_calls = 0
+
+    def _step():
+        nonlocal step_calls
+        step_calls += 1
+
+    trainer.optimizer.step = _step
+    trainer._update_ema = lambda: None
+    trainer._apply_lr_warmup = lambda *, completed_steps=None: None
+
+    metrics = DiffusionTrainer.dpo_step(
+        trainer,
+        torch.zeros((2, 1, ROOM_HEIGHT, ROOM_WIDTH), dtype=torch.float32),
+        torch.ones((2, 1, ROOM_HEIGHT, ROOM_WIDTH), dtype=torch.float32),
+        force_optimizer_step=True,
+    )
+
+    assert metrics["optimizer_step"] == pytest.approx(1.0)
+    assert trainer.global_step == 1
+    assert trainer._accumulation_micro_steps == 0
+    assert step_calls == 1
 
 
 def test_dpo_step_nonfinite_clipped_grad_norm_does_not_create_ghost_step(monkeypatch):

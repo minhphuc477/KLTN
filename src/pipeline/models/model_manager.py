@@ -518,7 +518,7 @@ def load_diffusion(pipeline, checkpoint_path: Optional[str]) -> LatentDiffusionM
 
     return model
 
-def load_logic_net(pipeline, checkpoint_path: Optional[str]) -> LogicNet:
+def load_logic_net(pipeline, checkpoint_path: Optional[str]) -> Optional[LogicNet]:
     """Load or create LogicNet."""
     checkpoint_state: Optional[Dict[str, Any]] = None
     checkpoint_config: Dict[str, Any] = {}
@@ -600,9 +600,9 @@ def load_logic_net(pipeline, checkpoint_path: Optional[str]) -> LogicNet:
             raise FileNotFoundError(
                 f"Strict checkpoint mode enabled: missing LogicNet checkpoint at {checkpoint_path!r}"
             )
-        setattr(model, "_hmolqd_checkpoint_loaded", False)
         pipeline.logic_net_checkpoint_loaded = False
-        logger.warning("No LogicNet checkpoint, using random initialization")
+        logger.warning("No LogicNet checkpoint; LogicNet-dependent guidance and evaluation are disabled.")
+        return None
 
     return model
 

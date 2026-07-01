@@ -111,6 +111,7 @@ class FastSamplerTrainingConfig:
         grad_clip_norm: float = 1.0,
         num_inference_steps: int = 4,
         ema_decay: float = 0.95,
+        validate_ema_target: bool = True,
         lora_rank: int = 8,
         lora_alpha: float = 8.0,
         prediction_loss_weight: float = 0.25,
@@ -170,6 +171,7 @@ class FastSamplerTrainingConfig:
         self.grad_clip_norm = float(max(0.0, grad_clip_norm))
         self.num_inference_steps = int(max(1, num_inference_steps))
         self.ema_decay = float(max(0.0, min(0.999999, ema_decay)))
+        self.validate_ema_target = bool(validate_ema_target)
         self.lora_rank = int(max(1, lora_rank))
         self.lora_alpha = float(lora_alpha)
         self.prediction_loss_weight = float(max(0.0, prediction_loss_weight))
@@ -507,7 +509,9 @@ class ConsistencyLoRATrainer:
         )
         while alpha_previous.dim() < pred_x0.dim():
             alpha_previous = alpha_previous.unsqueeze(-1)
-        return alpha_previous.sqrt() * pred_x0 + (1.0 - alpha_previous).sqrt() * pred_noise
+        x_previous = alpha_previous.sqrt() * pred_x0 + (1.0 - alpha_previous).sqrt() * pred_noise
+        t0_mask = (t_previous == 0).view(pred_x0.shape[0], *([1] * (pred_x0.dim() - 1)))
+        return torch.where(t0_mask, pred_x0, x_previous)
 
     @torch.no_grad()
     def _update_teacher_ema(self) -> None:
@@ -656,7 +660,7 @@ class ConsistencyLoRATrainer:
             )
             teacher_x0 = torch.clamp(teacher_x0, -1.0, 1.0)
             t0_mask = (t_previous == 0).view(batch_size, *([1] * (z_0.dim() - 1)))
-            teacher_x0 = torch.where(t0_mask, x_previous, teacher_x0)
+            teacher_x0 = torch.where(t0_mask, torch.clamp(z_0, -1.0, 1.0), teacher_x0)
 
         student_pred = self.student._predict_noise_cfg(x_t, t, conditioning, graph_data=diffusion_graph_data)
         student_x0, _student_noise = self.student._convert_prediction(student_pred, x_t, t)
@@ -777,6 +781,7 @@ class ConsistencyLoRATrainer:
         eval_seed: Optional[int] = None,
     ) -> Dict[str, float]:
         self.student.eval()
+        self.teacher.eval()
         metrics = {
             "val_loss": 0.0,
             "val_x0_loss": 0.0,
@@ -850,10 +855,11 @@ class ConsistencyLoRATrainer:
         teacher_x0, _ = self.teacher._convert_prediction(teacher_pred, x_previous, t_previous)
         teacher_x0 = torch.clamp(teacher_x0, -1.0, 1.0)
         t0_mask = (t_previous == 0).view(batch_size, *([1] * (z_0.dim() - 1)))
-        teacher_x0 = torch.where(t0_mask, x_previous, teacher_x0)
+        teacher_x0 = torch.where(t0_mask, torch.clamp(z_0, -1.0, 1.0), teacher_x0)
 
-        student_pred = self.student._predict_noise_cfg(x_t, t, conditioning, graph_data=diffusion_graph_data)
-        student_x0, _ = self.student._convert_prediction(student_pred, x_t, t)
+        eval_model = self.teacher if bool(getattr(self.config, "validate_ema_target", True)) else self.student
+        student_pred = eval_model._predict_noise_cfg(x_t, t, conditioning, graph_data=diffusion_graph_data)
+        student_x0, _ = eval_model._convert_prediction(student_pred, x_t, t)
         student_x0 = torch.clamp(student_x0, -1.0, 1.0)
 
         x0_loss = F.mse_loss(student_x0, teacher_x0)

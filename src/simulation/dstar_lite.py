@@ -21,7 +21,16 @@ import heapq
 import logging
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 from dataclasses import dataclass, field
-from .validator import GameState, ACTION_DELTAS, SEMANTIC_PALETTE, game_state_key
+from .validator import (
+    GameState,
+    ACTION_DELTAS,
+    SEMANTIC_PALETTE,
+    BLOCKING_IDS,
+    CONDITIONAL_IDS,
+    PUSHABLE_IDS,
+    WATER_IDS,
+    game_state_key,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -625,6 +634,20 @@ class DStarLiteSolver:
             
             if not (0 <= new_r < self.env.height and 0 <= new_c < self.env.width):
                 continue
+            if abs(dr) == 1 and abs(dc) == 1:
+                adj_r_tile = self.env.grid[state.position[0] + dr, state.position[1]]
+                adj_c_tile = self.env.grid[state.position[0], state.position[1] + dc]
+                if (
+                    adj_r_tile in BLOCKING_IDS
+                    or adj_c_tile in BLOCKING_IDS
+                    or adj_r_tile in CONDITIONAL_IDS
+                    or adj_c_tile in CONDITIONAL_IDS
+                    or adj_r_tile in PUSHABLE_IDS
+                    or adj_c_tile in PUSHABLE_IDS
+                    or adj_r_tile in WATER_IDS
+                    or adj_c_tile in WATER_IDS
+                ):
+                    continue
             
             # Get the tile at the target position
             target_tile = self.env.grid[new_r, new_c]

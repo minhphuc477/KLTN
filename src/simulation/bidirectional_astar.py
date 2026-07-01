@@ -2,15 +2,18 @@
 Bidirectional A* Implementation for Zelda State-Space Search
 ============================================================
 
-Meet-in-the-middle search that reduces search space from O(b^d) to O(b^(d/2))
-by running two simultaneous searches: forward from start and backward from goal.
+Meet-in-the-middle search for reversible, uniform-cost grid movement.
+
+Inventory-changing Zelda mechanics are not generally reversible from a single
+guessed goal inventory. Those maps are delegated to the canonical full-state
+A* solver so this comparison solver never certifies an invalid reverse path.
 
 Key Features:
 - Dual frontier expansion (forward and backward)
 - Collision detection when frontiers meet
 - Path reconstruction from both directions
-- State-space aware: handles inventory in both directions
-- Handles directed edges (one-way doors) carefully
+    - Reversible-grid fast path
+    - Canonical A* fallback for stateful or directed mechanics
 
 Scientific Basis:
 - Pohl, I. (1971). "Bi-directional Search." Machine Intelligence, 6, 127-140.
@@ -18,10 +21,9 @@ Scientific Basis:
   Journal of Artificial Intelligence Research, 7, 283-317.
 - Complexity: O(b^(d/2)) time and space vs O(b^d) for unidirectional A*
 
-Critical Challenge: Backward Search in State-Space Graphs
-- Forward: (pos, inventory_before) -> (new_pos, inventory_after)  
-- Backward: (goal_pos, inventory_at_goal) -> what prior states could reach this?
-- Key consumption must be reversed: "If I need a key here, I must have had key+1 before"
+Critical limitation:
+- A single backward state cannot enumerate every predecessor inventory for
+  consumable resources, movable blocks, staged puzzles, or directed warps.
 """
 
 import heapq
@@ -31,7 +33,7 @@ from dataclasses import dataclass, field
 
 from .validator import (
     GameState, ZeldaLogicEnv, SEMANTIC_PALETTE, WALKABLE_IDS, BLOCKING_IDS,
-    PICKUP_IDS, game_state_key,
+    CONDITIONAL_IDS, PUSHABLE_IDS, WATER_IDS, PICKUP_IDS, game_state_key,
 )
 
 logger = logging.getLogger(__name__)
@@ -49,14 +51,14 @@ class SearchNode:
 
 class BidirectionalAStar:
     """
-    Bidirectional A* solver for Zelda state-space graphs.
+    Bidirectional search with a correctness-preserving full-state fallback.
     
     Features:
     - Forward search from start toward goal
-    - Backward search from goal toward start (with inventory reversal)
+    - Backward search from goal toward start on reversible grids
     - Collision detection when frontiers meet
     - Path reconstruction by concatenating forward and backward paths
-    - Heuristic admissibility in both directions
+    - Lower-bound certification before accepting a first frontier meeting
     
     Performance:
     - Time: O(b^(d/2)) vs O(b^d) for unidirectional A*
@@ -64,10 +66,8 @@ class BidirectionalAStar:
     - Best for: Long paths where meeting point exists
     - Speedup: ~50% reduction in nodes expanded on average
     
-    Backward Search Complexity:
-    - Must invert actions: if forward consumes key, backward generates key
-    - Handle one-way doors: backward search must respect directionality
-    - Inventory prediction: guess what inventory agent had before current state
+    Stateful Zelda transitions are delegated to ``StateSpaceAStar`` because a
+    guessed goal inventory does not define a complete reverse transition graph.
     
     Integration:
     - Provides path length baseline for expressive range analysis
@@ -127,6 +127,13 @@ class BidirectionalAStar:
         
         if self.env.goal_pos is None or self.env.start_pos is None:
             return False, [], 0
+
+        if self._requires_canonical_fallback():
+            logger.debug(
+                "BidirectionalAStar: stateful or directed mechanics detected; "
+                "using canonical full-state A*"
+            )
+            return self._fallback_to_astar()
         
         logger.debug('BidirectionalAStar: Starting search')
         self.used_fallback = False
@@ -192,11 +199,19 @@ class BidirectionalAStar:
                 # Expand forward
                 success, meeting_node_f, meeting_node_b = self._expand_forward(counter)
                 if success:
-                    # Collision detected!
                     path = self._reconstruct_path(meeting_node_f, meeting_node_b)
-                    logger.debug(f'Bidirectional A* succeeded: path_len={len(path)}, '
-                               f'states={self.states_explored}')
-                    return True, path, self.states_explored
+                    if self._candidate_is_provably_optimal(path):
+                        logger.debug(
+                            "Bidirectional A* certified a shortest path: path_len=%d, states=%d",
+                            len(path),
+                            self.states_explored,
+                        )
+                        return True, path, self.states_explored
+                    logger.debug(
+                        "Bidirectional first meeting was not lower-bound optimal; "
+                        "using canonical A*"
+                    )
+                    return self._fallback_to_astar()
                 
                 # Update best meeting point
                 if meeting_node_f and meeting_node_b:
@@ -212,11 +227,19 @@ class BidirectionalAStar:
                 # Expand backward
                 success, meeting_node_b, meeting_node_f = self._expand_backward(counter)
                 if success:
-                    # Collision detected!
                     path = self._reconstruct_path(meeting_node_f, meeting_node_b)
-                    logger.debug(f'Bidirectional A* succeeded: path_len={len(path)}, '
-                               f'states={self.states_explored}')
-                    return True, path, self.states_explored
+                    if self._candidate_is_provably_optimal(path):
+                        logger.debug(
+                            "Bidirectional A* certified a shortest path: path_len=%d, states=%d",
+                            len(path),
+                            self.states_explored,
+                        )
+                        return True, path, self.states_explored
+                    logger.debug(
+                        "Bidirectional first meeting was not lower-bound optimal; "
+                        "using canonical A*"
+                    )
+                    return self._fallback_to_astar()
                 
                 # Update best meeting point
                 if meeting_node_f and meeting_node_b:
@@ -231,9 +254,12 @@ class BidirectionalAStar:
         # If we have a meeting point (even if not optimal), use it
         if best_forward_node and best_backward_node:
             path = self._reconstruct_path(best_forward_node, best_backward_node)
-            logger.debug(f'Bidirectional A* found suboptimal path: '
-                        f'path_len={len(path)}, states={self.states_explored}')
-            return True, path, self.states_explored
+            if self._candidate_is_provably_optimal(path):
+                return True, path, self.states_explored
+            logger.debug(
+                "Bidirectional candidate was not lower-bound optimal; using canonical A*"
+            )
+            return self._fallback_to_astar()
 
         logger.warning(
             'Bidirectional A* exhausted/aborted without meet point (states=%d); '
@@ -241,6 +267,36 @@ class BidirectionalAStar:
             self.states_explored,
         )
         return self._fallback_to_astar()
+
+    def _requires_canonical_fallback(self) -> bool:
+        """Return whether the environment contains non-reversible mechanics."""
+        stateful_ids = (
+            set(CONDITIONAL_IDS)
+            | set(PICKUP_IDS)
+            | set(PUSHABLE_IDS)
+            | set(WATER_IDS)
+            | {
+                SEMANTIC_PALETTE['ENEMY'],
+                SEMANTIC_PALETTE['BOSS'],
+            }
+        )
+        present_ids = {int(value) for value in self.grid.reshape(-1)}
+        return bool(
+            present_ids.intersection(stateful_ids)
+            or getattr(self.env, "graph", None)
+            or getattr(self.env, "_puzzle_stage_lookup", None)
+            or getattr(self.env, "block_underlay_tiles", None)
+        )
+
+    def _candidate_is_provably_optimal(
+        self,
+        path: List[Tuple[int, int]],
+    ) -> bool:
+        """Certify only paths whose action count attains the grid lower bound."""
+        if not path or path[0] != self.env.start_pos or path[-1] != self.env.goal_pos:
+            return False
+        lower_bound = self._grid_distance(self.env.start_pos, self.env.goal_pos)
+        return float(len(path) - 1) == float(lower_bound)
 
     def _fallback_to_astar(self) -> Tuple[bool, List[Tuple[int, int]], int]:
         """Fallback to canonical A* when bidirectional search cannot complete reliably."""
@@ -553,7 +609,16 @@ class BidirectionalAStar:
                 # Check corner cutting
                 adj_r = self.grid[curr_r + dr, curr_c]
                 adj_c = self.grid[curr_r, curr_c + dc]
-                if adj_r in BLOCKING_IDS or adj_c in BLOCKING_IDS:
+                if (
+                    adj_r in BLOCKING_IDS
+                    or adj_c in BLOCKING_IDS
+                    or adj_r in CONDITIONAL_IDS
+                    or adj_c in CONDITIONAL_IDS
+                    or adj_r in PUSHABLE_IDS
+                    or adj_c in PUSHABLE_IDS
+                    or adj_r in WATER_IDS
+                    or adj_c in WATER_IDS
+                ):
                     continue
                 
                 target_tile = self.grid[new_r, new_c]
@@ -609,7 +674,16 @@ class BidirectionalAStar:
                 # Check corner cutting
                 adj_r = self.grid[curr_r - dr, curr_c]
                 adj_c = self.grid[curr_r, curr_c - dc]
-                if adj_r in BLOCKING_IDS or adj_c in BLOCKING_IDS:
+                if (
+                    adj_r in BLOCKING_IDS
+                    or adj_c in BLOCKING_IDS
+                    or adj_r in CONDITIONAL_IDS
+                    or adj_c in CONDITIONAL_IDS
+                    or adj_r in PUSHABLE_IDS
+                    or adj_c in PUSHABLE_IDS
+                    or adj_r in WATER_IDS
+                    or adj_c in WATER_IDS
+                ):
                     continue
                 
                 prev_tile = self.grid[prev_r, prev_c]
@@ -698,9 +772,8 @@ class BidirectionalAStar:
         dr = abs(int(a[0]) - int(b[0]))
         dc = abs(int(a[1]) - int(b[1]))
         if self.allow_diagonals:
-            diagonal = min(dr, dc)
-            straight = max(dr, dc) - diagonal
-            return float((1.414 * diagonal) + straight)
+            # Each cardinal or diagonal transition costs one search action.
+            return float(max(dr, dc))
         return float(dr + dc)
 
     def _heuristic_forward(self, state: GameState) -> float:
