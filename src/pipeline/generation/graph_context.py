@@ -10,10 +10,18 @@ import numpy as np
 import torch
 
 from src.core import ROOM_HEIGHT, ROOM_WIDTH, SEMANTIC_PALETTE
-from src.core.definitions import DOOR_POSITIONS, GRAPH_TPE_DIM, TileID, parse_edge_type_tokens
+from src.core.definitions import (
+    DOOR_POSITIONS,
+    GRAPH_TPE_DIM,
+    ROOM_TOPOLOGY_CHANNELS,
+    ROOM_TOPOLOGY_DIRECTIONAL_CHANNEL_GROUPS,
+    TileID,
+    parse_edge_type_tokens,
+)
 from src.core.condition_encoder import build_boundary_constraints
 from src.core.domain import ROOM_ROLE_KEYS, ZeldaSchema
 from src.pipeline.graph_features import (
+    build_key_lock_pairs,
     compute_current_node_distance_features,
     compute_rrwp_edge_features,
     compute_tpe_features,
@@ -158,6 +166,11 @@ def _prepare_graph_context(pipeline, graph: nx.Graph, use_tpe: bool = True) -> D
         ),
         None,
     )
+    key_lock_pairs = build_key_lock_pairs(
+        graph,
+        node_to_idx,
+        start_node=start_node,
+    )
 
     return {
         'node_features': node_features,
@@ -171,6 +184,7 @@ def _prepare_graph_context(pipeline, graph: nx.Graph, use_tpe: bool = True) -> D
         'node_to_idx': node_to_idx,
         'start_node_id': int(node_to_idx.get(start_node, 0)) if start_node is not None else 0,
         'target_idx': int(node_to_idx.get(target_node, -1)) if target_node is not None else -1,
+        'key_lock_pairs': key_lock_pairs,
     }
 
 
@@ -754,6 +768,30 @@ def _build_room_graph_context(
         semantic_puzzle_offset=pipeline.default_semantic_puzzle_offset,
         stage_trace_decay=pipeline.default_puzzle_stage_trace_decay,
     )
+    room_topology_map = pipeline._build_room_topology_condition_tensor(
+        mission_graph,
+        room_id,
+        start_goal=start_goal,
+    )
+
+    def _direction_mask(directions: Set[str]) -> torch.Tensor:
+        channel_indices = [
+            int(ROOM_TOPOLOGY_CHANNELS[channel_name])
+            for direction in sorted(directions)
+            for channel_name in ROOM_TOPOLOGY_DIRECTIONAL_CHANNEL_GROUPS.get(
+                str(direction).upper(),
+                (),
+            )
+            if channel_name in ROOM_TOPOLOGY_CHANNELS
+        ]
+        if not channel_indices:
+            return torch.zeros_like(room_topology_map[:, :1])
+        selected = room_topology_map[:, channel_indices]
+        return selected.amax(dim=1, keepdim=True).clamp(0.0, 1.0)
+
+    logic_source_mask = _direction_mask(set(semantics["incoming_dirs"]))
+    logic_target_mask = _direction_mask(set(semantics["outgoing_dirs"]))
+
     return {
         'graph_scope': 'room',
         'node_features': graph_data.get('node_features'),
@@ -768,15 +806,14 @@ def _build_room_graph_context(
         'current_node_idx': current_node_idx,
         'start_node_id': int(node_to_idx.get(start_node, 0)) if start_node is not None else 0,
         'target_idx': int(node_to_idx.get(target_node, -1)) if target_node is not None else -1,
+        'key_lock_pairs': list(graph_data.get('key_lock_pairs', []) or []),
         'puzzle_room_structure_enabled': bool(pipeline.default_puzzle_room_structure_enabled),
         'puzzle_stage_condition': puzzle_stage_condition,
         **({'current_node_distance': current_node_distance} if pipeline.use_current_node_distance_features else {}),
         **({'style_id': int(style_id)} if style_id is not None else {}),
-        'room_topology_map': pipeline._build_room_topology_condition_tensor(
-            mission_graph,
-            room_id,
-            start_goal=start_goal,
-        ),
+        'room_topology_map': room_topology_map,
+        'logic_source_mask': logic_source_mask,
+        'logic_target_mask': logic_target_mask,
     }
 
 

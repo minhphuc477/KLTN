@@ -3236,6 +3236,24 @@ def _resolve_effective_sampling_guidance(
                 effective_logic_guidance_scale,
             )
             effective_logic_guidance_scale = 0.0
+        if (
+            effective_logic_guidance_scale > 0.0
+            and pipeline.logic_net is not None
+            and not bool(getattr(pipeline.logic_net, "_hmolqd_guidance_calibrated", False))
+        ):
+            pipeline._bump_diagnostic("logic_guidance_disabled_uncalibrated_surrogate")
+            accuracy = getattr(pipeline.logic_net, "_hmolqd_logic_tile_accuracy", None)
+            threshold = float(
+                getattr(pipeline.logic_net, "_hmolqd_min_logic_tile_accuracy", 0.4)
+            )
+            logger.warning(
+                "LogicNet guidance requested at scale %.3f, but latent-to-tile surrogate "
+                "accuracy is %s (required %.3f); disabling runtime guidance.",
+                effective_logic_guidance_scale,
+                "unreported" if accuracy is None else f"{float(accuracy):.3f}",
+                threshold,
+            )
+            effective_logic_guidance_scale = 0.0
         return effective_guidance_scale, effective_logic_guidance_scale
 
     trained_cfg_scale = float(

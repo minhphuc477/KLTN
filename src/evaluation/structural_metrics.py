@@ -73,6 +73,62 @@ def compute_branching_factor(mission_graph: nx.Graph) -> float:
     return float(sum(branch_degrees) / len(branch_degrees))
 
 
+def compute_path_linearity(
+    mission_graph: nx.Graph,
+    path_nodes: list[object] | tuple[object, ...],
+) -> float:
+    """Measure critical-path corridor structure without rewarding dead-end padding."""
+    if mission_graph is None or len(path_nodes) < 2:
+        return 0.0
+    physical = nx.Graph(mission_graph)
+    ordered_path = [node for node in path_nodes if node in physical]
+    path_set = set(ordered_path)
+    path_edges = {
+        frozenset((source, target))
+        for source, target in zip(ordered_path[:-1], ordered_path[1:])
+    }
+    path_chords = sum(
+        1
+        for source, target in physical.subgraph(path_set).edges()
+        if frozenset((source, target)) not in path_edges
+    )
+    reconnecting_branches = 0
+    off_path = physical.subgraph(set(physical.nodes()) - path_set)
+    for component in nx.connected_components(off_path):
+        attachments = {
+            neighbor
+            for node in component
+            for neighbor in physical.neighbors(node)
+            if neighbor in path_set
+        }
+        reconnecting_branches += max(0, len(attachments) - 1)
+    route_choice_pressure = min(
+        1.0,
+        float(path_chords + reconnecting_branches)
+        / float(max(1, len(ordered_path) - 1)),
+    )
+    components = max(1, nx.number_connected_components(physical))
+    cycle_rank = max(
+        0,
+        int(physical.number_of_edges())
+        - int(physical.number_of_nodes())
+        + int(components),
+    )
+    cycle_pressure = min(
+        1.0,
+        float(cycle_rank) / float(max(1, physical.number_of_nodes())),
+    )
+    return float(
+        max(
+            0.0,
+            min(
+                1.0,
+                1.0 - (0.7 * route_choice_pressure) - (0.3 * cycle_pressure),
+            ),
+        )
+    )
+
+
 def analyze_structural_topology(mission_graph: nx.Graph) -> StructuralTopologyMetrics:
     """Return loop/branch/dead-end structural metrics."""
     if mission_graph is None or mission_graph.number_of_nodes() <= 0:

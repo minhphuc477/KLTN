@@ -84,6 +84,43 @@ class TestTopologyGeneratorMaxNodes:
         assert archive_path.exists()
         assert len(loaded.get_all_elites()) == 1
         assert loaded.get_all_elites()[0].solution == [0, 1, 2]
+
+    def test_cvt_emitter_is_seed_reproducible_and_populates_feasible_archive(self):
+        """Seeded topology QD should reproduce both output and archive metrics."""
+        def run_once():
+            generator = EvolutionaryTopologyGenerator(
+                target_curve=[0.1, 0.4, 0.7, 1.0],
+                population_size=8,
+                generations=2,
+                max_nodes=8,
+                rule_space="core",
+                search_strategy="cvt_emitter",
+                qd_archive_cells=32,
+                seed=123,
+            )
+            graph = generator.evolve()
+            signature = (
+                tuple(
+                    sorted(
+                        (str(node), str(data.get("type")), str(data.get("label")))
+                        for node, data in graph.nodes(data=True)
+                    )
+                ),
+                tuple(
+                    sorted(
+                        (str(source), str(target), str(data.get("edge_type")))
+                        for source, target, data in graph.edges(data=True)
+                    )
+                ),
+            )
+            return signature, dict(generator.qd_final_archive_stats)
+
+        signature_a, stats_a = run_once()
+        signature_b, stats_b = run_once()
+
+        assert signature_a == signature_b
+        assert stats_a == stats_b
+        assert stats_a["num_elites"] > 0
     
     def test_max_nodes_enforced_during_evolution(self):
         """Verify max_nodes is enforced during graph generation."""

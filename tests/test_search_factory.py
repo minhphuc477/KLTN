@@ -39,7 +39,7 @@ def test_search_factory_exposes_canonical_validation_registry():
     ]
     assert specs[0].validation_role == "oracle"
     assert specs[0].canonical_use == "hard_oracle"
-    assert specs[4].validation_role == "replanning"
+    assert specs[4].validation_role == "replanning_diagnostic"
     assert specs[4].canonical_use == "incremental_replanning"
 
 

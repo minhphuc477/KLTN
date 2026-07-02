@@ -908,6 +908,8 @@ class TensionCurveEvaluator:
             return {
                 "fitness": 0.0,
                 "feasible": False,
+                "mechanically_feasible": False,
+                "target_constraints_satisfied": False,
                 "constraint_violation": 1.0,
                 "critical_edges": 0,
                 "node_count": int(len(graph.nodes)),
@@ -1436,15 +1438,18 @@ class TensionCurveEvaluator:
                     3.0,
                 )
             )
-        feasible = bool(violation <= 1e-9)
-        if not feasible:
-            # Smooth penalty keeps gradient information while letting survivor
-            # selection enforce feasibility-first ordering.
+        target_constraints_satisfied = bool(violation <= 1e-9)
+        if not target_constraints_satisfied:
+            # These are target/style deviations, not functional invalidity.
+            # Keep them as smooth quality penalties while hard feasibility is
+            # determined exclusively by the resource-aware solvability checks.
             fitness *= float(np.clip(1.0 - (0.25 * violation), 0.05, 1.0))
 
         return {
             "fitness": float(max(0.0, min(1.0, fitness))),
-            "feasible": feasible,
+            "feasible": True,
+            "mechanically_feasible": True,
+            "target_constraints_satisfied": target_constraints_satisfied,
             "constraint_violation": float(violation),
             "critical_edges": int(critical_edges),
             "node_count": int(node_count),
@@ -1599,16 +1604,26 @@ class TensionCurveEvaluator:
         if not path:
             return False
         
-        # Use grammar's built-in progression validation.
+        # Grammar checks catch malformed provider/gate metadata. The exact
+        # state-space oracle then verifies cumulative resource consumption
+        # across the complete route; reachability checks alone cannot prove
+        # that one small key is sufficient for multiple locks.
         grammar = MissionGrammar()
         try:
             graph.sanitize()
         except (TypeError, ValueError, AttributeError) as e:
             logger.debug("Graph sanitize failed during solvability check: %s", e)
-        return bool(
+        grammar_valid = bool(
             grammar.validate_lock_key_ordering(graph)
             and grammar.validate_progression_constraints(graph)
         )
+        if not grammar_valid:
+            return False
+
+        from src.evaluation.validator import ExternalValidator
+
+        validation_graph = mission_graph_to_networkx(graph, directed=True)
+        return bool(ExternalValidator(mode="full").validate(validation_graph).is_solvable)
     
     @staticmethod
     def _find_path_in_adjacency(

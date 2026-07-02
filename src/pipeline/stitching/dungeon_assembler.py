@@ -14,6 +14,7 @@ import torch
 from src.core import ROOM_HEIGHT, ROOM_WIDTH, SEMANTIC_PALETTE
 from src.generation.evolutionary_director import EvolutionaryTopologyGenerator
 from src.pipeline.generation.sampler import _stable_node_seed_offset
+from src.pipeline.evaluation import _hard_oracle_verdict, _logicnet_hard_agreement
 from src.pipeline.room_stitching import (
     StitchedRoomLayout,
     build_stitched_room_layout,
@@ -44,6 +45,86 @@ def _public_pipeline_hook(name: str, fallback: Any) -> Any:
 def _record_stage_time(stage_times: Dict[str, float], key: str, started_at: float) -> None:
     """Accumulate wall-clock stage timings in seconds."""
     stage_times[key] = float(stage_times.get(key, 0.0)) + float(time.perf_counter() - started_at)
+
+
+def _validate_mission_graph_exact(pipeline, graph: nx.Graph) -> Dict[str, Any]:
+    """Run the resource-aware graph oracle when mission start/goal roles exist."""
+    start_node = get_physical_start_node(graph)
+    goal_nodes = [
+        node_id
+        for node_id, attrs in graph.nodes(data=True)
+        if pipeline._room_role_flags(dict(attrs)).get("has_goal", False)
+    ]
+    if start_node is None or not goal_nodes:
+        return {
+            "solvable": None,
+            "termination_status": "not_applicable_missing_roles",
+            "proven_unsolvable": False,
+            "states_explored": 0,
+            "failure_reason": "",
+        }
+
+    from src.evaluation.validator import ExternalValidator
+
+    validator = ExternalValidator(mode="full")
+    state_budget = int(max(1, int(getattr(pipeline, "graph_oracle_max_states", 200_000))))
+    result = validator.validate(
+        graph,
+        max_states=state_budget,
+    )
+    room_reachability = validator.checker.check_all_rooms_reachable_detailed(
+        graph,
+        max_states=state_budget,
+    )
+    payload = {
+        "solvable": bool(result.is_solvable),
+        "termination_status": str(result.termination_status),
+        "proven_unsolvable": bool(result.proven_unsolvable),
+        "states_explored": int(result.states_explored),
+        "states_pruned_dominated": int(
+            dict(result.metrics or {}).get("states_pruned_dominated", 0) or 0
+        ),
+        "failure_reason": str(result.failure_reason or ""),
+        "solution_path": list(result.solution_path or []),
+        "all_rooms_reachable": bool(
+            room_reachability["complete"]
+            and not room_reachability["unreachable_nodes"]
+        ),
+        "all_rooms_reachability_status": str(
+            room_reachability["termination_status"]
+        ),
+        "all_rooms_reachability_states_explored": int(
+            room_reachability["states_explored"]
+        ),
+        "all_rooms_reachability_states_pruned_dominated": int(
+            room_reachability.get("states_pruned_dominated", 0) or 0
+        ),
+        "unreachable_rooms": sorted(
+            room_reachability["unreachable_nodes"],
+            key=stable_node_sort_key,
+        ),
+    }
+    if not result.is_solvable:
+        if str(result.termination_status) == "budget_exhausted":
+            raise RuntimeError(
+                "Mission-graph oracle exhausted its state budget; generation cannot treat "
+                "the graph as either solvable or unsolvable."
+            )
+        raise ValueError(
+            "Mission graph is not resource-solvable under the exact graph oracle: "
+            f"{payload['failure_reason'] or payload['termination_status']}."
+        )
+    if not bool(room_reachability["complete"]):
+        raise RuntimeError(
+            "Mission-graph all-room reachability exhausted its state budget; "
+            "generation cannot certify that every room is playable."
+        )
+    if room_reachability["unreachable_nodes"]:
+        raise ValueError(
+            "Mission graph contains rooms unreachable from START under resource "
+            f"semantics: {payload['unreachable_rooms']}."
+        )
+    return payload
 
 
 def _aggregate_room_stage_times(room_metric_dicts: List[Dict[str, Any]]) -> Dict[str, float]:
@@ -352,6 +433,8 @@ def prepare_dungeon_generation(
     if graph is None:
         raise ValueError("mission_graph is still None after topology generation attempt")
 
+    graph_validation = _validate_mission_graph_exact(pipeline, graph)
+
     logger.debug("Applying VGLC compliance: filtering virtual nodes from mission graph")
     mission_graph_physical = filter_virtual_nodes(graph)
     physical_start = get_physical_start_node(graph)
@@ -368,6 +451,7 @@ def prepare_dungeon_generation(
         mission_graph_physical,
         use_tpe=use_topological_positional_encoding,
     )
+    graph_data["graph_oracle_validation"] = graph_validation
     return PreparedDungeonGeneration(
         mission_graph=graph,
         mission_graph_physical=mission_graph_physical,
@@ -909,6 +993,12 @@ def generate_dungeon(
         prepared.mission_graph_physical,
         enable_map_elites=enable_map_elites,
     )
+    hard_validation = (
+        dict(map_elites_score)
+        if isinstance(map_elites_score, dict) and bool(map_elites_score.get('is_exact', False))
+        else dict(pipeline._validate_dungeon(dungeon_grid) or {})
+    )
+    hard_verdict = _hard_oracle_verdict(hard_validation)
     _record_stage_time(stage_times, "evaluate_generated_dungeon_time_sec", stage_started_at)
 
     stage_started_at = time.perf_counter()
@@ -929,6 +1019,9 @@ def generate_dungeon(
     alignment_metrics = pipeline._aggregate_room_alignment_metrics(room_metric_dicts)
     room_stage_times = _aggregate_room_stage_times(room_metric_dicts)
     masked_sampling_metrics = _aggregate_masked_sampling_metrics(room_metric_dicts)
+    graph_oracle_validation = dict(
+        prepared.graph_data.get("graph_oracle_validation", {}) or {}
+    )
     stage_times["generation_total_time_sec"] = float(generation_time)
     metrics = {
         'num_rooms': num_rooms_generated,
@@ -958,12 +1051,48 @@ def generate_dungeon(
                 for plan in dict(puzzle_metadata.get('plans', {}) or {}).values()
             )
         ),
+        'graph_oracle_solvable': graph_oracle_validation.get('solvable'),
+        'graph_oracle_validation_status': str(
+            graph_oracle_validation.get('termination_status', 'unknown')
+        ),
+        'graph_oracle_states_explored': int(
+            graph_oracle_validation.get('states_explored', 0) or 0
+        ),
+        'graph_oracle_states_pruned_dominated': int(
+            graph_oracle_validation.get('states_pruned_dominated', 0) or 0
+        ),
+        'graph_oracle_all_rooms_reachable': graph_oracle_validation.get(
+            'all_rooms_reachable'
+        ),
+        'graph_oracle_all_rooms_reachability_status': str(
+            graph_oracle_validation.get(
+                'all_rooms_reachability_status',
+                'unknown',
+            )
+        ),
+        'graph_oracle_unreachable_rooms': list(
+            graph_oracle_validation.get('unreachable_rooms', []) or []
+        ),
         'logicnet_dungeon_solvability': float(logic_solvability.get('solvability_score', 0.0)),
         'logicnet_room_solvability': float(logic_solvability.get('room_solvability_score', 0.0)),
         'logicnet_graph_reach_loss': float(logic_solvability.get('graph_reach_loss', 0.0)),
         'logicnet_lock_loss': float(logic_solvability.get('lock_loss', 0.0)),
         'logicnet_global_logic_loss': float(logic_solvability.get('global_logic_loss', 0.0)),
         'logicnet_num_failing_rooms': float(logic_solvability.get('num_failing', 0.0)),
+        'final_hard_solvable': hard_verdict,
+        'final_hard_validation_status': str(
+            hard_validation.get('termination_status', 'unknown')
+        ),
+        'final_hard_proven_unsolvable': bool(
+            hard_validation.get('proven_unsolvable', False)
+        ),
+        'final_hard_states_explored': int(
+            hard_validation.get('states_explored', 0) or 0
+        ),
+        'logicnet_hard_agreement': _logicnet_hard_agreement(
+            logic_solvability,
+            hard_validation,
+        ),
         **alignment_metrics,
         **masked_sampling_metrics,
     }

@@ -36,6 +36,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import networkx as nx
 import numpy as np
 
+from src.evaluation.structural_metrics import compute_path_linearity
 from src.core.definitions import (
     CHAR_TO_SEMANTIC,
     ROOM_HEIGHT,
@@ -335,62 +336,9 @@ def _safe_shortest_path(graph: nx.Graph, start: Any, goal: Any) -> Tuple[bool, i
         return False, 0, []
 
 
-def _node_position_2d(attrs: Dict[str, Any]) -> Optional[Tuple[float, float]]:
-    """Extract a 2D position from common graph schemas."""
-    raw = attrs.get("position", attrs.get("pos"))
-    if isinstance(raw, str):
-        cleaned = raw.replace("(", "").replace(")", "").replace("[", "").replace("]", "")
-        parts = [p.strip() for p in cleaned.replace(",", " ").split() if p.strip()]
-        if len(parts) >= 2:
-            try:
-                return float(parts[0]), float(parts[1])
-            except ValueError:
-                pass
-    elif isinstance(raw, (list, tuple)) and len(raw) >= 2:
-        try:
-            return float(raw[0]), float(raw[1])
-        except (TypeError, ValueError):
-            pass
-
-    if "x" in attrs and "y" in attrs:
-        try:
-            return float(attrs["x"]), float(attrs["y"])
-        except (TypeError, ValueError):
-            return None
-    return None
-
-
 def _path_linearity(G: nx.Graph, path_nodes: Sequence[Any]) -> float:
-    """
-    Estimate path directness without penalizing optional off-path content.
-
-    When node coordinates are available, this is Euclidean start-goal distance
-    divided by the polyline length of the chosen path. Without coordinates, it
-    falls back to how corridor-like the path itself is, using only degrees of
-    nodes on the path rather than total graph size.
-    """
-    if len(path_nodes) < 2:
-        return 0.0
-
-    positions = [_node_position_2d(dict(G.nodes[node])) for node in path_nodes if node in G.nodes]
-    if len(positions) == len(path_nodes) and all(pos is not None for pos in positions):
-        pts = [pos for pos in positions if pos is not None]
-        segment_length = 0.0
-        for a, b in zip(pts[:-1], pts[1:]):
-            segment_length += float(np.hypot(float(a[0]) - float(b[0]), float(a[1]) - float(b[1])))
-        direct = float(np.hypot(float(pts[0][0]) - float(pts[-1][0]), float(pts[0][1]) - float(pts[-1][1])))
-        if segment_length > 0.0:
-            return _clip01(direct / segment_length)
-
-    U = G.to_undirected()
-    internal_nodes = list(path_nodes[1:-1])
-    if not internal_nodes:
-        return 1.0
-    penalties = []
-    for node in internal_nodes:
-        degree = max(1, int(U.degree(node)))
-        penalties.append(max(0.0, float(degree - 2)) / float(degree))
-    return _clip01(1.0 - float(np.mean(penalties)) if penalties else 1.0)
+    """Return shared loop/branch-aware critical-path linearity."""
+    return compute_path_linearity(G, tuple(path_nodes))
 
 
 def _path_metrics(

@@ -538,6 +538,7 @@ def load_logic_net(pipeline, checkpoint_path: Optional[str]) -> Optional[LogicNe
         num_classes=default_num_classes,
         num_iterations=int(fallback_config.get("num_logic_iterations", 20)),
         grid_pathfinder_type=str(fallback_config.get("logic_grid_pathfinder", "bellman_ford")),
+        full_coverage=bool(fallback_config.get("logic_full_coverage", True)),
         topology_trace_weight=float(fallback_config.get("logic_topology_trace_weight", 0.25)),
         topology_anchor_weight=float(fallback_config.get("logic_topology_anchor_weight", 0.25)),
         global_reach_weight=float(fallback_config.get("logic_global_reach_weight", 1.0)),
@@ -561,6 +562,7 @@ def load_logic_net(pipeline, checkpoint_path: Optional[str]) -> Optional[LogicNe
             num_classes=int(checkpoint_config.get("num_classes", architecture.get("num_classes", default_num_classes))),
             num_iterations=int(checkpoint_config.get("num_logic_iterations", 20)),
             grid_pathfinder_type=str(checkpoint_config.get("logic_grid_pathfinder", fallback_config.get("logic_grid_pathfinder", "bellman_ford"))),
+            full_coverage=bool(checkpoint_config.get("logic_full_coverage", fallback_config.get("logic_full_coverage", True))),
             topology_trace_weight=float(checkpoint_config.get("logic_topology_trace_weight", 0.25)),
             topology_anchor_weight=float(checkpoint_config.get("logic_topology_anchor_weight", 0.25)),
             global_reach_weight=float(checkpoint_config.get("logic_global_reach_weight", 1.0)),
@@ -592,6 +594,30 @@ def load_logic_net(pipeline, checkpoint_path: Optional[str]) -> Optional[LogicNe
             raise ValueError(
                 f"LogicNet checkpoint at {checkpoint_path!r} does not contain a loadable state_dict."
             )
+        checkpoint_metrics = checkpoint.get("metrics", {}) if isinstance(checkpoint, dict) else {}
+        tile_accuracy = None
+        if isinstance(checkpoint_metrics, dict):
+            raw_accuracy = checkpoint_metrics.get(
+                "val_logic_tile_accuracy",
+                checkpoint_metrics.get("logic_tile_accuracy"),
+            )
+            try:
+                tile_accuracy = float(raw_accuracy) if raw_accuracy is not None else None
+            except (TypeError, ValueError, OverflowError):
+                tile_accuracy = None
+        min_tile_accuracy = float(
+            checkpoint_config.get(
+                "min_logic_tile_accuracy_for_guidance",
+                fallback_config.get("min_logic_tile_accuracy_for_guidance", 0.4),
+            )
+        )
+        setattr(model, "_hmolqd_logic_tile_accuracy", tile_accuracy)
+        setattr(model, "_hmolqd_min_logic_tile_accuracy", max(0.0, min_tile_accuracy))
+        setattr(
+            model,
+            "_hmolqd_guidance_calibrated",
+            bool(tile_accuracy is not None and tile_accuracy >= max(0.0, min_tile_accuracy)),
+        )
         setattr(model, "_hmolqd_checkpoint_loaded", True)
         pipeline.logic_net_checkpoint_loaded = True
         logger.info(f"Loaded LogicNet from {checkpoint_path}")

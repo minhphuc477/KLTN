@@ -369,14 +369,29 @@ def test_sanity_checker_rejects_sparse_walkable_maps_that_old_threshold_allowed(
     assert any("mostly blocked" in error for error in errors)
 
 
-def test_state_domination_requires_pushed_block_superset():
+def test_state_domination_requires_identical_pushed_block_geometry():
     from src.simulation.validator import GameState, dominates
 
     unpushed = GameState(position=(2, 2))
     pushed = GameState(position=(2, 2), pushed_blocks={((2, 3), (2, 4))})
 
     assert not dominates(unpushed, pushed)
-    assert dominates(pushed, unpushed)
+    assert not dominates(pushed, unpushed)
+    assert dominates(pushed, pushed.copy())
+
+
+def test_state_domination_does_not_prune_saved_consumable_pickup():
+    from src.simulation.validator import GameState, dominates
+
+    consumed = GameState(
+        position=(2, 2),
+        keys=0,
+        collected_items={(1, 1)},
+    )
+    saved = GameState(position=(2, 2), keys=0)
+
+    assert not dominates(consumed, saved)
+    assert not dominates(saved, consumed)
 
 
 def test_map_elites_leniency_counts_bosses_as_hazards():

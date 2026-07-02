@@ -316,8 +316,8 @@ def test_prepare_graph_context_and_room_graph_context_include_spatial_topology(p
     assert room_graph_context["puzzle_stage_condition"]["sequence_required"] is True
 
 
-def test_validate_dungeon_without_map_elites_returns_none():
-    """Validation should no-op cleanly when MAP-Elites is not configured."""
+def test_validate_dungeon_without_map_elites_still_runs_exact_oracle():
+    """Hard validation must not depend on the optional MAP-Elites archive."""
     pipeline = NeuralSymbolicDungeonPipeline.from_components(
         components=PipelineComponents(
             symbolic=SymbolicGenerationComponents(),
@@ -327,7 +327,11 @@ def test_validate_dungeon_without_map_elites_returns_none():
     )
 
     dungeon_grid = np.zeros((ROOM_HEIGHT, ROOM_WIDTH), dtype=np.int32)
-    assert pipeline._validate_dungeon(dungeon_grid) is None
+    result = pipeline._validate_dungeon(dungeon_grid)
+    assert result is not None
+    assert result["is_exact"] is True
+    assert result["solvable"] is False
+    assert result["termination_status"] == "invalid"
 
 
 def test_public_repair_room_clamps_row_col_coordinates():

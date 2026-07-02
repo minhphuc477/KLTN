@@ -108,10 +108,18 @@ def evaluate_map_elites(graphs: List[nx.DiGraph]) -> Dict[str, float]:
     validator = ExternalValidator()
 
     for g in graphs:
-        # use solvability as fitness
-        fitness = 1.0 if validator.validate(g).is_solvable else 0.0
-        # attempt to add with automatic feature extraction
-        archive.add(solution=g, fitness=fitness, features=extractor.extract(g))
+        validation = validator.validate(g)
+        fitness = 1.0 if validation.is_solvable else 0.0
+        archive.add(
+            solution=g,
+            fitness=fitness,
+            features=extractor.extract(g),
+            feasible=bool(validation.is_solvable),
+            metadata={
+                "feasible": bool(validation.is_solvable),
+                "failure_reason": validation.failure_reason or "",
+            },
+        )
 
     stats = archive.get_stats()
     stats = {

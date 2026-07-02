@@ -51,6 +51,22 @@ class TestEvolutionaryDirector:
         assert gen.population_size == 20
         assert gen.generations == 10
 
+    def test_mechanical_feasibility_is_not_exact_style_target_matching(self):
+        """A playable graph remains feasible when it misses soft descriptor targets."""
+        graph = MissionGraph()
+        graph.add_node(MissionNode(id=0, node_type=NodeType.START))
+        graph.add_node(MissionNode(id=1, node_type=NodeType.GOAL))
+        graph.add_edge(0, 1, EdgeType.PATH)
+        graph.sanitize()
+
+        result = TensionCurveEvaluator(
+            target_curve=[0.0, 0.3, 0.7, 1.0],
+        ).evaluate_graph(graph)
+
+        assert result["mechanically_feasible"] is True
+        assert result["feasible"] is True
+        assert result["constraint_violation"] > 0.0
+
     def test_finalize_graph_output_repairs_goal_gauntlet(self):
         """Final export should normalize malformed goal chains before validation."""
         gen = EvolutionaryTopologyGenerator(
@@ -305,6 +321,7 @@ class TestEvolutionaryDirector:
             target_curve=target,
             population_size=5,  # Very small
             generations=5,
+            rule_space="core",
             seed=42,
         )
         

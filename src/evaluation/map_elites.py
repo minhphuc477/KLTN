@@ -10,19 +10,19 @@ of dungeons with varied characteristics (linearity, leniency, etc.).
 
 Mathematical Formulation:
 -------------------------
-Feature Space: F ∈ ℝ² (e.g., linearity × leniency)
+Feature Space: F in R^2 (e.g., linearity x leniency)
 Archive: A: F -> (solution, fitness)
 
 Update Rule:
     Given new solution x with features f(x) and fitness q(x):
-    if f(x) ∈ A and q(x) > A[f(x)].fitness:
+    if f(x) in A and q(x) > A[f(x)].fitness:
         A[f(x)] = (x, q(x))
-    elif f(x) ∉ A:
+    elif f(x) not in A:
         A[f(x)] = (x, q(x))
 
 Metrics:
-- Coverage: |{cells ∈ A : occupied}| / |F|
-- QD-Score: Σ_{c ∈ A} fitness(c)
+- Coverage: |{cells in A : occupied}| / |F|
+- QD-Score: sum_{c in A} fitness(c)
 - Diversity: variance of features in archive
 
 """
@@ -36,6 +36,7 @@ import numpy as np
 import networkx as nx
 
 from src.core.definitions import parse_edge_type_tokens, parse_node_label_tokens
+from src.evaluation.structural_metrics import compute_path_linearity
 from src.utils.stable_seed import stable_int_hash
 
 logger = logging.getLogger(__name__)
@@ -228,20 +229,12 @@ class LinearityLeniencyExtractor(FeatureExtractor):
         except (nx.NetworkXNoPath, nx.NodeNotFound):
             return 0.0
         
-        # Count nodes on shortest path vs total nodes
-        # High linearity = most nodes are on the main path
         try:
             path = nx.shortest_path(undirected, start, goal)
-            nodes_on_path = len(path)
         except (nx.NetworkXNoPath, nx.NodeNotFound):
-            nodes_on_path = 1
-        
-        total_nodes = graph.number_of_nodes()
-        
-        # Linearity: fraction of nodes on main path
-        linearity = nodes_on_path / total_nodes
-        
-        return min(1.0, linearity)
+            return 0.0
+
+        return compute_path_linearity(graph, tuple(path))
     
     def _compute_leniency(self, graph: nx.DiGraph) -> float:
         """Compute leniency score."""
@@ -403,6 +396,7 @@ class EliteArchive:
         self.total_evaluations = 0
         self.total_additions = 0
         self.total_replacements = 0
+        self.total_rejections = 0
     
     def _discretize(self, features: Tuple[float, ...]) -> Tuple[int, ...]:
         """Convert continuous features to discrete cell coordinates."""
@@ -430,6 +424,7 @@ class EliteArchive:
         fitness: float,
         features: Tuple[float, ...],
         metadata: Optional[Dict] = None,
+        feasible: bool = True,
     ) -> bool:
         """
         Attempt to add a solution to the archive.
@@ -444,6 +439,9 @@ class EliteArchive:
             True if solution was added/replaced, False otherwise
         """
         self.total_evaluations += 1
+        if not feasible:
+            self.total_rejections += 1
+            return False
         
         cell = self._discretize(features)
         
@@ -515,6 +513,7 @@ class EliteArchive:
         self.total_evaluations = 0
         self.total_additions = 0
         self.total_replacements = 0
+        self.total_rejections = 0
 
 
 # ============================================================================
@@ -655,9 +654,11 @@ class MAPElites:
         cells_per_dim: int = 10,
         feature_ranges: Optional[List[Tuple[float, float]]] = None,
         feature_dims: int = 2,
+        feasibility_fn: Optional[Callable[[Any], bool]] = None,
     ):
         self.feature_extractor = feature_extractor
         self.fitness_fn = fitness_fn
+        self.feasibility_fn = feasibility_fn
         
         self.archive = EliteArchive(
             feature_dims=feature_dims,
@@ -673,6 +674,7 @@ class MAPElites:
         precomputed_fitness: Optional[float] = None,
         precomputed_features: Optional[Tuple[float, ...]] = None,
         metadata: Optional[Dict] = None,
+        precomputed_feasible: Optional[bool] = None,
     ) -> Tuple[bool, float, Tuple[float, ...]]:
         """
         Add a dungeon to the archive.
@@ -695,13 +697,20 @@ class MAPElites:
         fitness = precomputed_fitness
         if fitness is None:
             fitness = self.fitness_fn(dungeon)
+
+        feasible = precomputed_feasible
+        if feasible is None:
+            feasible = True if self.feasibility_fn is None else bool(self.feasibility_fn(dungeon))
+        archive_metadata = dict(metadata or {})
+        archive_metadata["feasible"] = bool(feasible)
         
         # Try to add to archive
         was_added = self.archive.add(
             solution=dungeon,
             fitness=fitness,
             features=features,
-            metadata=metadata,
+            metadata=archive_metadata,
+            feasible=bool(feasible),
         )
         
         return was_added, fitness, features
@@ -796,6 +805,7 @@ class MAPElites:
                     'total_evaluations': self.archive.total_evaluations,
                     'total_additions': self.archive.total_additions,
                     'total_replacements': self.archive.total_replacements,
+                    'total_rejections': self.archive.total_rejections,
                 }
             }, f)
         logger.info(f"Saved archive to {filepath}")
@@ -811,6 +821,7 @@ class MAPElites:
         self.archive.total_evaluations = stats.get('total_evaluations', 0)
         self.archive.total_additions = stats.get('total_additions', 0)
         self.archive.total_replacements = stats.get('total_replacements', 0)
+        self.archive.total_rejections = stats.get('total_rejections', 0)
         logger.info(f"Loaded archive from {filepath}")
 
 
@@ -859,6 +870,7 @@ class CVTEliteArchive:
         self.total_evaluations = 0
         self.total_additions = 0
         self.total_replacements = 0
+        self.total_rejections = 0
     
     def _compute_cvt_centroids(self, num_samples: int) -> np.ndarray:
         """
@@ -873,12 +885,21 @@ class CVTEliteArchive:
         
         try:
             from scipy.cluster.vq import kmeans
-            centroids, _ = kmeans(samples, self.num_cells)
+            initial_indices = self.rng.choice(
+                samples.shape[0],
+                size=self.num_cells,
+                replace=False,
+            )
+            initial_centroids = samples[initial_indices]
+            centroids, _ = kmeans(samples, initial_centroids)
             logger.info(f"CVT: computed {len(centroids)} centroids via k-means")
         except ImportError:
             # Fallback: uniform grid centroids
             logger.warning("scipy unavailable, using uniform grid centroids")
-            cells_per_dim = max(2, int(self.num_cells ** (1.0 / self.feature_dims)))
+            cells_per_dim = max(
+                2,
+                int(np.ceil(self.num_cells ** (1.0 / self.feature_dims))),
+            )
             grids = [np.linspace(r[0], r[1], cells_per_dim) for r in self.feature_ranges]
             mesh = np.meshgrid(*grids)
             centroids = np.column_stack([m.flatten() for m in mesh])[:self.num_cells]
@@ -897,9 +918,13 @@ class CVTEliteArchive:
         fitness: float,
         features: Tuple[float, ...],
         metadata: Optional[Dict] = None,
+        feasible: bool = True,
     ) -> bool:
         """Attempt to add a solution to the CVT archive."""
         self.total_evaluations += 1
+        if not feasible:
+            self.total_rejections += 1
+            return False
         cell = self._find_cell(features)
         
         elite = Elite(
@@ -927,7 +952,9 @@ class CVTEliteArchive:
     def get_random_elite(self) -> Optional[Elite]:
         if not self.archive:
             return None
-        return random.choice(list(self.archive.values()))
+        elites = list(self.archive.values())
+        index = int(self.rng.integers(0, len(elites)))
+        return elites[index]
     
     def get_all_elites(self) -> List[Elite]:
         return list(self.archive.values())
@@ -954,6 +981,7 @@ class CVTEliteArchive:
         self.total_evaluations = 0
         self.total_additions = 0
         self.total_replacements = 0
+        self.total_rejections = 0
 
 
 # ============================================================================
@@ -1104,10 +1132,16 @@ def create_map_elites(
         raise ValueError(f"Unknown feature type: {feature_type}")
     
     # Default fitness: solvability check
+    from src.evaluation.validator import ExternalValidator
+    validator = ExternalValidator()
     if fitness_fn is None:
-        from src.evaluation.validator import ExternalValidator
-        validator = ExternalValidator()
-        fitness_fn = lambda g: float(validator.validate(g).is_solvable)
+        # Feasibility is evaluated separately below; every admitted candidate
+        # therefore has unit default quality without running the oracle twice.
+        def fitness_fn(_graph: nx.Graph) -> float:
+            return 1.0
+
+    def feasibility_fn(graph: nx.Graph) -> bool:
+        return bool(validator.validate(graph).is_solvable)
     
     # Create MAPElites with chosen archive type
     map_elites = MAPElites(
@@ -1116,6 +1150,7 @@ def create_map_elites(
         cells_per_dim=cells_per_dim,
         feature_dims=feature_dims,
         feature_ranges=feature_ranges,
+        feasibility_fn=feasibility_fn,
     )
     
     # Replace archive with CVT if requested

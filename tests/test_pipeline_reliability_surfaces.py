@@ -9,6 +9,8 @@ from src.pipeline.robust_pipeline import (
     BlockStatus,
     PipelineBlock,
     PipelineConfig,
+    RobustPipeline,
+    evaluate_human_playability,
 )
 from src.pipeline.types import PipelineComponentFactory
 
@@ -95,6 +97,64 @@ def test_pipeline_block_timeout_path():
     assert result.status == BlockStatus.FAILED
     assert "TimeoutError" in (result.error or "")
     assert elapsed < 0.04
+
+
+def test_human_playability_policy_is_separate_from_exact_solvability(monkeypatch):
+    def fake_metrics(_grid, **_kwargs):
+        return {
+            "solvable_astar": True,
+            "solvable_cbs": True,
+            "normalized_confusion_ratio": 1.25,
+        }
+
+    monkeypatch.setattr(
+        "src.evaluation.cbs_fitness.compute_cbs_fitness",
+        fake_metrics,
+    )
+    accepted, metrics = evaluate_human_playability(
+        {"visual_grid": np.zeros((3, 3), dtype=np.int64)},
+        max_normalized_confusion=1.0,
+    )
+
+    assert accepted is False
+    assert metrics["solvable_astar"] is True
+    assert metrics["accepted_by_human_playability_policy"] is False
+
+
+def test_robust_pipeline_applies_opt_in_human_filter_before_archive(monkeypatch):
+    monkeypatch.setattr(
+        "src.evaluation.cbs_fitness.compute_cbs_fitness",
+        lambda _grid, **_kwargs: {
+            "solvable_astar": True,
+            "solvable_cbs": False,
+            "normalized_confusion_ratio": float("inf"),
+        },
+    )
+    archive_calls = {"count": 0}
+
+    def archive(_state):
+        archive_calls["count"] += 1
+        return {"archived": True}
+
+    pipeline = RobustPipeline(
+        executors={
+            "wfc_refiner": lambda _state: {
+                "visual_grid": np.zeros((3, 3), dtype=np.int64)
+            },
+            "map_elites": archive,
+        },
+        config=PipelineConfig(
+            max_retries=1,
+            enable_logging=False,
+            human_playability_filter_enabled=True,
+        ),
+    )
+
+    success, _state, diagnostics = pipeline.generate_dungeon({})
+
+    assert success is False
+    assert diagnostics["human_playability"].status == BlockStatus.FAILED
+    assert archive_calls["count"] == 0
 
 
 def test_component_factory_does_not_load_unused_maskgit_models():

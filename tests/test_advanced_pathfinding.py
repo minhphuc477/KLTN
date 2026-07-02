@@ -353,7 +353,7 @@ class TestBidirectionalAStar:
         env = ZeldaLogicEnv(grid)
         solver = BidirectionalAStar(env, timeout=100000)
 
-        success, path, _nodes = solver.solve()
+        success, path, nodes = solver.solve()
 
         assert success
         assert path[0] == env.start_pos
@@ -406,12 +406,13 @@ class TestBidirectionalAStar:
         env = ZeldaLogicEnv(grid)
         solver = BidirectionalAStar(env, timeout=100000)
 
-        success, path, _nodes = solver.solve()
+        success, path, nodes = solver.solve()
 
         assert success
         assert path[0] == env.start_pos
         assert path[-1] == env.goal_pos
         assert solver.used_fallback is True
+        assert nodes <= solver.timeout
 
     def test_diagonal_successors_reject_conditional_corner_cutting(self):
         env = ZeldaLogicEnv(_corner_cut_grid(SEMANTIC_PALETTE['DOOR_LOCKED']))

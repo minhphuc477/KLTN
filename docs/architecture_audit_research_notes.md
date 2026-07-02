@@ -97,13 +97,13 @@ better than the referenced methods.
 | Block | Implementation status | Remaining scientific requirement |
 |---|---|---|
 | 0 | Text padding, lazy VGLC access, categorical-token mode, and graph alignment have explicit contracts. | Publish split/provenance hashes and verify all final training data. |
-| I | Directed graph generation, progression anchors, node-cap protection, and topology metrics are implemented. | Execute controllability and 100/500-room stress protocols. |
+| I | Directed graph generation, exact resource-state feasibility, progression anchors, node-cap protection, and topology metrics are implemented. | Execute controllability and 100/500-room stress protocols. |
 | II | VQ/FSQ paths, EMA updates, dead-code reset, strict checkpoint validation, and counter persistence are implemented. | Supply a valid trained VQ-VAE artifact and report utilization/sample efficiency. |
 | III | Graph/local conditioning, GPS/RRWP options, topology maps, and reference-room paths exist. | Run matched-budget target-response and conditioning ablations. |
 | IV | Diffusion, DiT, flow matching, masked generation, categorical baseline, and fast sampling exist as alternatives. | Train valid checkpoints and compare quality, latency, memory, and pre-repair validity. |
 | V | LogicNet grid/graph reachability and guidance paths exist. | Run LogicNet ON/OFF with raw pre-repair hard-oracle rates. |
 | VI | WFC, flat-prior WFC, repair feedback, overlays, and puzzle scaffolds exist. | Quantify repair contribution, failure rate, and runtime separately. |
-| VII | Tile solvers, graph validation, P-CBS, QD metrics, and statistical scripts exist. | Execute final persona tables, paired tests, and human calibration. |
+| VII | Tile solvers, resource-aware graph validation, feasible-only QD archives, P-CBS, QD metrics, and statistical scripts exist. | Execute final graph-to-map oracle tables, persona tables, paired tests, and human calibration. |
 
 ## Confirmed Fixes In Latest Pass
 
@@ -226,11 +226,13 @@ better than the referenced methods.
 - IDDFS checks the goal at the depth boundary and visits every permitted depth.
 - Path length means transitions (`len(path) - 1`) across validation, solver
   comparison, P-CBS, and benchmark adapters.
-- Grid MAP-Elites linearity is geometric route directness
-  (`Manhattan displacement / movement steps`) computed from the concrete solver
-  path. The former inverse route-coverage proxy is retained only as the
-  explicitly named `route_sparsity` legacy descriptor. An unused room-diameter
-  estimator that reported this proxy as linearity was removed.
+- Grid path linearity is geometric route directness
+  (`Manhattan displacement / movement steps`) on a concrete solver path.
+  Mission-graph linearity is a separate structural descriptor based on
+  alternate-route chords, reconnecting branches, and cycle pressure. Adding
+  arbitrary dead-end leaves does not improve either descriptor. The former
+  inverse route-coverage proxy is retained only as explicitly named
+  `route_sparsity`.
 - Confusion ratio is normalized as excess path overhead, where an oracle-match
   is `0.0`.
 - The main ablation runner now uses transition counts, the canonical
@@ -250,6 +252,56 @@ better than the referenced methods.
   CBS fitness.
 - P-CBS suboptimal-decision accounting uses the same graph-aware navigation
   distance as action scoring.
+- Graph feasibility now uses an exact resource-state oracle for cumulative
+  small-key consumption, specific key identities, permanent boss keys, named
+  items, switches, tokens, resource providers, and protected hazards.
+- Canonical edge parsing preserves `MULTI_LOCK` instead of silently reducing it
+  to a one-key lock.
+- Evolutionary feasibility runs the exact graph oracle after grammar metadata
+  checks; weak connectivity and pre-gate provider counts are not accepted as a
+  complete solvability proof.
+- Grid and CVT MAP-Elites archives reject infeasible candidates before cell
+  insertion. An unsolvable zero-fitness graph can no longer occupy an empty
+  behavior cell.
+- Graph-to-grid compilation preserves supported gate types and emits one
+  consumable gate tile per physical room connection. The opposite boundary is
+  open, so one graph lock does not consume two keys.
+- Advanced generation materializes START, GOAL, keys, boss keys, traversal
+  items, enemies, bosses, and hazards on the semantic artifact before running
+  the tile-state oracle.
+- Protected hazards are validated by named item at graph level and compile to
+  `ELEMENT` plus the generic `KEY_ITEM` protection at tile level. Multiple
+  distinct protection identities are rejected because the current tile
+  vocabulary cannot preserve that distinction.
+- Mission normalization no longer trims arbitrary topological prefixes,
+  reassigns the last node as GOAL, or connects islands with open edges.
+  Oversized valid graphs are preserved; disconnected phenotypes are rejected;
+  requested extra rooms become optional reachable branches.
+- Deterministic linear mission fallback is disabled by default. Evolutionary
+  generation failures now remain failures unless a diagnostic run explicitly
+  enables `allow_linear_graph_fallback`.
+- End-to-end generation defaults to the spatially representable core grammar.
+  Full-grammar mechanics remain graph-only until tile, compiler, entity, and
+  oracle semantics agree.
+- Topology CVT-emitter search is now the advanced pipeline default. Its archive
+  rejects mechanically infeasible genomes, while soft target mismatch remains
+  a quality penalty rather than an impossible exact-zero feasibility test.
+- CVT centroid initialization and elite sampling use archive-local seeded RNGs,
+  making paired-seed topology-QD runs reproducible.
+- Final-map MAP-Elites state is no longer cleared before every insertion.
+  Archive size and coverage are reported so a one-artifact archive cannot be
+  presented as population diversity.
+- Graph and tile oracles distinguish `budget_exhausted` from an exhausted
+  state space. Capped searches are indeterminate, not proven unsolvable.
+- Bidirectional search and canonical A* fallback share one expansion budget;
+  diagnostic reporting includes work from both phases.
+- P-CBS filtering is an explicit, disabled-by-default post-refinement
+  ablation. Its persona, expansion budget, normalized-confusion threshold, and
+  rejection rate must be reported separately from exact solvability.
+- Composite gate labels enforce all conjuncts, and token counts are tracked by
+  token identity instead of pooling unrelated token types.
+- QD candidate export now tries ranked feasible candidates and returns the
+  highest-quality phenotype that survives final export validation.
 
 ## Architecture Ablation Policy
 
@@ -472,9 +524,9 @@ Test policy:
 - generated demo artifacts and long-running experiment subprocesses are not
   unit tests and must not block the default correctness suite.
 
-Latest local verification (2026-07-01):
+Latest local verification (2026-07-02):
 
-- `python -m pytest tests -q --tb=short`: 1,570 passed, 0 failed.
+- `python -m pytest tests -q --tb=short`: 1,599 passed, 0 failed.
 - Ruff `F821`, `F811`, and `F841`: passed.
 - `python -m compileall -q src scripts tests experiments`: passed.
 - `python -m vulture src --min-confidence 90`: no findings.

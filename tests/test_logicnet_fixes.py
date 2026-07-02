@@ -12,7 +12,12 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.core.latent_diffusion import GradientGuidance
-from src.core.definitions import ROOM_HEIGHT, ROOM_WIDTH, SEMANTIC_PALETTE
+from src.core.definitions import (
+    ROOM_HEIGHT,
+    ROOM_TOPOLOGY_CHANNELS,
+    ROOM_WIDTH,
+    SEMANTIC_PALETTE,
+)
 from src.core.logic_net import (
     DifferentiablePathfinder,
     LogicNet,
@@ -230,6 +235,47 @@ def test_differentiable_pathfinder_preserves_unreachable_inf_sentinel():
     assert graph_distances[2].item() == pytest.approx(20.0)
 
 
+def test_differentiable_pathfinder_soft_relaxation_has_no_duplicate_path_negative_cycle():
+    pathfinder = DifferentiablePathfinder(
+        num_iterations=2,
+        temperature=1.0,
+        inf_distance=1000.0,
+        full_coverage=True,
+    )
+    adjacency = torch.tensor(
+        [
+            [0.0, 1.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+            [0.0, 0.0, 0.0, 1.0],
+            [0.0, 0.0, 0.0, 0.0],
+        ]
+    )
+    distances = pathfinder(
+        adjacency,
+        adjacency.clone(),
+        torch.tensor([1.0, 0.0, 0.0, 0.0]),
+    )
+
+    assert distances.tolist() == pytest.approx([0.0, 1.0, 1.0, 2.0], abs=1e-5)
+    assert float(distances.min().item()) >= 0.0
+
+
+def test_differentiable_pathfinder_full_coverage_reaches_beyond_requested_truncation():
+    pathfinder = DifferentiablePathfinder(
+        num_iterations=2,
+        temperature=0.1,
+        inf_distance=1000.0,
+        full_coverage=True,
+    )
+    walkability = torch.ones(1, 1, 40)
+    source = torch.zeros_like(walkability)
+    source[0, 0, 0] = 1.0
+
+    distances = pathfinder(walkability, torch.ones_like(walkability), source)
+
+    assert distances[0, 0, -1].item() == pytest.approx(39.0, abs=1e-4)
+
+
 def test_logicnet_compatibility_mode_routes_through_grid_pathfinder(monkeypatch):
     logic_net = LogicNet(latent_dim=4, num_tile_classes=5)
 
@@ -251,7 +297,7 @@ def test_logicnet_compatibility_mode_routes_through_grid_pathfinder(monkeypatch)
     assert torch.isfinite(scores).all()
 
 
-def test_logicnet_without_topology_uses_single_cell_source_not_all_doors():
+def test_logicnet_without_topology_uses_shape_anchored_source_not_prediction_defined_source():
     logic_net = LogicNet(latent_dim=4, num_tile_classes=5)
     z = torch.zeros(2, 5, 16, 11)
     z[:, 1] = 8.0
@@ -259,22 +305,97 @@ def test_logicnet_without_topology_uses_single_cell_source_not_all_doors():
     loss, info = logic_net(z, graph_data=None)
 
     assert loss.ndim == 0
-    assert info["source_mask_mode"] == "single_walkable_cell"
+    assert info["source_mask_mode"] == "shape_center_fallback"
+    assert info["target_mask_mode"] == "room_coverage_fallback"
     source_mask = logic_net._create_single_cell_source_mask(info["walkability"])
     assert torch.allclose(source_mask.sum(dim=(1, 2, 3)), torch.ones(2))
+    assert torch.all(source_mask[:, 0, 8, 5] == 1.0)
 
 
-def test_logicnet_fallback_source_mask_is_differentiable():
+def test_logicnet_fallback_source_mask_does_not_move_with_predicted_walkability():
     logic_net = LogicNet(latent_dim=4, num_tile_classes=5)
-    walkability = torch.randn(1, 1, 4, 4, requires_grad=True)
+    walkability_a = torch.randn(1, 1, 4, 4, requires_grad=True)
+    walkability_b = torch.randn(1, 1, 4, 4, requires_grad=True)
 
-    source_mask = logic_net._create_single_cell_source_mask(walkability)
-    source_mask[..., 0, 0].sum().backward()
+    source_a = logic_net._create_single_cell_source_mask(walkability_a)
+    source_b = logic_net._create_single_cell_source_mask(walkability_b)
 
-    assert torch.allclose(source_mask.sum(dim=(1, 2, 3)), torch.ones(1))
-    assert walkability.grad is not None
-    assert torch.isfinite(walkability.grad).all()
-    assert walkability.grad.abs().sum().item() > 0.0
+    assert torch.equal(source_a, source_b)
+    assert torch.allclose(source_a.sum(dim=(1, 2, 3)), torch.ones(1))
+    assert source_a[0, 0, 2, 2].item() == 1.0
+    assert source_a.requires_grad is False
+
+
+def test_logicnet_explicit_entry_exit_masks_penalize_disconnected_room():
+    logic_net = LogicNet(
+        latent_dim=4,
+        num_tile_classes=44,
+        num_iterations=2,
+        full_coverage=True,
+    )
+    wall = int(SEMANTIC_PALETTE["WALL"])
+    floor = int(SEMANTIC_PALETTE["FLOOR"])
+    logits_blocked = torch.full((1, 44, 5, 7), -8.0)
+    logits_blocked[:, wall] = 8.0
+    logits_connected = logits_blocked.clone()
+    logits_connected[:, wall, 2, :] = -8.0
+    logits_connected[:, floor, 2, :] = 8.0
+    source = torch.zeros(1, 1, 5, 7)
+    target = torch.zeros_like(source)
+    source[:, :, 2, 0] = 1.0
+    target[:, :, 2, -1] = 1.0
+    graph_data = {
+        "logic_source_mask": source,
+        "logic_target_mask": target,
+    }
+
+    blocked_loss, blocked_info = logic_net(logits_blocked, graph_data=graph_data)
+    connected_loss, connected_info = logic_net(logits_connected, graph_data=graph_data)
+
+    assert blocked_info["source_mask_mode"] == "topology"
+    assert blocked_info["target_mask_mode"] == "topology"
+    assert connected_loss.item() < blocked_loss.item()
+
+
+def test_logicnet_resolves_directional_masks_per_sample_without_batch_bleed():
+    logic_net = LogicNet(latent_dim=4, num_tile_classes=44)
+    height, width = 5, 7
+    topology = torch.zeros(
+        2,
+        max(ROOM_TOPOLOGY_CHANNELS.values()) + 1,
+        height,
+        width,
+    )
+    topology[1, ROOM_TOPOLOGY_CHANNELS["start"], 2, 3] = 1.0
+    topology[0, ROOM_TOPOLOGY_CHANNELS["goal"], 2, 3] = 1.0
+
+    explicit_source = torch.zeros(2, 1, height, width)
+    explicit_source[0, 0, 2, 0] = 1.0
+    explicit_target = torch.zeros_like(explicit_source)
+    explicit_target[1, 0, 2, -1] = 1.0
+
+    targets = logic_net._resolve_room_logic_targets(
+        {
+            "room_topology_map": topology,
+            "logic_source_mask": explicit_source,
+            "logic_target_mask": explicit_target,
+        },
+        batch_size=2,
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+        spatial_hw=(height, width),
+    )
+
+    source = targets["source_mask"]
+    target = targets["target_mask"]
+    assert source is not None
+    assert target is not None
+    assert source[0, 0, 2, 0].item() == 1.0
+    assert source[1, 0, 2, 3].item() == 1.0
+    assert target[0, 0, 2, 3].item() == 1.0
+    assert target[1, 0, 2, -1].item() == 1.0
+    assert torch.allclose(source.sum(dim=(1, 2, 3)), torch.ones(2))
+    assert torch.allclose(target.sum(dim=(1, 2, 3)), torch.ones(2))
 
 
 def test_logicnet_global_room_passability_preserves_index_copy_gradient():

@@ -1,0 +1,6 @@
+# Stochastic differentiable black-box planner ablation.
+training:
+  stage: diffusion
+
+diffusion:
+  logic_grid_pathfinder: perturb_and_map

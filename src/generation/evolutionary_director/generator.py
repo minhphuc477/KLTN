@@ -556,29 +556,40 @@ class EvolutionaryTopologyGenerator:
         # small populations can contain no feasible individual under all soft
         # descriptor constraints. Connectivity remains a hard export contract.
         ranked = sorted(population, key=self._individual_sort_key)
-        best = next(
-            (
-                individual
-                for individual in ranked
-                if individual.phenotype is not None
-                and individual.phenotype.is_graph_connected()
-            ),
-            None,
-        )
-        if best is None:
+        export_errors: List[str] = []
+        for candidate in ranked:
+            if (
+                candidate.phenotype is None
+                or not candidate.feasible
+                or not candidate.phenotype.is_graph_connected()
+            ):
+                continue
+            try:
+                finalized = self._finalize_graph_output(
+                    copy.deepcopy(candidate.phenotype),
+                    directed_output=directed_output,
+                )
+            except (RuntimeError, ValueError) as exc:
+                export_errors.append(str(exc))
+                continue
+            self.last_best_individual = candidate
+            logger.info(
+                "Evolution complete. Best exportable fitness: %.4f, Graph: %d nodes, %d edges",
+                candidate.fitness,
+                len(candidate.phenotype.nodes),
+                len(candidate.phenotype.edges),
+            )
+            return finalized
+
+        if not export_errors:
             raise RuntimeError(
-                "Evolution produced no connected mission phenotype; "
+                "Evolution produced no feasible connected mission phenotype; "
                 "increase the population/generation budget or revise grammar rules"
             )
-        self.last_best_individual = best
-        
-        logger.info(
-            "Evolution complete. Best fitness: %.4f, Graph: %d nodes, %d edges",
-            best.fitness,
-            len(best.phenotype.nodes),
-            len(best.phenotype.edges),
+        raise RuntimeError(
+            "Evolution produced no phenotype satisfying the final export contract; "
+            f"last_error={export_errors[-1]}"
         )
-        return self._finalize_graph_output(best.phenotype, directed_output=directed_output)
 
     def _finalize_graph_output(self, graph: MissionGraph, *, directed_output: bool) -> nx.Graph:
         """Convert phenotype graph to validated output graph."""
@@ -1469,6 +1480,9 @@ class EvolutionaryTopologyGenerator:
         eval_result = self.evaluator.evaluate_graph(individual.phenotype)
         individual.fitness = float(eval_result.get("fitness", 0.0))
         individual.feasible = bool(eval_result.get("feasible", False))
+        individual.target_constraints_satisfied = bool(
+            eval_result.get("target_constraints_satisfied", False)
+        )
         individual.constraint_violation = float(eval_result.get("constraint_violation", 1.0))
         individual.descriptor_metrics = dict(eval_result.get("descriptor_metrics", {}))
         individual.topology_realism_error = float(
@@ -2767,6 +2781,9 @@ class EvolutionaryTopologyGenerator:
                     "mean_fitness": float(stats.mean_fitness),
                     "num_elites": int(stats.num_elites),
                     "feature_diversity": float(stats.feature_diversity),
+                    "infeasible_rejections": int(
+                        getattr(archive, "total_rejections", 0)
+                    ),
                 },
                 "config": {
                     "qd_archive_cells": int(self.qd_archive_cells),
@@ -2794,6 +2811,7 @@ class EvolutionaryTopologyGenerator:
         archive = self._load_qd_archive_or_new()
 
         best: Optional[Individual] = None
+        feasible_candidates: List[Individual] = []
         batch: List[Individual] = []
         generation_counter = 0
 
@@ -2806,6 +2824,8 @@ class EvolutionaryTopologyGenerator:
             ind = Individual(genome=list(int(g) for g in genome))
             ind = self._evaluate_individual(ind, generation=generation_counter)
             batch.append(ind)
+            if ind.feasible and ind.phenotype is not None:
+                feasible_candidates.append(ind)
 
             dm = ind.descriptor_metrics or {}
             features = (
@@ -2820,12 +2840,19 @@ class EvolutionaryTopologyGenerator:
                 features=features,
                 metadata={
                     "feasible": bool(ind.feasible),
+                    "target_constraints_satisfied": bool(
+                        ind.target_constraints_satisfied
+                    ),
                     "constraint_violation": float(ind.constraint_violation),
                     "descriptor_metrics": dict(dm),
                 },
+                feasible=bool(ind.feasible),
             )
 
-            if best is None or self._individual_sort_key(ind) < self._individual_sort_key(best):
+            if ind.feasible and (
+                best is None
+                or self._individual_sort_key(ind) < self._individual_sort_key(best)
+            ):
                 best = ind
 
             if ((eval_idx + 1) % max(1, int(self.population_size)) == 0) or (eval_idx == total_evaluations - 1):
@@ -2839,6 +2866,9 @@ class EvolutionaryTopologyGenerator:
                     "min_fitness": float(archive_stats.min_fitness),
                     "num_elites": float(archive_stats.num_elites),
                     "feature_diversity": float(archive_stats.feature_diversity),
+                    "infeasible_rejections": float(
+                        getattr(archive, "total_rejections", 0)
+                    ),
                 }
                 self.qd_final_archive_stats = qd_stats
                 self.qd_coverage_history.append(qd_stats["coverage"])
@@ -2863,18 +2893,34 @@ class EvolutionaryTopologyGenerator:
                 if self.qd_autosave_archive:
                     self._save_qd_archive(archive)
 
-        if best is None or best.phenotype is None:
-            raise RuntimeError("CVT-emitter search produced no valid individual")
+        if best is None or best.phenotype is None or not feasible_candidates:
+            raise RuntimeError("CVT-emitter search produced no feasible individual")
 
         self._save_qd_archive(archive)
 
-        logger.info(
-            "CVT-emitter complete. Best fitness: %.4f, Graph: %d nodes, %d edges",
-            float(best.fitness),
-            int(len(best.phenotype.nodes)),
-            int(len(best.phenotype.edges)),
+        export_errors: List[str] = []
+        for candidate in sorted(feasible_candidates, key=self._individual_sort_key):
+            try:
+                finalized = self._finalize_graph_output(
+                    copy.deepcopy(candidate.phenotype),
+                    directed_output=directed_output,
+                )
+            except (RuntimeError, ValueError) as exc:
+                export_errors.append(str(exc))
+                continue
+            self.last_best_individual = candidate
+            logger.info(
+                "CVT-emitter complete. Best exportable fitness: %.4f, Graph: %d nodes, %d edges",
+                float(candidate.fitness),
+                int(len(candidate.phenotype.nodes)),
+                int(len(candidate.phenotype.edges)),
+            )
+            return finalized
+
+        raise RuntimeError(
+            "CVT-emitter produced no phenotype satisfying the final export contract; "
+            f"last_error={export_errors[-1] if export_errors else 'unknown'}"
         )
-        return self._finalize_graph_output(best.phenotype, directed_output=directed_output)
     
     def _tournament_selection(
         self,

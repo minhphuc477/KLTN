@@ -55,6 +55,8 @@ from src.core.definitions import (
     GRAPH_NODE_FEATURE_DIM,
     GRAPH_TPE_DIM,
     ROOM_HEIGHT,
+    ROOM_TOPOLOGY_CHANNELS,
+    ROOM_TOPOLOGY_DIRECTIONAL_CHANNEL_GROUPS,
     ROOM_WIDTH,
     SEMANTIC_PALETTE,
     semantic_grid_to_vglc_lines,
@@ -64,6 +66,7 @@ from src.core.definitions import (
 )
 from src.core.condition_encoder import build_boundary_constraints
 from src.pipeline.graph_features import (
+    build_key_lock_pairs,
     compute_rrwp_edge_features,
     compute_tpe_features,
     encode_edge_feature_vector,
@@ -299,6 +302,29 @@ def _extract_graph_from_dungeon(
         coerce_bool=_coerce_bool_local,
         coerce_difficulty=_coerce_difficulty_local,
     )
+    start_node = next(
+        (
+            node_id
+            for node_id, node_idx in node_id_to_idx.items()
+            if int(node_idx) == int(start_node_idx)
+        ),
+        None,
+    )
+    target_node_idx = next(
+        (
+            int(node_id_to_idx[node_id])
+            for node_id in filtered_nodes
+            if int(node_id_to_idx[node_id]) < int(node_features_arr.shape[0])
+            and int(node_features_arr.shape[1]) > 3
+            and float(node_features_arr[int(node_id_to_idx[node_id]), 3]) > 0.5
+        ),
+        -1,
+    )
+    key_lock_pairs = build_key_lock_pairs(
+        graph,
+        node_id_to_idx,
+        start_node=start_node,
+    )
     return {
         'node_features': node_features_arr,
         'edge_index': edge_index_arr,
@@ -310,6 +336,8 @@ def _extract_graph_from_dungeon(
         'num_nodes': len(nodes),
         'num_edges': len(edges),
         'start_node_id': start_node_idx,
+        'target_idx': target_node_idx,
+        'key_lock_pairs': key_lock_pairs,
         'node_to_idx': {node_id: node_id_to_idx[node_id] for node_id in filtered_nodes},
     }
 
@@ -598,6 +626,27 @@ def _build_room_graph_sample(
         puzzle_stage_topology_enabled=bool(puzzle_stage_topology_enabled),
         puzzle_stage_trace_decay=float(puzzle_stage_trace_decay),
     )
+
+    def _direction_mask(directions: Set[str]) -> np.ndarray:
+        channel_indices = [
+            int(ROOM_TOPOLOGY_CHANNELS[channel_name])
+            for direction in sorted(directions)
+            for channel_name in ROOM_TOPOLOGY_DIRECTIONAL_CHANNEL_GROUPS.get(
+                str(direction).upper(),
+                (),
+            )
+            if channel_name in ROOM_TOPOLOGY_CHANNELS
+        ]
+        if not channel_indices:
+            return np.zeros((1, ROOM_HEIGHT, ROOM_WIDTH), dtype=np.float32)
+        return np.max(
+            room_topology_map[np.asarray(channel_indices, dtype=np.int64)],
+            axis=0,
+            keepdims=True,
+        ).astype(np.float32, copy=False)
+
+    logic_source_mask = _direction_mask(incoming_dirs)
+    logic_target_mask = _direction_mask(outgoing_dirs)
     puzzle_room_structure_enabled = infer_puzzle_room_structure_enabled(
         room_grid_for_structure,
         role_flags,
@@ -629,11 +678,15 @@ def _build_room_graph_sample(
         'num_nodes': int(base_graph.get('num_nodes', 0)),
         'num_edges': int(base_graph.get('num_edges', 0)),
         'start_node_id': int(base_graph.get('start_node_id', -1)),
+        'target_idx': int(base_graph.get('target_idx', -1)),
+        'key_lock_pairs': list(base_graph.get('key_lock_pairs', []) or []),
         'node_to_idx': node_to_idx,
         'current_node_idx': current_node_idx,
         'room_position': np.array([float(room_position[0]), float(room_position[1])], dtype=np.float32),
         'boundary_constraints': build_boundary_constraints(has_neighbor=has_neighbor, required_door=required_doors).numpy().astype(np.float32),
         'room_topology_map': room_topology_map.astype(np.float32),
+        'logic_source_mask': logic_source_mask,
+        'logic_target_mask': logic_target_mask,
         'neighbor_maps': neighbor_maps,
         'topology_supervision_mode': supervision_mode,
         'has_puzzle': bool(role_flags.get("has_puzzle", False)),
@@ -918,6 +971,8 @@ class ZeldaDungeonDataset(Dataset):
                 'num_nodes': graph['num_nodes'],
                 'num_edges': graph['num_edges'],
                 'start_node_id': graph.get('start_node_id', -1),
+                'target_idx': graph.get('target_idx', -1),
+                'key_lock_pairs': list(graph.get('key_lock_pairs', []) or []),
                 'node_to_idx': dict(graph.get('node_to_idx', {})),
             }
             
@@ -1133,12 +1188,16 @@ class ZeldaRoomDataset(Dataset):
                 'tpe': torch.tensor(graph.get('tpe', np.zeros((0, GRAPH_TPE_DIM), dtype=np.float32)), dtype=torch.float32),
                 'node_positions': torch.tensor(graph.get('node_positions', np.zeros((0, 2), dtype=np.float32)), dtype=torch.float32),
                 'room_topology_map': torch.tensor(graph.get('room_topology_map', np.zeros((ROOM_TOPOLOGY_CHANNEL_COUNT, ROOM_HEIGHT, ROOM_WIDTH), dtype=np.float32)), dtype=torch.float32),
+                'logic_source_mask': torch.tensor(graph.get('logic_source_mask', np.zeros((1, ROOM_HEIGHT, ROOM_WIDTH), dtype=np.float32)), dtype=torch.float32),
+                'logic_target_mask': torch.tensor(graph.get('logic_target_mask', np.zeros((1, ROOM_HEIGHT, ROOM_WIDTH), dtype=np.float32)), dtype=torch.float32),
                 'boundary_constraints': torch.tensor(graph.get('boundary_constraints', np.zeros((8,), dtype=np.float32)), dtype=torch.float32),
                 'room_position': torch.tensor(graph.get('room_position', np.zeros((2,), dtype=np.float32)), dtype=torch.float32),
                 'neighbor_maps': neighbor_maps,
                 'num_nodes': graph['num_nodes'],
                 'num_edges': graph['num_edges'],
                 'start_node_id': graph.get('start_node_id', -1),
+                'target_idx': graph.get('target_idx', -1),
+                'key_lock_pairs': list(graph.get('key_lock_pairs', []) or []),
                 'current_node_idx': int(graph.get('current_node_idx', 0)),
                 'node_to_idx': dict(graph.get('node_to_idx', {})),
                 'has_puzzle': bool(graph.get('has_puzzle', False)),

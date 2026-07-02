@@ -26,6 +26,8 @@ class EntityType(Enum):
     ENEMY_STRONG = "enemy_strong"
     ENEMY_BOSS = "enemy_boss"
     KEY = "key"
+    KEY_BOSS = "key_boss"
+    KEY_ITEM = "key_item"
     CHEST = "chest"
     HEALTH_POTION = "health_potion"
     MANA_POTION = "mana_potion"
@@ -66,6 +68,8 @@ class RoomSemantics:
     tension_value: float = 0.5
     enemy_count_hint: int = 0
     key_count_hint: int = 0
+    key_kind: str = "small"
+    progression_item: Optional[str] = None
 
 
 class EntitySpawner:
@@ -205,6 +209,16 @@ class EntitySpawner:
             if key_entity is None:
                 break
             entities.append(key_entity)
+
+        if room_semantics.progression_item and room_semantics.key_kind == 'item':
+            item_entity = self._spawn_progression_item(
+                spawn_candidates,
+                entities,
+                room_semantics,
+                room_bounds,
+            )
+            if item_entity is not None:
+                entities.append(item_entity)
         
         logger.info(f"Room {room_semantics.node_id}: Spawned {len(entities)} entities")
         
@@ -450,8 +464,9 @@ class EntitySpawner:
             return None
         
         key_pos = self._active_rng.choice(available)
+        entity_type = EntityType.KEY_BOSS if semantics.key_kind == 'boss' else EntityType.KEY
         return Entity(
-            EntityType.KEY,
+            entity_type,
             key_pos[0] + bounds[0],
             key_pos[1] + bounds[1],
             semantics.node_id,
@@ -461,6 +476,27 @@ class EntitySpawner:
                 'total_keys': int(max(1, total_keys)),
                 'unlocks': 'door' if self._active_rng.random() < 0.8 else 'chest'
             }
+        )
+
+    def _spawn_progression_item(
+        self,
+        candidates: List[Tuple[int, int]],
+        existing_entities: List[Entity],
+        semantics: RoomSemantics,
+        bounds: Tuple[int, int, int, int],
+    ) -> Optional[Entity]:
+        """Spawn a permanent traversal item on an unoccupied floor tile."""
+        occupied = {(e.x - bounds[0], e.y - bounds[1]) for e in existing_entities}
+        available = [candidate for candidate in candidates if candidate not in occupied]
+        if not available:
+            return None
+        item_pos = self._active_rng.choice(available)
+        return Entity(
+            EntityType.KEY_ITEM,
+            item_pos[0] + bounds[0],
+            item_pos[1] + bounds[1],
+            semantics.node_id,
+            {'item_type': str(semantics.progression_item or 'KEY_ITEM')},
         )
     
     def _calculate_enemy_count(self, num_candidates: int, difficulty: float) -> int:
@@ -621,8 +657,23 @@ def create_room_semantics_from_graph(
         difficulty = tension_curve[node_index]
     
     label_tokens = set(parse_node_label_tokens(str(node_data.get('label', '') or '')))
+    node_type = str(node_data.get('type', node_data.get('node_type', '')) or '').strip().lower()
     has_key = bool(node_data.get('has_key', False))
-    if ('k' in label_tokens) or ('key' in label_tokens) or (str(node_data.get('type', '') or '').strip().lower() in {'key', 'big_key', 'boss_key'}):
+    key_kind = 'small'
+    progression_item: Optional[str] = None
+    if node_type in {'big_key', 'boss_key'}:
+        has_key = True
+        key_kind = 'boss'
+    elif node_type in {'item', 'key_item', 'macro_item', 'protection_item'}:
+        has_key = False
+        key_kind = 'item'
+        progression_item = str(
+            node_data.get('item_type')
+            or node_data.get('required_item')
+            or node_data.get('protection_item_id')
+            or 'KEY_ITEM'
+        )
+    elif ('k' in label_tokens) or ('key' in label_tokens) or node_type == 'key':
         has_key = True
     key_count_hint = _as_nonneg_int(
         node_data.get('key_count_hint', node_data.get('key_count', 0)),
@@ -647,6 +698,8 @@ def create_room_semantics_from_graph(
         tension_value=difficulty,
         enemy_count_hint=int(enemy_count_hint),
         key_count_hint=int(key_count_hint),
+        key_kind=key_kind,
+        progression_item=progression_item,
     )
 
 
@@ -700,6 +753,43 @@ def spawn_all_entities(
     logger.info(f"Total entities spawned: {len(all_entities)}")
     
     return all_entities
+
+
+def materialize_entities_on_grid(
+    dungeon_grid: np.ndarray,
+    entities: List[Entity],
+) -> np.ndarray:
+    """
+    Project gameplay-relevant entities onto a semantic grid for validation.
+
+    Rendering/export can keep entities on a separate layer, but the oracle must
+    see the same keys, traversal items, enemies, bosses, and hazards that the
+    player sees. Non-progression decoration remains off-grid.
+    """
+    semantic_grid = np.asarray(dungeon_grid).copy()
+    entity_tiles = {
+        EntityType.ENEMY_WEAK: int(SEMANTIC_PALETTE['ENEMY']),
+        EntityType.ENEMY_STRONG: int(SEMANTIC_PALETTE['ENEMY']),
+        EntityType.ENEMY_BOSS: int(SEMANTIC_PALETTE['BOSS']),
+        EntityType.KEY: int(SEMANTIC_PALETTE['KEY_SMALL']),
+        EntityType.KEY_BOSS: int(SEMANTIC_PALETTE['KEY_BOSS']),
+        EntityType.KEY_ITEM: int(SEMANTIC_PALETTE['KEY_ITEM']),
+        EntityType.TRAP: int(SEMANTIC_PALETTE['ELEMENT']),
+    }
+    height, width = semantic_grid.shape
+    for entity in entities:
+        tile_id = entity_tiles.get(entity.entity_type)
+        if tile_id is None:
+            continue
+        x = int(entity.x)
+        y = int(entity.y)
+        if not (0 <= x < width and 0 <= y < height):
+            raise ValueError(
+                f"Entity {entity.entity_type.value} at ({x}, {y}) is outside grid "
+                f"shape {semantic_grid.shape}"
+            )
+        semantic_grid[y, x] = tile_id
+    return semantic_grid
 
 
 def export_entities_to_json(entities: List[Entity], filepath: str) -> None:

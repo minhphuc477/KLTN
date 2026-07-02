@@ -326,10 +326,15 @@ def pipeline_kwargs_from_resolved_config(config: Dict[str, Any]) -> Dict[str, An
                 "num_classes": config["dataset"]["num_classes"],
                 "num_logic_iterations": diffusion["num_logic_iterations"],
                 "logic_grid_pathfinder": diffusion.get("logic_grid_pathfinder", "bellman_ford"),
+                "logic_full_coverage": diffusion.get("logic_full_coverage", True),
                 "logic_topology_trace_weight": diffusion["logic_topology_trace_weight"],
                 "logic_topology_anchor_weight": diffusion["logic_topology_anchor_weight"],
                 "logic_global_reach_weight": diffusion.get("logic_global_reach_weight", 1.0),
                 "logic_global_room_weight": diffusion.get("logic_global_room_weight", 0.25),
+                "min_logic_tile_accuracy_for_guidance": diffusion.get(
+                    "min_logic_tile_accuracy_for_guidance",
+                    0.4,
+                ),
             },
             "masked_room_fallback_config": {
                 "num_classes": config["dataset"]["num_classes"],

@@ -73,6 +73,8 @@ def test_dungeon_dataset_getitem_preserves_spatial_graph_fields():
     assert tuple(graph["tpe"].shape) == (2, 8)
     assert tuple(graph["node_positions"].shape) == (2, 2)
     assert graph["node_to_idx"] == {10: 0, 20: 1}
+    assert graph["target_idx"] == -1
+    assert graph["key_lock_pairs"] == []
 
 
 def test_compute_rrwp_edge_features_preserves_edge_order_and_invalid_rows():
@@ -208,6 +210,37 @@ def test_room_graph_sample_builds_room_topology_from_dataset_graph():
     assert float(sample["room_topology_map"][ROOM_TOPOLOGY_CHANNELS["door_e"]].sum()) > 0.0
     assert float(sample["room_topology_map"][ROOM_TOPOLOGY_CHANNELS["gated_e"]].sum()) > 0.0
     assert float(sample["room_topology_map"][ROOM_TOPOLOGY_CHANNELS["gate_key_e"]].sum()) > 0.0
+    assert float(sample["logic_source_mask"].sum()) == 0.0
+    assert float(sample["logic_target_mask"].sum()) > 0.0
+
+
+def test_dataset_graph_extraction_pairs_identified_key_with_locked_gate():
+    graph = nx.DiGraph()
+    graph.add_node(10, label="s", type="START", is_start=True)
+    graph.add_node(20, label="k", type="KEY", has_key=True, key_id=7)
+    graph.add_node(30, label="e", type="ROOM")
+    graph.add_node(40, label="t", type="GOAL", is_triforce=True)
+    graph.add_edge(10, 20, edge_type="PATH")
+    graph.add_edge(
+        20,
+        30,
+        edge_type="LOCKED",
+        key_required=7,
+        requires_key_count=1,
+    )
+    graph.add_edge(30, 40, edge_type="PATH")
+
+    rooms = {}
+    for col, node_id in enumerate((10, 20, 30, 40)):
+        rooms[(0, col)] = SimpleNamespace(graph_node_id=node_id)
+    dungeon = SimpleNamespace(graph=graph, rooms=rooms)
+
+    extracted = _extract_graph_from_dungeon(dungeon)
+
+    assert extracted["target_idx"] == extracted["node_to_idx"][40]
+    assert extracted["key_lock_pairs"] == [
+        (extracted["node_to_idx"][20], extracted["node_to_idx"][30])
+    ]
 
 
 def test_room_graph_sample_resolves_symbolic_sector_theme_into_style_id():

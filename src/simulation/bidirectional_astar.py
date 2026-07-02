@@ -359,15 +359,18 @@ class BidirectionalAStar:
         from .validator import StateSpaceAStar
 
         self.used_fallback = True
+        remaining_budget = int(max(0, int(self.timeout) - int(self.states_explored)))
+        if remaining_budget <= 0:
+            return False, [], int(self.states_explored)
         fallback = StateSpaceAStar(
             self.env,
-            timeout=max(self.timeout, 50_000),
+            timeout=remaining_budget,
             heuristic_mode=self.heuristic_mode,
             priority_options={'allow_diagonals': self.allow_diagonals},
             search_mode='astar',
         )
         success, path, states = fallback.solve()
-        return success, path, max(self.states_explored, states)
+        return success, path, int(self.states_explored) + int(states)
     
     def _create_goal_state(self) -> GameState:
         """

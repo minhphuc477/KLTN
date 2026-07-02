@@ -366,6 +366,20 @@ def generate_room_batch(
             [inp['graph_context']['room_topology_map'] for inp in per_room_inputs]
         ),
     }
+    for mask_name in ('logic_source_mask', 'logic_target_mask'):
+        mask_values = [
+            inp['graph_context'].get(mask_name)
+            for inp in per_room_inputs
+        ]
+        if all(isinstance(value, torch.Tensor) for value in mask_values):
+            graph_ctx_for_guidance[mask_name] = torch.cat(
+                [
+                    value.to(pipeline.device, dtype=torch.float32)
+                    for value in mask_values
+                    if isinstance(value, torch.Tensor)
+                ],
+                dim=0,
+            )
 
     # Map each sampled room latent back to its dungeon graph node.
     node_to_idx = graph_data.get('node_to_idx')
@@ -1195,17 +1209,30 @@ def generate_room(
             room_plan_mask = None
         try:
             neural_guided_repair = None
+            logic_net = getattr(pipeline, "logic_net", None)
+            logic_guidance_calibrated = bool(
+                getattr(logic_net, "_hmolqd_guidance_calibrated", False)
+            )
             if (
                 bool(getattr(pipeline, "default_use_neural_guided_repair", True))
-                and getattr(pipeline, "logic_net", None) is not None
+                and logic_net is not None
+                and logic_guidance_calibrated
                 and getattr(pipeline, "refiner", None) is not None
             ):
                 neural_guided_repair = NeuralGuidedRepair(
-                    logic_net=pipeline.logic_net,
+                    logic_net=logic_net,
                     refiner=pipeline.refiner,
                     use_neural_feedback=bool(getattr(pipeline, "default_use_neural_repair_feedback", True)),
                     repair_inpaint_noise_strength=float(getattr(pipeline, "default_repair_inpaint_noise_strength", 0.5)),
                     repair_inpaint_guidance_scale_multiplier=float(getattr(pipeline, "default_repair_inpaint_guidance_scale_multiplier", 1.0)),
+                )
+            elif (
+                bool(getattr(pipeline, "default_use_neural_guided_repair", True))
+                and logic_net is not None
+                and not logic_guidance_calibrated
+            ):
+                pipeline._bump_diagnostic(
+                    "neural_guided_repair_disabled_uncalibrated_surrogate"
                 )
 
             if neural_guided_repair is not None:

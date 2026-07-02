@@ -136,6 +136,7 @@ class MaskedRoomTrainingConfig:
         logic_topology_trace_weight: float = 0.25,
         logic_topology_anchor_weight: float = 0.25,
         logic_grid_pathfinder: str = "bellman_ford",
+        logic_full_coverage: bool = True,
         num_logic_iterations: int = 30,
         validation_fraction: float = 0.1,
         validation_max_batches: int = 16,
@@ -273,6 +274,7 @@ class MaskedRoomTrainingConfig:
         self.logic_topology_trace_weight = float(max(0.0, logic_topology_trace_weight))
         self.logic_topology_anchor_weight = float(max(0.0, logic_topology_anchor_weight))
         self.logic_grid_pathfinder = str(logic_grid_pathfinder).strip().lower()
+        self.logic_full_coverage = bool(logic_full_coverage)
         self.num_logic_iterations = int(max(1, num_logic_iterations))
         self.validation_fraction = float(max(0.0, min(0.5, validation_fraction)))
         self.validation_max_batches = int(max(1, validation_max_batches))
@@ -425,6 +427,7 @@ def masked_room_training_kwargs_from_resolved_config(config: Dict[str, Any]) -> 
         "logic_topology_trace_weight": stage.get("logic_topology_trace_weight", 0.25),
         "logic_topology_anchor_weight": stage.get("logic_topology_anchor_weight", 0.25),
         "logic_grid_pathfinder": stage.get("logic_grid_pathfinder", "bellman_ford"),
+        "logic_full_coverage": stage.get("logic_full_coverage", True),
         "num_logic_iterations": stage.get("num_logic_iterations", 30),
         "validation_fraction": stage.get("validation_fraction", 0.1),
         "validation_max_batches": stage.get("validation_max_batches", 16),
@@ -527,6 +530,7 @@ def _legacy_masked_room_overrides_from_args(args: argparse.Namespace) -> Dict[st
     _set("logic_topology_trace_weight", getattr(args, "logic_topology_trace_weight", None))
     _set("logic_topology_anchor_weight", getattr(args, "logic_topology_anchor_weight", None))
     _set("logic_grid_pathfinder", getattr(args, "logic_grid_pathfinder", None))
+    _set("logic_full_coverage", getattr(args, "logic_full_coverage", None))
     _set("num_logic_iterations", getattr(args, "num_logic_iterations", None))
     _set("validation_fraction", getattr(args, "validation_fraction", None))
     _set("validation_max_batches", getattr(args, "validation_max_batches", None))
@@ -771,6 +775,7 @@ class MaskedRoomTrainer:
             topology_trace_weight=float(getattr(self.config, "logic_topology_trace_weight", 0.25)),
             topology_anchor_weight=float(getattr(self.config, "logic_topology_anchor_weight", 0.25)),
             grid_pathfinder_type=pathfinder,
+            full_coverage=bool(getattr(self.config, "logic_full_coverage", True)),
         )
 
     @staticmethod
@@ -1100,6 +1105,31 @@ class MaskedRoomTrainer:
             if boundary_constraints.dim() == 2:
                 boundary_constraints = boundary_constraints.squeeze(0)
 
+        logic_masks: Dict[str, torch.Tensor] = {}
+        for mask_name in ("logic_source_mask", "logic_target_mask"):
+            mask = graph_dict.get(mask_name)
+            if not isinstance(mask, torch.Tensor):
+                continue
+            mask = mask.to(self.device, dtype=torch.float32)
+            if mask.dim() == 4:
+                if int(mask.shape[0]) != 1:
+                    raise ValueError(
+                        f"Single graph sample {mask_name} must have batch size 1, got {tuple(mask.shape)}."
+                    )
+                mask = mask.squeeze(0)
+            if mask.dim() == 2:
+                mask = mask.unsqueeze(0)
+            if mask.dim() != 3 or int(mask.shape[0]) != 1:
+                raise ValueError(
+                    f"{mask_name} must have shape [1,H,W] for one sample, got {tuple(mask.shape)}."
+                )
+            logic_masks[mask_name] = mask.clamp(0.0, 1.0)
+        key_lock_pairs = [
+            (int(pair[0]), int(pair[1]))
+            for pair in graph_dict.get("key_lock_pairs", []) or []
+            if isinstance(pair, (list, tuple)) and len(pair) == 2
+        ]
+
         return {
             "node_features": node_features,
             "edge_index": edge_index,
@@ -1112,12 +1142,14 @@ class MaskedRoomTrainer:
             "current_node_idx": int(current_node_idx),
             "start_node_id": int(start_node_id),
             "target_idx": int(target_idx),
+            "key_lock_pairs": key_lock_pairs,
             "has_room_anchor": bool(graph_dict.get("has_room_anchor", False)) or (
                 isinstance(graph_dict.get("boundary_constraints"), torch.Tensor)
                 and isinstance(graph_dict.get("room_position"), torch.Tensor)
             ),
             **({"boundary_constraints": boundary_constraints} if isinstance(boundary_constraints, torch.Tensor) else {}),
             **({"room_topology_map": room_topology_map} if isinstance(room_topology_map, torch.Tensor) else {}),
+            **logic_masks,
         }
 
     def _stack_graph_batch(self, graph_list: List[dict]) -> Optional[Dict[str, torch.Tensor]]:
@@ -1147,6 +1179,10 @@ class MaskedRoomTrainer:
         target_idx_batch = torch.full((len(samples),), -1, device=self.device, dtype=torch.long)
         topo_maps = []
         boundary_rows = []
+        logic_mask_rows: Dict[str, List[torch.Tensor]] = {
+            "logic_source_mask": [],
+            "logic_target_mask": [],
+        }
         for i, sample in enumerate(samples):
             n = int(sample["node_features"].shape[0])
             if n > 0:
@@ -1169,6 +1205,10 @@ class MaskedRoomTrainer:
             boundary = sample.get("boundary_constraints")
             if isinstance(boundary, torch.Tensor):
                 boundary_rows.append(boundary.reshape(1, -1))
+            for mask_name, mask_rows in logic_mask_rows.items():
+                mask = sample.get(mask_name)
+                if isinstance(mask, torch.Tensor):
+                    mask_rows.append(mask.unsqueeze(0) if mask.dim() == 3 else mask)
 
         batch_graph = {
             "node_features": node_features_batch,
@@ -1182,6 +1222,10 @@ class MaskedRoomTrainer:
             "current_node_idx": current_node_idx_batch,
             "start_node_id": start_node_id_batch,
             "target_idx": target_idx_batch,
+            "key_lock_pairs": [
+                list(sample.get("key_lock_pairs", []) or [])
+                for sample in samples
+            ],
             "graph_scope": "room_batch",
             "has_room_anchor": bool(self.config.graph_conditioning_mode == "node_sequence") or bool(samples[0].get("has_room_anchor", False)),
         }
@@ -1189,6 +1233,9 @@ class MaskedRoomTrainer:
             batch_graph["room_topology_map"] = torch.cat(topo_maps, dim=0)
         if len(boundary_rows) == len(samples):
             batch_graph["boundary_constraints"] = torch.cat(boundary_rows, dim=0)
+        for mask_name, mask_rows in logic_mask_rows.items():
+            if len(mask_rows) == len(samples):
+                batch_graph[mask_name] = torch.cat(mask_rows, dim=0)
         return batch_graph
 
     def _try_stack_dungeon_scope_graph_batch(self, graph_list: List[dict]) -> Optional[Dict[str, torch.Tensor]]:
@@ -1220,6 +1267,10 @@ class MaskedRoomTrainer:
         sample = self._normalize_graph_sample(graph_list[0])
         topo_by_node: Dict[int, torch.Tensor] = {}
         boundary_by_node: Dict[int, torch.Tensor] = {}
+        logic_masks_by_node: Dict[str, Dict[int, torch.Tensor]] = {
+            "logic_source_mask": {},
+            "logic_target_mask": {},
+        }
         for graph, current in zip(graph_list, current_indices):
             normalized = self._normalize_graph_sample(graph)
             topo = normalized.get("room_topology_map")
@@ -1228,6 +1279,10 @@ class MaskedRoomTrainer:
             boundary = normalized.get("boundary_constraints")
             if isinstance(boundary, torch.Tensor):
                 boundary_by_node[int(current)] = boundary.reshape(1, -1)
+            for mask_name, rows_by_node in logic_masks_by_node.items():
+                mask = normalized.get(mask_name)
+                if isinstance(mask, torch.Tensor):
+                    rows_by_node[int(current)] = mask.unsqueeze(0) if mask.dim() == 3 else mask
 
         node_mask = sample.get("node_mask")
         if not isinstance(node_mask, torch.Tensor):
@@ -1244,6 +1299,7 @@ class MaskedRoomTrainer:
             "current_node_idx": torch.tensor(current_indices, device=self.device, dtype=torch.long),
             "start_node_id": torch.tensor(int(sample.get("start_node_id", -1)), device=self.device, dtype=torch.long),
             "target_idx": torch.tensor(int(sample.get("target_idx", -1)), device=self.device, dtype=torch.long),
+            "key_lock_pairs": list(sample.get("key_lock_pairs", []) or []),
             "graph_scope": "dungeon",
             "has_room_anchor": bool(self.config.graph_conditioning_mode == "node_sequence") or bool(sample.get("has_room_anchor", False)),
         }
@@ -1251,6 +1307,12 @@ class MaskedRoomTrainer:
             batch_graph["room_topology_map"] = torch.cat([topo_by_node[i] for i in current_indices], dim=0)
         if len(boundary_by_node) == len(graph_list):
             batch_graph["boundary_constraints"] = torch.cat([boundary_by_node[i] for i in current_indices], dim=0)
+        for mask_name, rows_by_node in logic_masks_by_node.items():
+            if len(rows_by_node) == len(graph_list):
+                batch_graph[mask_name] = torch.cat(
+                    [rows_by_node[i] for i in current_indices],
+                    dim=0,
+                )
         return batch_graph
 
     @staticmethod
@@ -1880,6 +1942,7 @@ def main() -> None:
         choices=["bellman_ford", "conv", "cnn", "vin", "learnable", "perturb_and_map"],
         default=None,
     )
+    parser.add_argument("--logic-full-coverage", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--num-logic-iterations", type=int, default=None)
     parser.add_argument("--validation-fraction", type=float, default=None)
     parser.add_argument("--validation-max-batches", type=int, default=None)

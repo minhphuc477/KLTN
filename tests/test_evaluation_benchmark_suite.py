@@ -1,6 +1,7 @@
 import networkx as nx
 
 from src.evaluation.benchmark_suite import (
+    _path_linearity,
     extract_graph_descriptor,
     run_block_i_benchmark,
 )
@@ -37,6 +38,24 @@ def test_extract_graph_descriptor_basic():
     assert d.branch_utility_rate == 1.0
     assert d.repair_applied is False
     assert d.total_repairs == 0
+
+
+def test_linearity_ignores_dead_end_padding_but_detects_alternate_routes():
+    graph = nx.Graph()
+    graph.add_edges_from([(0, 1), (1, 2), (2, 3)])
+    path = [0, 1, 2, 3]
+    baseline = _path_linearity(graph, path)
+
+    for node in range(4, 14):
+        graph.add_edge(1, node)
+    padded = _path_linearity(graph, path)
+
+    graph.add_edges_from([(1, 14), (14, 15), (15, 2)])
+    alternate_route = _path_linearity(graph, path)
+
+    assert baseline == 1.0
+    assert padded == baseline
+    assert alternate_route < padded
 
 
 def test_run_block_i_benchmark_shapes():

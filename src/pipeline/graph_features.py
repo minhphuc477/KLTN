@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections import deque
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Set, Tuple
 
 import networkx as nx
 import numpy as np
@@ -18,6 +18,152 @@ from src.core.definitions import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def build_key_lock_pairs(
+    graph: nx.Graph,
+    node_to_idx: Mapping[Any, int],
+    *,
+    start_node: Optional[Any],
+) -> List[Tuple[int, int]]:
+    """Pair key providers with gated destinations for LogicNet supervision."""
+    small_keys: List[Any] = []
+    boss_keys: List[Any] = []
+    provider_ids: Dict[Any, Optional[str]] = {}
+    for node_id, attrs in graph.nodes(data=True):
+        attrs_dict = dict(attrs)
+        raw_type = str(
+            attrs_dict.get(
+                "type",
+                attrs_dict.get("node_type", attrs_dict.get("room_type", "")),
+            )
+            or ""
+        ).strip().upper()
+        label_tokens = {
+            token.strip()
+            for token in str(attrs_dict.get("label", "") or "").split(",")
+            if token.strip()
+        }
+        is_boss_key = (
+            raw_type in {"BIG_KEY", "BOSS_KEY"}
+            or bool(attrs_dict.get("has_boss_key", False))
+            or bool(label_tokens & {"BIG_KEY", "BOSS_KEY", "big_key", "boss_key", "K"})
+        )
+        is_small_key = (
+            not is_boss_key
+            and (
+                raw_type in {"KEY", "SMALL_KEY", "KEY_SMALL"}
+                or bool(attrs_dict.get("has_key", False))
+                or bool(
+                    label_tokens
+                    & {
+                        "KEY",
+                        "SMALL_KEY",
+                        "KEY_SMALL",
+                        "key",
+                        "small_key",
+                        "key_small",
+                        "k",
+                    }
+                )
+            )
+        )
+        if not (is_small_key or is_boss_key):
+            continue
+        raw_key_id = attrs_dict.get("key_id")
+        provider_ids[node_id] = (
+            str(raw_key_id).strip()
+            if raw_key_id is not None and str(raw_key_id).strip()
+            else None
+        )
+        (boss_keys if is_boss_key else small_keys).append(node_id)
+
+    if not small_keys and not boss_keys:
+        return []
+
+    try:
+        start_distances = (
+            nx.single_source_shortest_path_length(graph, start_node)
+            if start_node in graph
+            else {}
+        )
+    except (nx.NetworkXError, nx.NodeNotFound):
+        start_distances = {}
+
+    pairs: List[Tuple[int, int]] = []
+    seen_gates: Set[Tuple[str, frozenset[Any], Optional[str]]] = set()
+    for raw_source, raw_target, edge_attrs in graph.edges(data=True):
+        constraints = {
+            str(value).strip().lower()
+            for value in parse_edge_type_tokens(
+                label=str(edge_attrs.get("label", "") or ""),
+                edge_type=str(
+                    edge_attrs.get("edge_type", edge_attrs.get("type", "")) or ""
+                ),
+            )
+        }
+        if constraints & {"boss_locked", "boss"}:
+            key_kind = "boss"
+            providers = boss_keys
+        elif constraints & {"key_locked", "locked", "k"}:
+            key_kind = "small"
+            providers = small_keys
+        else:
+            continue
+
+        required_raw = edge_attrs.get("key_required")
+        required_id = (
+            str(required_raw).strip()
+            if required_raw is not None and str(required_raw).strip()
+            else None
+        )
+        gate_key = (key_kind, frozenset((raw_source, raw_target)), required_id)
+        if gate_key in seen_gates:
+            continue
+        seen_gates.add(gate_key)
+
+        source, target = raw_source, raw_target
+        if start_distances.get(raw_target, 10**9) < start_distances.get(raw_source, 10**9):
+            source, target = raw_target, raw_source
+        if target not in node_to_idx:
+            continue
+
+        candidates = [
+            provider
+            for provider in providers
+            if provider in node_to_idx
+            and (required_id is None or provider_ids.get(provider) == required_id)
+        ]
+        if not candidates:
+            continue
+
+        graph_without_gate = graph.copy()
+        if graph_without_gate.has_edge(raw_source, raw_target):
+            graph_without_gate.remove_edge(raw_source, raw_target)
+        if graph_without_gate.has_edge(raw_target, raw_source):
+            graph_without_gate.remove_edge(raw_target, raw_source)
+
+        ranked: List[Tuple[int, int, Tuple[str, str], Any]] = []
+        for provider in candidates:
+            try:
+                provider_to_gate = int(
+                    nx.shortest_path_length(graph_without_gate, provider, source)
+                )
+            except (nx.NetworkXNoPath, nx.NodeNotFound):
+                continue
+            ranked.append(
+                (
+                    int(start_distances.get(provider, 10**9)),
+                    provider_to_gate,
+                    (type(provider).__name__, str(provider)),
+                    provider,
+                )
+            )
+        if ranked:
+            provider = min(ranked)[-1]
+            pairs.append((int(node_to_idx[provider]), int(node_to_idx[target])))
+
+    return list(dict.fromkeys(pairs))
 
 
 def condition_feature_dims(condition_encoder: Any) -> Tuple[int, int]:

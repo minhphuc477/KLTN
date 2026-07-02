@@ -19,6 +19,32 @@ from src.zelda_data.vglc_utils import get_physical_start_node
 logger = logging.getLogger(__name__)
 
 
+def _hard_oracle_verdict(validation: Dict[str, Any]) -> Optional[bool]:
+    """Return a definitive hard verdict, preserving indeterminate outcomes."""
+    if not validation or not bool(validation.get("is_exact", False)):
+        return None
+    status = str(validation.get("termination_status", "unknown")).strip().lower()
+    if status in {"budget_exhausted", "unknown", "validator_error"}:
+        return None
+    if bool(validation.get("solvable", False)):
+        return True
+    if status == "invalid" or bool(validation.get("proven_unsolvable", False)):
+        return False
+    return None
+
+
+def _logicnet_hard_agreement(
+    logic_solvability: Dict[str, Any],
+    hard_validation: Dict[str, Any],
+) -> Optional[bool]:
+    """Compare models only when both produced semantically comparable verdicts."""
+    hard_verdict = _hard_oracle_verdict(hard_validation)
+    if hard_verdict is None or not bool(logic_solvability.get("is_graph_level", False)):
+        return None
+    soft_verdict = float(logic_solvability.get("solvability_score", 0.0)) >= 0.5
+    return bool(soft_verdict == hard_verdict)
+
+
 def _reference_room_grids_for_distribution(pipeline) -> List[np.ndarray]:
     """Return optional reference grids configured on the pipeline for realism metrics."""
     for attr_name in (
@@ -97,11 +123,15 @@ def evaluate_generated_dungeon(
     reference_rooms = _reference_room_grids_for_distribution(pipeline)
     if not map_elites_available and not reference_rooms:
         return None
-
-    map_elites_score: Dict[str, Any] = {}
+    validator_fn = getattr(pipeline, "_validate_dungeon", None)
+    solver_result = (
+        validator_fn(dungeon_grid)
+        if callable(validator_fn)
+        else _validate_dungeon(pipeline, dungeon_grid)
+    )
+    map_elites_score: Dict[str, Any] = dict(solver_result or {})
     if map_elites_available:
         try:
-            solver_result = pipeline._validate_dungeon(dungeon_grid)
             if solver_result and solver_result.get('solvable'):
                 descriptor_metrics = map_elites.add_dungeon(
                     dungeon=dungeon_grid,
@@ -145,6 +175,7 @@ def evaluate_generated_dungeon(
     return map_elites_score or None
 
 
+@torch.no_grad()
 def evaluate_dungeon_solvability(
     pipeline,
     rooms: Dict[Any, 'RoomGenerationResult'],
@@ -172,6 +203,10 @@ def evaluate_dungeon_solvability(
         'graph_reach_loss': 0.0,
         'lock_loss': 0.0,
         'global_logic_loss': 0.0,
+        'score_type': 'logicnet_surrogate',
+        'is_exact': False,
+        'is_graph_level': False,
+        'evaluation_status': 'unavailable',
     }
     failing_rooms: List[Any] = []
 
@@ -207,6 +242,12 @@ def evaluate_dungeon_solvability(
     dungeon_latents: List[torch.Tensor] = []
     current_node_indices: List[int] = []
     evaluated_room_ids: List[Any] = []
+    room_topology_maps: List[torch.Tensor] = []
+    room_boundaries: List[torch.Tensor] = []
+    room_logic_masks: Dict[str, List[torch.Tensor]] = {
+        "logic_source_mask": [],
+        "logic_target_mask": [],
+    }
     reference_shape: Optional[Tuple[int, ...]] = None
 
     # Evaluate per-room walkability via LogicNet (grid-level only)
@@ -242,12 +283,34 @@ def evaluate_dungeon_solvability(
             evaluated_room_ids.append(room_id)
 
         try:
-            loss, info = pipeline.logic_net(z, graph_data=None)
+            start_goal = pipeline._extract_room_start_goal(mission_graph_physical, room_id)
+            room_graph_data = pipeline._build_room_graph_context(
+                graph_data=graph_context,
+                mission_graph=mission_graph_physical,
+                room_id=room_id,
+                start_goal=start_goal,
+            )
+            room_graph_data["boundary_constraints"] = pipeline._build_room_boundary_constraints(
+                mission_graph_physical,
+                room_id,
+            )
+            loss, info = pipeline.logic_net(z, graph_data=room_graph_data)
             grid_reach = float(info.get('grid_reachability', 0.0))
             total_grid_reach += grid_reach
             num_rooms += 1
             if grid_reach < 0.5:
                 failing_rooms.append(room_id)
+            if node_idx is not None:
+                topology = room_graph_data.get("room_topology_map")
+                boundary = room_graph_data.get("boundary_constraints")
+                if isinstance(topology, torch.Tensor):
+                    room_topology_maps.append(topology)
+                if isinstance(boundary, torch.Tensor):
+                    room_boundaries.append(boundary)
+                for mask_name, mask_rows in room_logic_masks.items():
+                    mask = room_graph_data.get(mask_name)
+                    if isinstance(mask, torch.Tensor):
+                        mask_rows.append(mask)
         except (RuntimeError, ValueError) as e:
             logger.debug("Room %s solvability eval failed: %s", room_id, e)
             failing_rooms.append(room_id)
@@ -268,7 +331,15 @@ def evaluate_dungeon_solvability(
             'current_node_idx': torch.tensor(current_node_indices, device=pipeline.device, dtype=torch.long),
             'start_node_id': int(start_idx),
             'target_idx': int(target_idx),
+            'key_lock_pairs': list(graph_context.get('key_lock_pairs', []) or []),
         }
+        if len(room_topology_maps) == len(dungeon_latents):
+            graph_data["room_topology_map"] = torch.cat(room_topology_maps, dim=0)
+        if len(room_boundaries) == len(dungeon_latents):
+            graph_data["boundary_constraints"] = torch.cat(room_boundaries, dim=0)
+        for mask_name, mask_rows in room_logic_masks.items():
+            if len(mask_rows) == len(dungeon_latents):
+                graph_data[mask_name] = torch.cat(mask_rows, dim=0)
         try:
             global_loss, global_info = pipeline.logic_net(z_dungeon, graph_data=graph_data)
             global_logic_loss = global_info.get('global_logic_loss', global_loss)
@@ -293,12 +364,17 @@ def evaluate_dungeon_solvability(
                 'global_loss_score': float(torch.exp(torch.tensor(-max(0.0, global_logic_loss_value))).item()),
                 'global_room_passability': float(global_info.get('global_room_passability', 0.0)) if not isinstance(global_info.get('global_room_passability'), torch.Tensor) else float(global_info['global_room_passability'].detach().mean().item()),
                 'global_num_rooms_scored': float(len(evaluated_room_ids)),
+                'is_graph_level': True,
+                'evaluation_status': 'evaluated',
             })
         except (RuntimeError, ValueError) as e:
             logger.debug("Dungeon-scope LogicNet solvability eval failed: %s", e)
             result['solvability_score'] = result['room_solvability_score']
+            result['evaluation_status'] = 'room_only_fallback'
+            result['error_message'] = str(e)
     else:
         result['solvability_score'] = result['room_solvability_score']
+        result['evaluation_status'] = 'room_only'
 
     result['failing_rooms'] = failing_rooms  # type: ignore[assignment]
     result['num_rooms_evaluated'] = float(num_rooms)
@@ -408,6 +484,12 @@ def repair_and_stitch_dungeon(
         mission_graph,
         enable_map_elites=enable_map_elites,
     )
+    hard_validation = (
+        dict(map_elites_score)
+        if isinstance(map_elites_score, dict) and bool(map_elites_score.get("is_exact", False))
+        else dict(pipeline._validate_dungeon(dungeon_grid) or {})
+    )
+    hard_verdict = _hard_oracle_verdict(hard_validation)
     try:
         logic_solvability = pipeline.evaluate_dungeon_solvability(normalized_rooms, mission_graph)
     except (RuntimeError, ValueError, TypeError) as exc:
@@ -428,6 +510,20 @@ def repair_and_stitch_dungeon(
         "logicnet_lock_loss": float(logic_solvability.get("lock_loss", 0.0)),
         "logicnet_global_logic_loss": float(logic_solvability.get("global_logic_loss", 0.0)),
         "logicnet_num_failing_rooms": float(logic_solvability.get("num_failing", 0.0)),
+        "final_hard_solvable": hard_verdict,
+        "final_hard_validation_status": str(
+            hard_validation.get("termination_status", "unknown")
+        ),
+        "final_hard_proven_unsolvable": bool(
+            hard_validation.get("proven_unsolvable", False)
+        ),
+        "final_hard_states_explored": int(
+            hard_validation.get("states_explored", 0) or 0
+        ),
+        "logicnet_hard_agreement": _logicnet_hard_agreement(
+            logic_solvability,
+            hard_validation,
+        ),
     }
     return DungeonGenerationResult(
         dungeon_grid=dungeon_grid,
@@ -447,16 +543,21 @@ def _validate_dungeon(pipeline, dungeon_grid: np.ndarray) -> Optional[Dict[str, 
 
     Uses the project validator when available, with graceful fallback.
     """
-    if pipeline.map_elites is None:
-        logger.debug("Skipping dungeon validation because no map_elites component is configured.")
-        return None
+    map_elites = getattr(pipeline, "map_elites", None)
     floor_id = int(SEMANTIC_PALETTE.get('FLOOR', 1))
     enemy_id = int(SEMANTIC_PALETTE.get('ENEMY', 7))
+    boss_id = int(SEMANTIC_PALETTE.get('BOSS', -1))
     key_id = int(SEMANTIC_PALETTE.get('KEY_SMALL', SEMANTIC_PALETTE.get('KEY', 8)))
     lock_id = int(SEMANTIC_PALETTE.get('DOOR_LOCKED', 11))
     playable_area = int((dungeon_grid == floor_id).sum())
-    leniency = float(pipeline.map_elites.calculate_leniency(dungeon_grid))
     enemy_count = int((dungeon_grid == enemy_id).sum())
+    if boss_id >= 0:
+        enemy_count += int((dungeon_grid == boss_id).sum())
+    leniency = (
+        float(map_elites.calculate_leniency(dungeon_grid))
+        if map_elites is not None
+        else float(np.clip(1.0 - (enemy_count / max(1, playable_area)), 0.0, 1.0))
+    )
     key_count = int((dungeon_grid == key_id).sum())
     lock_count = int((dungeon_grid == lock_id).sum())
 
@@ -464,14 +565,21 @@ def _validate_dungeon(pipeline, dungeon_grid: np.ndarray) -> Optional[Dict[str, 
         from src.simulation.validator import ZeldaValidator
 
         validator = ZeldaValidator()
-        result = validator.validate_single(dungeon_grid)
+        result = validator.validate_single(
+            dungeon_grid,
+            solver_timeout=int(max(1, int(getattr(pipeline, "tile_oracle_max_states", 200_000)))),
+        )
 
         path_length = int(result.path_length) if result.is_solvable else 0
-        linearity = float(
-            pipeline.map_elites.calculate_linearity(result.path)
-            if result.is_solvable and result.path
-            else 0.0
-        )
+        if result.is_solvable and result.path:
+            if map_elites is not None:
+                linearity = float(map_elites.calculate_linearity(result.path))
+            else:
+                start, goal = result.path[0], result.path[-1]
+                displacement = abs(int(start[0]) - int(goal[0])) + abs(int(start[1]) - int(goal[1]))
+                linearity = float(np.clip(displacement / max(1, len(result.path) - 1), 0.0, 1.0))
+        else:
+            linearity = 0.0
         backtracking = float(np.clip(getattr(result, 'backtracking_score', 0.0), 0.0, 1.0))
         reachability = float(np.clip(getattr(result, 'reachability', 0.0), 0.0, 1.0))
         lock_pressure = min(1.0, lock_count / max(1.0, float(max(1, key_count))))
@@ -496,6 +604,7 @@ def _validate_dungeon(pipeline, dungeon_grid: np.ndarray) -> Optional[Dict[str, 
         ))
         return {
             'solvable': bool(result.is_solvable),
+            'path': list(result.path or []),
             'path_length': path_length,
             'linearity': linearity,
             'leniency': leniency,
@@ -509,12 +618,19 @@ def _validate_dungeon(pipeline, dungeon_grid: np.ndarray) -> Optional[Dict[str, 
             'enemy_count': enemy_count,
             'is_valid_syntax': bool(result.is_valid_syntax),
             'error_message': str(result.error_message) if result.error_message else "",
+            'solver_used': str(getattr(result, 'solver_used', 'astar')),
+            'states_explored': int(getattr(result, 'states_explored', 0) or 0),
+            'termination_status': str(getattr(result, 'termination_status', 'unknown')),
+            'proven_unsolvable': bool(getattr(result, 'proven_unsolvable', False)),
+            'is_exact': True,
         }
     except (AttributeError, RuntimeError, ValueError, TypeError) as e:
-        pipeline._bump_diagnostic("dungeon_validation_fallback")
+        bump_diagnostic = getattr(pipeline, "_bump_diagnostic", None)
+        if callable(bump_diagnostic):
+            bump_diagnostic("dungeon_validation_fallback")
         logger.warning(f"Dungeon validation failed: {e}")
         return {
-            'solvable': False,
+            'solvable': None,
             'path_length': 0,
             'linearity': 0.0,
             'leniency': leniency,
@@ -528,5 +644,10 @@ def _validate_dungeon(pipeline, dungeon_grid: np.ndarray) -> Optional[Dict[str, 
             'enemy_count': enemy_count,
             'is_valid_syntax': False,
             'error_message': f"validator_error: {e}",
+            'solver_used': 'validator_error',
+            'states_explored': 0,
+            'termination_status': 'validator_error',
+            'proven_unsolvable': False,
+            'is_exact': False,
         }
 

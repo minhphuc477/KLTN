@@ -8,6 +8,7 @@ floor constraints.
 
 from __future__ import annotations
 
+import inspect
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
 
@@ -226,12 +227,20 @@ class NeuralGuidedRepair:
         resolver = getattr(self.logic_net, "_resolve_room_logic_targets", None)
         if not callable(resolver):
             return None
-        targets = resolver(
-            graph_data,
-            batch_size=int(tile_logits.shape[0]),
-            device=tile_logits.device,
-            dtype=tile_logits.dtype,
-        )
+        resolver_kwargs = {
+            "batch_size": int(tile_logits.shape[0]),
+            "device": tile_logits.device,
+            "dtype": tile_logits.dtype,
+        }
+        try:
+            if "spatial_hw" in inspect.signature(resolver).parameters:
+                resolver_kwargs["spatial_hw"] = (
+                    int(grid_shape[0]),
+                    int(grid_shape[1]),
+                )
+        except (TypeError, ValueError):
+            pass
+        targets = resolver(graph_data, **resolver_kwargs)
         masks = []
         trace = targets.get("trace_target") if isinstance(targets, dict) else None
         if isinstance(trace, torch.Tensor):

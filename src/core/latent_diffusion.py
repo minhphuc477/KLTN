@@ -2384,6 +2384,26 @@ class GradientGuidance(nn.Module):
         else:
             boundary_constraints = None
 
+        logic_masks: Dict[str, Tensor] = {}
+        for mask_name in ("logic_source_mask", "logic_target_mask"):
+            mask_value = graph_data.get(mask_name)
+            if not isinstance(mask_value, torch.Tensor):
+                continue
+            mask_tensor = mask_value.detach()
+            if mask_tensor.dim() == 3:
+                mask_tensor = mask_tensor.unsqueeze(1)
+            if mask_tensor.dim() != 4 or int(mask_tensor.shape[1]) != 1:
+                logger.warning(
+                    "Gradient guidance: %s must have shape [B,1,H,W] or [B,H,W], got %s; ignoring it.",
+                    mask_name,
+                    tuple(mask_tensor.shape),
+                )
+                continue
+            logic_masks[mask_name] = mask_tensor.to(
+                device=target_device or mask_tensor.device,
+                dtype=target_dtype or torch.float32,
+            ).clamp_(0.0, 1.0)
+
         graph_passthrough: Dict[str, Any] = {}
 
         graph_scope = graph_data.get("graph_scope")
@@ -2482,6 +2502,7 @@ class GradientGuidance(nn.Module):
             return None
 
         sanitized: Dict[str, Any] = dict(graph_passthrough)
+        sanitized.update(logic_masks)
         if room_topology_map is not None:
             sanitized["room_topology_map"] = room_topology_map
         if boundary_constraints is not None:

@@ -45,7 +45,12 @@ from datetime import datetime
 
 # Generation
 from src.generation.graph_constraint_enforcer import GraphConstraintEnforcer, enforce_all_rooms
-from src.generation.entity_spawner import EntitySpawner, spawn_all_entities
+from src.generation.entity_spawner import (
+    Entity,
+    EntitySpawner,
+    materialize_entities_on_grid,
+    spawn_all_entities,
+)
 from src.generation.seam_smoother import SeamSmoother
 from src.generation.style_transfer import ThemeType
 from src.generation.global_state import GlobalStateManager, GlobalStateType, StateAwareRoomGenerator
@@ -116,6 +121,14 @@ class AdvancedPipelineConfig:
     # Evaluation
     calculate_fun_metrics: bool = True
     enable_diversity_analysis: bool = True
+    mission_rule_space: str = "core"
+    mission_search_strategy: str = "cvt_emitter"
+    topology_qd_archive_cells: int = 128
+    require_graph_solvability: bool = True
+    require_final_solvability: bool = True
+    allow_linear_graph_fallback: bool = False
+    graph_oracle_max_states: int = 1_000_000
+    tile_oracle_max_states: int = 1_000_000
     
     # Recording & explainability
     record_demo: bool = True
@@ -145,6 +158,16 @@ class PipelineStats:
     collision_alignment_score: float  # 0.0-1.0
     fun_score: float  # 0.0-1.0
     diversity_score: float  # 0.0-1.0
+    graph_solvable: bool
+    final_map_solvable: bool
+    final_path_length: int
+    final_states_explored: int
+    topology_qd_coverage: float
+    topology_qd_score: float
+    topology_qd_num_elites: int
+    topology_qd_infeasible_rejections: int
+    final_map_archive_elites: int
+    final_map_archive_coverage: float
     
     # Explainability
     decision_count: int
@@ -193,7 +216,14 @@ class AdvancedNeuralSymbolicPipeline:
         tile_config = {
             'wall': SEMANTIC_PALETTE['WALL'],
             'floor': SEMANTIC_PALETTE['FLOOR'],
-            'door': SEMANTIC_PALETTE['DOOR_OPEN']
+            'door': SEMANTIC_PALETTE['DOOR_OPEN'],
+            'door_locked': SEMANTIC_PALETTE['DOOR_LOCKED'],
+            'door_bomb': SEMANTIC_PALETTE['DOOR_BOMB'],
+            'door_puzzle': SEMANTIC_PALETTE['DOOR_PUZZLE'],
+            'door_boss': SEMANTIC_PALETTE['DOOR_BOSS'],
+            'door_soft': SEMANTIC_PALETTE['DOOR_SOFT'],
+            'start': SEMANTIC_PALETTE['START'],
+            'goal': SEMANTIC_PALETTE['TRIFORCE'],
         }
         self.graph_enforcer = GraphConstraintEnforcer(tile_config=tile_config)
         self.entity_spawner = EntitySpawner()
@@ -385,121 +415,126 @@ class AdvancedNeuralSymbolicPipeline:
             return 0.0
         return float(mismatches / comparisons)
 
-    def _estimate_dungeon_solver_result(
-        self,
-        dungeon_grid: np.ndarray,
-        mission_graph: nx.Graph,
-    ) -> Dict[str, Any]:
+    @staticmethod
+    def _edge_type_name(edge_data: Dict[str, Any]) -> str:
+        raw = edge_data.get('edge_type', edge_data.get('type', edge_data.get('label', 'open')))
+        name = str(getattr(raw, 'name', raw) or 'open').strip().upper()
+        return name.split('.', 1)[1] if name.startswith('EDGETYPE.') else name
+
+    def _validate_spatial_mechanics(self, mission_graph: nx.Graph) -> None:
         """
-        Estimate dungeon-level solver descriptors from mission topology.
+        Reject graph mechanics that the semantic tile vocabulary cannot encode.
 
-        MAP-Elites descriptors should be attached to the generated dungeon as a
-        whole. Room-level diameter remains useful for diagnostics, but using it
-        as the archive descriptor confounds local room shape with mission-level
-        progression.
+        Graph-only experiments may use the full grammar. End-to-end generation
+        must use mechanics that survive graph-to-grid compilation without
+        changing their rules.
         """
-        if mission_graph is None or mission_graph.number_of_nodes() == 0:
-            return {'solvable': False, 'path_length': 0, 'quality_score': 0.0}
-
-        path_nodes = self._resolve_mission_solution_path(mission_graph)
-        path_length = int(len(path_nodes))
-        solvable = path_length > 0
-        node_count = max(1, int(mission_graph.number_of_nodes()))
-        edge_count = int(mission_graph.number_of_edges())
-        linearity = float(np.clip(path_length / node_count, 0.0, 1.0)) if solvable else 0.0
-
-        if self.map_elites:
-            leniency = float(self.map_elites.calculate_leniency(dungeon_grid))
-        else:
-            leniency = 0.5
-
-        locked_tokens = {"locked", "key_locked", "boss_locked", "item_locked", "item_gate", "switch_locked"}
-        lock_count = 0
-        for _u, _v, data in mission_graph.edges(data=True):
-            edge_text = f"{data.get('edge_type', '')} {data.get('type', '')} {data.get('label', '')}".lower()
-            if any(token in edge_text for token in locked_tokens):
-                lock_count += 1
-        key_count = sum(
-            1 for _node, attrs in mission_graph.nodes(data=True)
-            if bool(attrs.get("has_key", False))
-            or "key" in str(attrs.get("type", attrs.get("node_type", ""))).lower()
-        )
-
-        undirected = mission_graph.to_undirected()
-        try:
-            cycle_rank = max(
-                0,
-                int(undirected.number_of_edges())
-                - int(undirected.number_of_nodes())
-                + nx.number_connected_components(undirected),
+        supported = {
+            '',
+            'OPEN',
+            'PATH',
+            'SHORTCUT',
+            'HIDDEN',
+            'LOCKED',
+            'KEY_LOCKED',
+            'BOSS_LOCKED',
+            'HAZARD',
+        }
+        unsupported = sorted({
+            self._edge_type_name(dict(data))
+            for _source, _target, data in mission_graph.edges(data=True)
+            if self._edge_type_name(dict(data)) not in supported
+            and self._edge_type_name(dict(data)) not in {'VISUAL_LINK', 'WINDOW'}
+        })
+        if unsupported:
+            raise ValueError(
+                "Mission graph contains mechanics without a faithful final-map "
+                f"representation: {unsupported}. Use mission_rule_space='core' "
+                "or implement matching tiles, entity providers, and oracle rules."
             )
-        except nx.NetworkXException:
-            cycle_rank = 0
-        backtracking = float(np.clip(cycle_rank / max(1, node_count // 2), 0.0, 1.0))
-        lock_pressure = float(np.clip(lock_count / max(1.0, float(max(1, key_count))), 0.0, 1.0))
-        progression_complexity = float(
-            np.clip((0.45 * lock_pressure) + (0.35 * backtracking) + (0.20 * (1.0 - linearity)), 0.0, 1.0)
-        )
-        quality_score = float(
-            np.clip((0.40 * linearity) + (0.35 * leniency) + (0.25 * (1.0 - progression_complexity)), 0.0, 1.0)
-        )
+        protection_items = {
+            str(data.get('protection_item_id')).strip().upper()
+            for _source, _target, data in mission_graph.edges(data=True)
+            if self._edge_type_name(dict(data)) == 'HAZARD'
+            and data.get('protection_item_id') is not None
+            and str(data.get('protection_item_id')).strip()
+        }
+        if len(protection_items) > 1:
+            raise ValueError(
+                "The final-map vocabulary has one generic protection-item tile, "
+                "so multiple named hazard protections cannot be represented "
+                f"faithfully: {sorted(protection_items)}"
+            )
 
+    def _validate_mission_graph(self, mission_graph: nx.DiGraph) -> Dict[str, Any]:
+        """Run the exact resource-aware graph oracle before room generation."""
+        from src.evaluation.validator import ExternalValidator
+
+        result = ExternalValidator(mode='full').validate(
+            mission_graph,
+            max_states=int(max(1, self.config.graph_oracle_max_states)),
+        )
         return {
-            'solvable': bool(solvable),
+            'solvable': bool(result.is_solvable),
+            'path': list(result.solution_path or []),
+            'path_length': int(result.path_length),
+            'states_explored': int(result.states_explored),
+            'failure_reason': str(result.failure_reason or ''),
+            'termination_status': str(result.termination_status),
+            'proven_unsolvable': bool(result.proven_unsolvable),
+        }
+
+    def _validate_final_dungeon(self, dungeon_grid: np.ndarray) -> Dict[str, Any]:
+        """Run the tile-level oracle on the exact semantic artifact returned."""
+        from src.simulation.validator import ZeldaValidator
+
+        result = ZeldaValidator().validate_single(
+            np.asarray(dungeon_grid).copy(),
+            solver_timeout=int(max(1, self.config.tile_oracle_max_states)),
+        )
+        path = list(result.path or [])
+        path_length = int(result.path_length) if result.is_solvable else 0
+        reachability = float(np.clip(getattr(result, 'reachability', 0.0), 0.0, 1.0))
+        syntax_valid = bool(getattr(result, 'is_valid_syntax', False))
+        quality_score = (
+            float(np.clip((0.7 * reachability) + (0.3 * float(syntax_valid)), 0.0, 1.0))
+            if result.is_solvable
+            else 0.0
+        )
+        return {
+            'solvable': bool(result.is_solvable),
+            'path': path,
             'path_length': path_length,
-            'linearity': linearity,
-            'leniency': leniency,
-            'backtracking_score': backtracking,
-            'progression_complexity': progression_complexity,
+            'states_explored': int(getattr(result, 'states_explored', 0) or 0),
+            'reachability': reachability,
+            'is_valid_syntax': syntax_valid,
+            'backtracking_score': float(
+                np.clip(getattr(result, 'backtracking_score', 0.0), 0.0, 1.0)
+            ),
             'quality_score': quality_score,
-            'key_count': int(key_count),
-            'lock_count': int(lock_count),
-            'edge_count': int(edge_count),
-            'node_count': int(node_count),
+            'error_message': str(getattr(result, 'error_message', '') or ''),
+            'termination_status': str(
+                getattr(result, 'termination_status', 'unknown')
+            ),
+            'proven_unsolvable': bool(
+                getattr(result, 'proven_unsolvable', False)
+            ),
         }
 
     @staticmethod
     def _resolve_mission_solution_path(mission_graph: nx.Graph) -> List[Any]:
-        """Resolve a stable start-to-goal route instead of relying on node insertion order."""
+        """Resolve the resource-valid oracle route used by downstream metrics."""
         if mission_graph is None or mission_graph.number_of_nodes() == 0:
             return []
+        from src.evaluation.validator import ExternalValidator
 
-        nodes = list(mission_graph.nodes())
-
-        def role_tokens(attrs: Dict[str, Any]) -> Set[str]:
-            tokens = set(parse_node_label_tokens(str(attrs.get("label", "") or "")))
-            for key in ("type", "node_type"):
-                raw = str(attrs.get(key, "") or "").strip().lower()
-                if raw:
-                    tokens.add(raw)
-            return tokens
-
-        start_nodes = [
-            node for node, attrs in mission_graph.nodes(data=True)
-            if bool(attrs.get("is_start", attrs.get("start", False)))
-            or bool(role_tokens(attrs) & {"s", "start"})
-        ]
-        goal_nodes = [
-            node for node, attrs in mission_graph.nodes(data=True)
-            if bool(
-                attrs.get("is_goal", attrs.get("goal", False))
-                or attrs.get("has_goal", False)
-                or attrs.get("is_triforce", False)
-                or attrs.get("has_triforce", False)
-                or attrs.get("is_boss", False)
-            )
-            or bool(role_tokens(attrs) & {"t", "goal", "boss", "triforce"})
-        ]
-        start = start_nodes[0] if start_nodes else nodes[0]
-        goal = goal_nodes[0] if goal_nodes else nodes[-1]
-
-        try:
-            return list(nx.shortest_path(mission_graph, start, goal))
-        except (nx.NetworkXNoPath, nx.NodeNotFound):
-            try:
-                return list(nx.shortest_path(mission_graph.to_undirected(), start, goal))
-            except (nx.NetworkXNoPath, nx.NodeNotFound):
-                return []
+        validation_graph = (
+            mission_graph
+            if isinstance(mission_graph, nx.DiGraph)
+            else nx.DiGraph(mission_graph)
+        )
+        result = ExternalValidator(mode='full').validate(validation_graph)
+        return list(result.solution_path or [])
 
     @staticmethod
     def _build_fun_room_contents(mission_graph: nx.Graph, entities: List[Any]) -> Dict[Any, Dict[str, Any]]:
@@ -601,6 +636,18 @@ class AdvancedNeuralSymbolicPipeline:
             self.explainability_mgr.add_trace(trace)
         
         mission_graph = self._generate_mission_graph(tension_curve, room_count, constraints)
+        graph_validation = self._validate_mission_graph(mission_graph)
+        if self.config.require_graph_solvability and not graph_validation['solvable']:
+            outcome = (
+                "indeterminate"
+                if graph_validation['termination_status'] == 'budget_exhausted'
+                else "invalid"
+            )
+            raise RuntimeError(
+                f"Evolutionary mission graph is {outcome} under the resource-aware oracle: "
+                f"{graph_validation['failure_reason']}"
+            )
+        self._validate_spatial_mechanics(mission_graph)
         
         if self.explainability_mgr:
             trace = DecisionTrace(
@@ -736,11 +783,19 @@ class AdvancedNeuralSymbolicPipeline:
         tile_config = {
             'wall': SEMANTIC_PALETTE['WALL'],
             'floor': SEMANTIC_PALETTE['FLOOR'],
-            'door': SEMANTIC_PALETTE['DOOR_OPEN']
+            'door': SEMANTIC_PALETTE['DOOR_OPEN'],
+            'door_locked': SEMANTIC_PALETTE['DOOR_LOCKED'],
+            'door_bomb': SEMANTIC_PALETTE['DOOR_BOMB'],
+            'door_puzzle': SEMANTIC_PALETTE['DOOR_PUZZLE'],
+            'door_boss': SEMANTIC_PALETTE['DOOR_BOSS'],
+            'door_soft': SEMANTIC_PALETTE['DOOR_SOFT'],
+            'hazard': SEMANTIC_PALETTE['ELEMENT'],
+            'start': SEMANTIC_PALETTE['START'],
+            'goal': SEMANTIC_PALETTE['TRIFORCE'],
         }
         mission_graph_dict = {
             'nodes': dict(mission_graph.nodes(data=True)),
-            'edges': list(mission_graph.edges())
+            'edges': list(mission_graph.edges(data=True))
         }
         dungeon_grid = enforce_all_rooms(
             visual_grid=dungeon_grid,
@@ -771,6 +826,21 @@ class AdvancedNeuralSymbolicPipeline:
             seed=base_seed,
         )
         logger.info(f"Spawned {len(entities)} entities")
+        dungeon_grid = materialize_entities_on_grid(dungeon_grid, entities)
+
+        final_validation_start = time.time()
+        final_validation = self._validate_final_dungeon(dungeon_grid)
+        val_time += time.time() - final_validation_start
+        if self.config.require_final_solvability and not final_validation['solvable']:
+            outcome = (
+                "indeterminate"
+                if final_validation['termination_status'] == 'budget_exhausted'
+                else "invalid"
+            )
+            raise RuntimeError(
+                f"Final stitched semantic map is {outcome} under the tile-level oracle: "
+                f"{final_validation['error_message'] or 'no valid START-to-GOAL solution'}"
+            )
         
         # Step 12: Evaluation
         eval_start = time.time()
@@ -794,16 +864,16 @@ class AdvancedNeuralSymbolicPipeline:
         
         # Diversity analysis (MAP-Elites)
         diversity_score = 0.0
+        final_map_archive_elites = 0
+        final_map_archive_coverage = 0.0
         if self.map_elites:
             try:
-                from src.simulation.map_elites import calculate_diversity_score
+                from src.simulation.map_elites import (
+                    calculate_diversity_score,
+                    calculate_feature_coverage,
+                )
 
-                if hasattr(self.map_elites, "clear"):
-                    self.map_elites.clear()
-                else:
-                    self.map_elites.grid.clear()
-
-                solver_result = self._estimate_dungeon_solver_result(dungeon_grid, mission_graph)
+                solver_result = dict(final_validation)
                 self.map_elites.add_dungeon(
                     mission_graph,
                     dungeon_grid,
@@ -812,6 +882,10 @@ class AdvancedNeuralSymbolicPipeline:
                 )
 
                 diversity_score = float(calculate_diversity_score(self.map_elites))
+                final_map_archive_elites = int(len(self.map_elites.grid))
+                final_map_archive_coverage = float(
+                    calculate_feature_coverage(self.map_elites)
+                )
             except (AttributeError, RuntimeError, ValueError, TypeError) as e:
                 logger.warning(f"Diversity analysis failed: {e}")
         
@@ -846,6 +920,9 @@ class AdvancedNeuralSymbolicPipeline:
         
         # Calculate stats
         total_time = time.time() - start_time
+        topology_qd_stats = dict(
+            mission_graph.graph.get('topology_qd_archive_stats', {}) or {}
+        )
         
         lcm_speedup = self._compute_reported_lcm_speedup(room_count=room_count, gen_time=gen_time)
         
@@ -860,6 +937,18 @@ class AdvancedNeuralSymbolicPipeline:
             collision_alignment_score=alignment_score,
             fun_score=fun_score,
             diversity_score=diversity_score,
+            graph_solvable=bool(graph_validation['solvable']),
+            final_map_solvable=bool(final_validation['solvable']),
+            final_path_length=int(final_validation['path_length']),
+            final_states_explored=int(final_validation['states_explored']),
+            topology_qd_coverage=float(topology_qd_stats.get('coverage', 0.0)),
+            topology_qd_score=float(topology_qd_stats.get('qd_score', 0.0)),
+            topology_qd_num_elites=int(topology_qd_stats.get('num_elites', 0.0)),
+            topology_qd_infeasible_rejections=int(
+                topology_qd_stats.get('infeasible_rejections', 0.0)
+            ),
+            final_map_archive_elites=final_map_archive_elites,
+            final_map_archive_coverage=final_map_archive_coverage,
             decision_count=decision_count,
             fully_traceable=fully_traceable
         )
@@ -897,7 +986,9 @@ class AdvancedNeuralSymbolicPipeline:
             population_size = int(constraints.get('population_size', max(24, min(96, room_count * 8))))
             generations = int(constraints.get('generations', max(30, min(120, room_count * 10))))
             max_nodes = int(constraints.get('max_nodes', max(room_count, 5)))
-            rule_space = str(constraints.get('rule_space', 'full')).strip().lower()
+            rule_space = str(
+                constraints.get('rule_space', self.config.mission_rule_space)
+            ).strip().lower()
             
             generator = EvolutionaryTopologyGenerator(
                 target_curve=effective_curve,
@@ -905,12 +996,35 @@ class AdvancedNeuralSymbolicPipeline:
                 generations=generations,
                 max_nodes=max_nodes,
                 rule_space=rule_space,
+                search_strategy=str(
+                    constraints.get(
+                        'search_strategy',
+                        self.config.mission_search_strategy,
+                    )
+                ),
+                qd_archive_cells=int(
+                    constraints.get(
+                        'qd_archive_cells',
+                        self.config.topology_qd_archive_cells,
+                    )
+                ),
                 seed=seed,
             )
             raw_graph = generator.evolve()
+            raw_graph.graph['topology_search_strategy'] = str(generator.search_strategy)
+            raw_graph.graph['topology_qd_archive_stats'] = dict(
+                generator.qd_final_archive_stats
+            )
             return self._normalize_mission_graph(raw_graph, effective_curve, room_count)
         except (AttributeError, RuntimeError, ValueError, TypeError) as e:
-            logger.warning(f"Evolutionary director unavailable/failure ({e}); using deterministic linear fallback")
+            if not self.config.allow_linear_graph_fallback:
+                raise RuntimeError(
+                    "Evolutionary mission-graph generation failed; linear fallback is disabled"
+                ) from e
+            logger.warning(
+                "Evolutionary director failed (%s); using explicitly enabled linear fallback",
+                e,
+            )
             return self._build_linear_mission_graph(effective_curve, room_count)
 
     @staticmethod
@@ -1003,59 +1117,91 @@ class AdvancedNeuralSymbolicPipeline:
                 depth[node] = max(depth.values(), default=0) + 1
                 directed.add_node(node, **undirected.nodes[node])
         
-        # Keep/trim to requested room_count using BFS/topological priority.
         working_nodes = list(directed.nodes())
         if not working_nodes:
-            return self._build_linear_mission_graph(tension_curve, room_count)
-        
-        if nx.is_directed_acyclic_graph(directed):
-            ordered_nodes = list(nx.topological_sort(directed))
-        else:
-            ordered_nodes = sorted(working_nodes, key=self._node_sort_key)
-        
+            raise ValueError('Mission graph normalization received an empty graph')
+
+        def _node_roles(node_id: Any) -> Set[str]:
+            attrs = directed.nodes[node_id]
+            roles = set(parse_node_label_tokens(str(attrs.get('label', '') or '')))
+            for key in ('type', 'node_type'):
+                raw = str(attrs.get(key, '') or '').strip().lower()
+                if raw:
+                    roles.add(raw)
+            if attrs.get('is_start'):
+                roles.add('start')
+            if attrs.get('is_goal') or attrs.get('has_goal') or attrs.get('is_triforce') or attrs.get('has_triforce'):
+                roles.add('goal')
+            return roles
+
+        start_candidates = [
+            node for node in working_nodes
+            if _node_roles(node) & {'s', 'start', 'start_pointer'}
+        ]
+        goal_candidates = [
+            node for node in working_nodes
+            if _node_roles(node) & {'t', 'goal', 'triforce'}
+        ]
+        if len(start_candidates) != 1 or len(goal_candidates) != 1:
+            raise ValueError(
+                'Mission graph must contain exactly one START and one GOAL before spatial compilation '
+                f'(found starts={len(start_candidates)}, goals={len(goal_candidates)})'
+            )
+        start_node = start_candidates[0]
+        goal_node = goal_candidates[0]
+
+        if not nx.is_weakly_connected(directed):
+            raise ValueError('Mission graph contains disconnected components; refusing open-edge repair')
+
         target_rooms = max(1, int(room_count))
-        if len(ordered_nodes) > target_rooms:
-            keep = set(ordered_nodes[:target_rooms])
-            directed = directed.subgraph(keep).copy()
-            ordered_nodes = [n for n in ordered_nodes if n in keep]
-        
-        # If too small, append linear extension nodes.
-        while len(ordered_nodes) < target_rooms:
-            new_node = f"extra_{len(ordered_nodes)}"
-            directed.add_node(new_node)
-            directed.add_edge(ordered_nodes[-1], new_node, edge_type='open')
-            ordered_nodes.append(new_node)
-        
-        # Remap to compact integer IDs for downstream tensor indexing.
-        mapping = {old: idx for idx, old in enumerate(ordered_nodes)}
+        if directed.number_of_nodes() > target_rooms:
+            logger.warning(
+                "Mission graph produced %d nodes for a %d-room request; preserving all nodes "
+                "rather than deleting progression providers or the GOAL",
+                directed.number_of_nodes(),
+                target_rooms,
+            )
+
+        # Extra capacity is an optional reachable branch. It cannot shorten,
+        # replace, or move the generated START-to-GOAL progression.
+        branch_parent = start_node
+        while directed.number_of_nodes() < target_rooms:
+            new_node = f"extra_{directed.number_of_nodes()}"
+            directed.add_node(new_node, type='EMPTY', label='', is_optional=True)
+            directed.add_edge(branch_parent, new_node, edge_type='open')
+            directed.add_edge(new_node, branch_parent, edge_type='open')
+            branch_parent = new_node
+
+        traversal_order = list(nx.bfs_tree(directed.to_undirected(), start_node).nodes())
+        mapping = {old: idx for idx, old in enumerate(traversal_order)}
         normalized = nx.relabel_nodes(directed, mapping, copy=True)
-        
-        # Ensure weak connectivity by linking any disconnected islands.
-        components = list(nx.weakly_connected_components(normalized))
-        if len(components) > 1:
-            for i in range(len(components) - 1):
-                src = min(components[i])
-                dst = min(components[i + 1])
-                normalized.add_edge(src, dst, edge_type='open')
-        
+        normalized_start = mapping[start_node]
+        normalized_goal = mapping[goal_node]
+
         n_nodes = normalized.number_of_nodes()
-        for node_id, attrs in normalized.nodes(data=True):
-            curve_idx = int(round((node_id / max(1, n_nodes - 1)) * (len(tension_curve) - 1))) if tension_curve else 0
-            attrs['tension'] = float(tension_curve[curve_idx]) if tension_curve else float(attrs.get('tension', 0.5))
-            attrs['is_start'] = bool(node_id == 0)
-            attrs['is_boss'] = bool(node_id == n_nodes - 1)
-            attrs['is_triforce'] = bool(node_id == n_nodes - 1)
-            attrs['is_treasure'] = bool(node_id == n_nodes - 1)
-            
+        for order_index, node_id in enumerate(traversal_order):
+            mapped_id = mapping[node_id]
+            attrs = normalized.nodes[mapped_id]
+            curve_idx = (
+                int(round((order_index / max(1, n_nodes - 1)) * (len(tension_curve) - 1)))
+                if tension_curve
+                else 0
+            )
+            attrs['tension'] = (
+                float(tension_curve[curve_idx])
+                if tension_curve
+                else float(attrs.get('tension', 0.5))
+            )
+            attrs['is_start'] = bool(mapped_id == normalized_start)
+            attrs['is_goal'] = bool(mapped_id == normalized_goal)
+
             tokens = [t.strip() for t in str(attrs.get('label', '')).split(',') if t.strip()]
-            if node_id == 0 and 's' not in tokens:
+            tokens = [token for token in tokens if token.lower() not in {'s', 't', 'start', 'goal'}]
+            if mapped_id == normalized_start:
                 tokens.insert(0, 's')
-            if node_id == n_nodes - 1:
-                if 'b' not in tokens:
-                    tokens.append('b')
-                if 't' not in tokens:
-                    tokens.append('t')
-            attrs['label'] = ','.join(tokens)
+            if mapped_id == normalized_goal:
+                tokens.append('t')
+            attrs['label'] = ','.join(dict.fromkeys(tokens))
         
         for _, _, eattrs in normalized.edges(data=True):
             eattrs.setdefault('edge_type', 'open')
@@ -1065,11 +1211,15 @@ class AdvancedNeuralSymbolicPipeline:
     def _identify_big_rooms(self, mission_graph: nx.DiGraph) -> Dict[int, Tuple[int, int]]:
         """Identify which rooms need large sizes (bosses, treasure rooms)."""
         big_rooms = {}
-        
-        # Last room is usually boss
-        nodes = list(mission_graph.nodes())
-        if nodes:
-            boss_node = nodes[-1]
+
+        boss_nodes = [
+            node_id
+            for node_id, attrs in mission_graph.nodes(data=True)
+            if bool(attrs.get('is_boss', False))
+            or str(attrs.get('type', attrs.get('node_type', '')) or '').strip().lower() == 'boss'
+            or 'b' in set(parse_node_label_tokens(str(attrs.get('label', '') or '')))
+        ]
+        for boss_node in boss_nodes:
             big_rooms[boss_node] = self.config.boss_arena_size
         
         return big_rooms
@@ -1531,7 +1681,7 @@ class DungeonGenerationResult:
     visual_grid: np.ndarray  # Themed visual layer
     mission_graph: nx.DiGraph
     room_layout: Dict[int, Tuple[int, int, int, int]]
-    entities: List[Dict[str, Any]]
+    entities: List[Entity]
     stats: PipelineStats
     explainability_mgr: Optional[ExplainabilityManager] = None
     
@@ -1560,6 +1710,16 @@ class DungeonGenerationResult:
                 "diversity_score": self.stats.diversity_score,
                 "collision_alignment": self.stats.collision_alignment_score,
                 "discontinuity_reduction": self.stats.seam_discontinuity_reduction,
+                "graph_solvable": self.stats.graph_solvable,
+                "final_map_solvable": self.stats.final_map_solvable,
+                "final_path_length": self.stats.final_path_length,
+                "final_states_explored": self.stats.final_states_explored,
+                "topology_qd_coverage": self.stats.topology_qd_coverage,
+                "topology_qd_score": self.stats.topology_qd_score,
+                "topology_qd_num_elites": self.stats.topology_qd_num_elites,
+                "topology_qd_infeasible_rejections": self.stats.topology_qd_infeasible_rejections,
+                "final_map_archive_elites": self.stats.final_map_archive_elites,
+                "final_map_archive_coverage": self.stats.final_map_archive_coverage,
                 "decision_count": self.stats.decision_count,
                 "fully_traceable": self.stats.fully_traceable
             }, f, indent=2)

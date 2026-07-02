@@ -121,13 +121,7 @@ def mission_graph_to_networkx(
     # MissionGraph stores PATH edges once but treats them as bidirectional in
     # adjacency/pathfinding; export mirrored arcs so downstream directed graph
     # metrics match generation-time logic.
-    bidirectional_output_types = {
-        EdgeType.PATH,
-        EdgeType.SHORTCUT,
-        EdgeType.WARP,
-        EdgeType.STAIRS,
-        EdgeType.HIDDEN,
-    }
+    bidirectional_output_types = set(graph.BIDIRECTIONAL_EDGE_TYPES)
 
     # Add edges
     for edge in graph.edges:
@@ -144,6 +138,10 @@ def mission_graph_to_networkx(
                 or (
                     source_node.node_type == NodeType.BOSS
                     and target_node.node_type == NodeType.GOAL
+                )
+                or (
+                    edge.edge_type == EdgeType.BOSS_LOCKED
+                    and target_node.node_type == NodeType.BOSS_DOOR
                 )
             )
         )

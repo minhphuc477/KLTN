@@ -168,7 +168,9 @@ def _compute_graph_cognitive_proxy(
         'astar_path_length': int(shortest),
         'cbs_path_length': int(cbs_path_len),
         'astar_states': int(getattr(validation, "states_explored", 0) or max(0, n_physical + e_physical)),
-        'oracle_status': 'solved' if solvable else 'failed',
+        'oracle_status': str(
+            getattr(validation, "termination_status", "solved" if solvable else "failed")
+        ),
         'failure_reason': '' if solvable else str(getattr(validation, "failure_reason", "") or "progression graph unsolved"),
         'is_proxy': 1.0,
     }

@@ -1,7 +1,21 @@
 # LogicNet Grid Pathfinder Ablation Protocol
 
-This protocol compares `logic_grid_pathfinder: cnn` and
-`logic_grid_pathfinder: bellman_ford`.
+This protocol compares four explicitly named LogicNet planner treatments:
+
+- `cnn`: learned local planning baseline.
+- `vin`: learnable recurrent planner baseline; this implementation is not
+  claimed to reproduce every component of the original VIN architecture.
+- `bellman_ford`: conservative differentiable relaxation, evaluated with both
+  complete and deliberately truncated coverage.
+- `perturb_and_map`: stochastic differentiable black-box planner ablation.
+
+Use these partial configs:
+
+- `configs/ablation_no_vin.yaml`
+- `configs/ablation_vin.yaml`
+- `configs/ablation_logic_bellman_full.yaml`
+- `configs/ablation_logic_bellman_truncated.yaml`
+- `configs/ablation_logic_perturb_and_map.yaml`
 
 ## Interpretation
 
@@ -41,7 +55,19 @@ versus:
 ```yaml
 diffusion:
   logic_grid_pathfinder: bellman_ford
+  logic_full_coverage: true
 ```
+
+The truncated-depth treatment changes only:
+
+```yaml
+diffusion:
+  logic_grid_pathfinder: bellman_ford
+  logic_full_coverage: false
+```
+
+Do not interpret truncated Bellman failure as evidence against Bellman
+planning; it is specifically a planning-horizon ablation.
 
 ## Primary Metrics
 

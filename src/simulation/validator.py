@@ -365,8 +365,10 @@ def dominates(state_a: GameState, state_b: GameState) -> bool:
     if not state_a.opened_graph_edges.issuperset(state_b.opened_graph_edges):
         return False
     
-    # Collected items: A's items must be superset of B's items
-    if not state_a.collected_items.issuperset(state_b.collected_items):
+    # Collected pickups include consumable keys and bombs. A state that already
+    # consumed a pickup cannot dominate a state that intentionally left it for
+    # later, even when their current inventories are equal.
+    if state_a.collected_items != state_b.collected_items:
         return False
 
     # Defeated enemies: required for strict-original shutter-door semantics.
@@ -377,9 +379,9 @@ def dominates(state_a: GameState, state_b: GameState) -> bool:
     if not state_a.completed_puzzle_stages.issuperset(state_b.completed_puzzle_stages):
         return False
 
-    # Block-pushing changes world geometry. A state that has not pushed the
-    # blocks pushed by B cannot safely dominate B even with identical inventory.
-    if not state_a.pushed_blocks.issuperset(state_b.pushed_blocks):
+    # Block-pushing changes world geometry; only identical block histories are
+    # comparable without a full canonical dynamic-grid representation.
+    if state_a.pushed_blocks != state_b.pushed_blocks:
         return False
     
     # All checks passed: A dominates B
@@ -401,6 +403,8 @@ class ValidationResult:
     primary_solver_solved: Optional[bool] = None
     primary_solver_error: str = ""
     states_explored: int = 0
+    termination_status: str = "unknown"
+    proven_unsolvable: bool = False
     
     def to_dict(self) -> Dict:
         return {
@@ -410,7 +414,9 @@ class ValidationResult:
             'path_length': self.path_length,
             'backtracking_score': self.backtracking_score,
             'logical_errors': self.logical_errors,
-            'error_message': self.error_message
+            'error_message': self.error_message,
+            'termination_status': self.termination_status,
+            'proven_unsolvable': self.proven_unsolvable,
         }
 
 
@@ -455,6 +461,7 @@ class SolverDiagnostics:
     failure_reason: str = ""
     path_length: int = 0
     final_inventory: Optional[Dict[str, Any]] = None
+    termination_status: str = "unknown"
     
     def summary(self) -> str:
         """Human-readable summary of solver performance."""
@@ -1880,6 +1887,41 @@ class StateSpaceAStar:
             for existing, existing_cost in frontier
             if not self._state_dominates_with_cost(candidate, candidate_cost, existing, existing_cost)
         ] + [(candidate, float(candidate_cost))]
+
+    def _has_live_open_entry(
+        self,
+        open_set: List[Any],
+        closed_set: Set[Any],
+        g_scores: Dict[Any, float],
+    ) -> bool:
+        """Return whether a queued state remains expandable after lazy pruning."""
+        for entry in open_set:
+            if len(entry) == 6:
+                _, _, _hash_hint, current_g, current_state, _path_key = entry
+            elif len(entry) == 5 and isinstance(entry[0], tuple):
+                _priority, _hash_hint, current_g, current_state, _path_key = entry
+            elif len(entry) == 5:
+                _, _, _hash_hint, current_state, _path_key = entry
+                current_g = g_scores.get(self._state_key(current_state), float("inf"))
+            else:
+                continue
+            current_key = self._state_key(current_state)
+            if current_key in closed_set:
+                continue
+            if float(current_g) != float(g_scores.get(current_key, float("inf"))):
+                continue
+            state_bucket = (
+                current_state.position,
+                frozenset(current_state.pushed_blocks),
+            )
+            if self._pareto_frontier_dominates(
+                self._best_at_pos.get(state_bucket, []),
+                current_state,
+                float(current_g),
+            ):
+                continue
+            return True
+        return False
 
     def _edge_constraints_from_data(self, edge_data: Optional[Dict[str, Any]]) -> List[str]:
         """Return canonical edge constraints from edge attributes."""
@@ -3315,13 +3357,15 @@ class StateSpaceAStar:
         if self.env.goal_pos is None:
             return False, [], SolverDiagnostics(
                 success=False, states_explored=0,
-                failure_reason="No goal (TRIFORCE) found in map"
+                failure_reason="No goal (TRIFORCE) found in map",
+                termination_status="invalid",
             )
         
         if self.env.start_pos is None:
             return False, [], SolverDiagnostics(
                 success=False, states_explored=0,
-                failure_reason="No start position found in map"
+                failure_reason="No start position found in map",
+                termination_status="invalid",
             )
         
         # Use read-only grid reference
@@ -3423,7 +3467,8 @@ class StateSpaceAStar:
                         'has_item': current_state.has_item,
                         'doors_opened': len(current_state.opened_doors),
                         'items_collected': len(current_state.collected_items),
-                    }
+                    },
+                    termination_status="solved",
                 )
             
             # Explore neighbors (same logic as solve())
@@ -3560,7 +3605,11 @@ class StateSpaceAStar:
         # Search failed - determine reason
         elapsed_ms = (time.perf_counter() - start_time) * 1000
         
-        if states_explored >= self.timeout:
+        live_frontier = (
+            states_explored >= self.timeout
+            and self._has_live_open_entry(open_set, closed_set, g_scores)
+        )
+        if live_frontier:
             failure_reason = f"Timeout: explored {states_explored:,} states (limit: {self.timeout:,})"
         elif not open_set:
             failure_reason = "No path: all reachable states explored without finding goal"
@@ -3583,7 +3632,8 @@ class StateSpaceAStar:
                 'has_item': final_state.has_item if final_state else False,
                 'doors_opened': len(final_state.opened_doors) if final_state else 0,
                 'items_collected': len(final_state.collected_items) if final_state else 0,
-            } if final_state else None
+            } if final_state else None,
+            termination_status="budget_exhausted" if live_frontier else "exhausted",
         )
 
     def _cache_pickups(self) -> List[Tuple[int, int]]:
@@ -4530,7 +4580,8 @@ class ZeldaValidator:
                        room_positions=None,
                        node_to_room=None,
                        room_puzzle_metadata: Optional[Mapping[str, Any]] = None,
-                       solver_timeout: int = 200000) -> ValidationResult:
+                       solver_timeout: int = 200000,
+                       run_dijkstra_fallback: bool = False) -> ValidationResult:
         """
         Validate a single map.
         
@@ -4554,7 +4605,8 @@ class ZeldaValidator:
                 path_length=0,
                 backtracking_score=0.0,
                 logical_errors=errors,
-                error_message="; ".join(errors)
+                error_message="; ".join(errors),
+                termination_status="invalid",
             )
         
         env_kwargs = {
@@ -4599,6 +4651,15 @@ class ZeldaValidator:
                             )
                         ),
                         path_length=max(0, len(path_i or []) - 1),
+                        termination_status=(
+                            "solved"
+                            if bool(success_i)
+                            else (
+                                "budget_exhausted"
+                                if int(states_i or 0) >= int(max(1, solver_timeout))
+                                else "exhausted"
+                            )
+                        ),
                     )
                 else:
                     success_i, path_i, diagnostics_i = solver.solve_with_diagnostics()
@@ -4612,21 +4673,51 @@ class ZeldaValidator:
         # Step 2: Run primary A* oracle.
         success, path, diagnostics = _run_solver("astar")
         primary_failure = str(getattr(diagnostics, "failure_reason", "") or "")
-        primary_states = int(getattr(diagnostics, "states_explored", 0) or 0)
         solver_used = "hybrid_astar" if graph_guided_primary else "astar"
 
         # Step 3: Exact fallback. Stateful puzzle mechanics increased
         # path-dependence, so use uniform-cost search as the completeness
         # preserving fallback when heuristic A* underperforms.
-        if not success:
-            fallback_success, fallback_path, fallback_diagnostics = _run_solver("dijkstra")
+        if not success and bool(run_dijkstra_fallback):
+            primary_states = int(getattr(diagnostics, "states_explored", 0) or 0)
+            remaining_budget = max(0, int(max(1, solver_timeout)) - primary_states)
+            if remaining_budget <= 0:
+                fallback_success = False
+                fallback_path = []
+                fallback_diagnostics = diagnostics
+            else:
+                original_timeout = solver_timeout
+                try:
+                    solver_timeout = remaining_budget
+                    fallback_success, fallback_path, fallback_diagnostics = _run_solver("dijkstra")
+                finally:
+                    solver_timeout = original_timeout
+                fallback_diagnostics.states_explored = (
+                    int(fallback_diagnostics.states_explored) + primary_states
+                )
             if fallback_success:
                 success = True
                 path = fallback_path
                 diagnostics = fallback_diagnostics
                 solver_used = "dijkstra_fallback"
+            elif fallback_diagnostics is not diagnostics:
+                diagnostics = fallback_diagnostics
+                solver_used = "astar_then_dijkstra"
 
         if not success:
+            fallback_diagnostics = diagnostics
+            exact_states = int(
+                getattr(
+                    fallback_diagnostics,
+                    "states_explored",
+                    0,
+                )
+                or 0
+            )
+            final_status = str(
+                getattr(fallback_diagnostics, "termination_status", "unknown")
+            )
+            budget_exhausted = final_status == "budget_exhausted"
             return ValidationResult(
                 is_solvable=False,
                 is_valid_syntax=True,
@@ -4634,11 +4725,17 @@ class ZeldaValidator:
                 path_length=0,
                 backtracking_score=0.0,
                 logical_errors=["Exact tile-state oracle failed to find path"],
-                error_message=f"No solution found after exploring {primary_states} states",
+                error_message=(
+                    f"Search budget exhausted after exploring {exact_states} states"
+                    if budget_exhausted
+                    else f"No solution found after exhausting {exact_states} states"
+                ),
                 solver_used=solver_used,
                 primary_solver_solved=False,
                 primary_solver_error=primary_failure,
-                states_explored=int(getattr(diagnostics, "states_explored", 0) or 0),
+                states_explored=exact_states,
+                termination_status="budget_exhausted" if budget_exhausted else "exhausted",
+                proven_unsolvable=not budget_exhausted,
             )
 
         # Step 4: Recreate environment for metrics/rendering on the winning path.
@@ -4671,6 +4768,7 @@ class ZeldaValidator:
             primary_solver_solved=bool(solver_used in {"astar", "hybrid_astar"}),
             primary_solver_error=primary_failure if solver_used != "astar" else "",
             states_explored=int(getattr(diagnostics, "states_explored", 0) or 0),
+            termination_status="solved",
         )
     
     def check_soft_locks(

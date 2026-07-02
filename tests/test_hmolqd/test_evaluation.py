@@ -112,6 +112,129 @@ class TestAgentSimulator:
         result_unswitched = simulator.simulate(unswitched)
         assert result_unswitched.is_solvable is False
 
+    def test_simulation_consumes_small_keys_across_multiple_locks(self):
+        """One small key must not satisfy two distinct unopened lock edges."""
+        from src.evaluation.validator import AgentSimulator
+
+        graph = nx.DiGraph()
+        graph.add_node("s", type="START")
+        graph.add_node("key", type="KEY", key_count=1)
+        graph.add_node("room", type="EMPTY")
+        graph.add_node("g", type="GOAL")
+        graph.add_edge("s", "key", edge_type="OPEN")
+        graph.add_edge("key", "room", edge_type="LOCKED", requires_key_count=1)
+        graph.add_edge("room", "g", edge_type="LOCKED", requires_key_count=1)
+
+        assert AgentSimulator(graph).find_path().is_solvable is False
+
+        graph.add_node("key_2", type="KEY", key_count=1)
+        graph.remove_edge("key", "room")
+        graph.add_edge("key", "key_2", edge_type="OPEN")
+        graph.add_edge("key_2", "room", edge_type="LOCKED", requires_key_count=1)
+        assert AgentSimulator(graph).find_path().is_solvable is True
+
+    def test_simulation_preserves_named_item_identity(self):
+        """A raft provider must not satisfy a gate that explicitly requires a bow."""
+        from src.evaluation.validator import AgentSimulator
+
+        graph = nx.DiGraph()
+        graph.add_node("s", type="START")
+        graph.add_node("item", type="ITEM", item_type="RAFT")
+        graph.add_node("g", type="GOAL")
+        graph.add_edge("s", "item", edge_type="OPEN")
+        graph.add_edge("item", "g", edge_type="ITEM_GATE", item_required="BOW")
+
+        assert AgentSimulator(graph).find_path().is_solvable is False
+        graph.nodes["item"]["item_type"] = "BOW"
+        assert AgentSimulator(graph).find_path().is_solvable is True
+
+    def test_simulation_enforces_multi_lock_token_count(self):
+        """Token locks require the declared cumulative number of tokens."""
+        from src.evaluation.validator import AgentSimulator
+
+        graph = nx.DiGraph()
+        graph.add_node("s", type="START")
+        graph.add_node("tokens", type="TOKEN", token_id="TRI", token_count=2)
+        graph.add_node("g", type="GOAL")
+        graph.add_edge("s", "tokens", edge_type="OPEN")
+        graph.add_edge(
+            "tokens",
+            "g",
+            edge_type="MULTI_LOCK",
+            token_id="TRI",
+            token_count=2,
+        )
+
+        assert AgentSimulator(graph).find_path().is_solvable is True
+        graph.nodes["tokens"]["token_count"] = 1
+        assert AgentSimulator(graph).find_path().is_solvable is False
+
+    def test_simulation_does_not_pool_unrelated_token_ids(self):
+        """A same-ID token lock cannot borrow count from unrelated token types."""
+        from src.evaluation.validator import AgentSimulator
+
+        graph = nx.DiGraph()
+        graph.add_node("s", type="START")
+        graph.add_node("tri", type="TOKEN", token_id="TRI", token_count=1)
+        graph.add_node("moon", type="TOKEN", token_id="MOON", token_count=1)
+        graph.add_node("g", type="GOAL")
+        graph.add_edge("s", "tri", edge_type="OPEN")
+        graph.add_edge("tri", "moon", edge_type="OPEN")
+        graph.add_edge(
+            "moon",
+            "g",
+            edge_type="MULTI_LOCK",
+            token_id="TRI",
+            token_count=2,
+        )
+
+        assert AgentSimulator(graph).find_path().is_solvable is False
+
+    def test_simulation_enforces_all_composite_edge_constraints(self):
+        """Composite VGLC gates require every listed resource/state conjunct."""
+        from src.evaluation.validator import AgentSimulator
+
+        graph = nx.DiGraph()
+        graph.add_node("s", type="START")
+        graph.add_node("item", type="ITEM", item_type="BOW")
+        graph.add_node("switch", type="SWITCH", switch_id=7)
+        graph.add_node("g", type="GOAL")
+        graph.add_edge("s", "item", edge_type="OPEN")
+        graph.add_edge("item", "switch", edge_type="OPEN")
+        graph.add_edge(
+            "switch",
+            "g",
+            label="I,S1",
+            edge_type="item_gate,switch_locked",
+            item_required="BOW",
+            switches_required=[7],
+        )
+        assert AgentSimulator(graph).find_path().is_solvable is True
+
+        graph.nodes["switch"].clear()
+        graph.nodes["switch"]["type"] = "EMPTY"
+        assert AgentSimulator(graph).find_path().is_solvable is False
+
+    def test_simulation_distinguishes_budget_exhaustion_from_proven_failure(self):
+        """A capped search is indeterminate, not a proof of unsolvability."""
+        from src.evaluation.validator import AgentSimulator
+
+        chain = nx.DiGraph()
+        chain.add_node(0, type="START")
+        chain.add_node(1, type="EMPTY")
+        chain.add_node(2, type="GOAL")
+        chain.add_edge(0, 1, edge_type="OPEN")
+        chain.add_edge(1, 2, edge_type="OPEN")
+        capped = AgentSimulator(chain).find_path(max_states=1)
+        assert capped.termination_status == "budget_exhausted"
+        assert capped.proven_unsolvable is False
+
+        disconnected = chain.copy()
+        disconnected.remove_edge(1, 2)
+        exhausted = AgentSimulator(disconnected).find_path()
+        assert exhausted.termination_status == "exhausted"
+        assert exhausted.proven_unsolvable is True
+
 
 class TestSolvabilityChecker:
     """Tests for solvability checking."""
@@ -186,6 +309,32 @@ class TestExternalValidator:
 
         assert result.is_solvable is True
         assert result.path_length >= 2
+
+    def test_validate_graph_requires_named_protection_for_hazard(self):
+        from src.evaluation.validator import ExternalValidator
+
+        graph = nx.DiGraph()
+        graph.add_node(0, type="START")
+        graph.add_node(1, type="PROTECTION_ITEM", protection_item_id="FIRE_TUNIC")
+        graph.add_node(2, type="GOAL")
+        graph.add_edge(0, 1, edge_type="OPEN")
+        graph.add_edge(
+            1,
+            2,
+            edge_type="HAZARD",
+            protection_item_id="FIRE_TUNIC",
+        )
+
+        assert ExternalValidator().validate(graph).is_solvable is True
+
+        graph.remove_edge(0, 1)
+        graph.add_edge(
+            0,
+            2,
+            edge_type="HAZARD",
+            protection_item_id="FIRE_TUNIC",
+        )
+        assert ExternalValidator().validate(graph).is_solvable is False
 
 
 class TestCBSFitnessProxy:

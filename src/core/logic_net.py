@@ -124,6 +124,35 @@ def soft_threshold(x: Tensor, threshold: float, temperature: float = 1.0) -> Ten
     return torch.sigmoid((threshold - x) / temperature)
 
 
+def conservative_soft_min(
+    x: Tensor,
+    *,
+    dim: int,
+    temperature: float,
+    finite_mask: Optional[Tensor] = None,
+) -> Tensor:
+    """
+    Smooth minimum that does not undercut the smallest finite candidate.
+
+    A raw ``-tau * logsumexp(-x / tau)`` is lower than the hard minimum when
+    several alternatives have similar cost. Reapplying that operator inside an
+    undiscounted Bellman loop creates an artificial negative cycle. Using the
+    log-mean-exp over finite candidates preserves equality for duplicate paths
+    and converges to the hard minimum as ``tau`` approaches zero.
+    """
+    tau = max(float(temperature), 1e-6)
+    values = x.float()
+    if finite_mask is None:
+        finite_mask = torch.isfinite(values)
+    else:
+        finite_mask = finite_mask.to(device=values.device, dtype=torch.bool)
+    masked = torch.where(finite_mask, values, torch.full_like(values, float("inf")))
+    count = finite_mask.sum(dim=dim).clamp_min(1).to(dtype=values.dtype)
+    result = -tau * torch.logsumexp(-masked / tau, dim=dim)
+    result = result + tau * torch.log(count)
+    return result.to(dtype=x.dtype)
+
+
 # ============================================================================
 # DIFFERENTIABLE PATHFINDER
 # ============================================================================
@@ -149,7 +178,9 @@ class DifferentiablePathfinder(nn.Module):
         num_iterations: int = 20,
         iterations: Optional[int] = None,
         temperature: float = 0.1,
-        inf_distance: float = 20.0,
+        inf_distance: float = 1_000_000.0,
+        full_coverage: bool = True,
+        convergence_tolerance: float = 1e-5,
     ):
         super().__init__()
 
@@ -160,11 +191,46 @@ class DifferentiablePathfinder(nn.Module):
         self.temperature = temperature
         self.inf_distance = inf_distance
         self.wall_penalty_scale = min(10.0, max(1.0, float(inf_distance) * 0.5))
+        self.full_coverage = bool(full_coverage)
+        self.convergence_tolerance = float(max(0.0, convergence_tolerance))
+
+    def _iteration_limit(self, node_count: int) -> int:
+        requested = int(max(1, self.num_iterations))
+        if not self.full_coverage:
+            return requested
+        return max(requested, max(1, int(node_count) - 1))
+
+    def _has_converged(self, previous: Tensor, current: Tensor) -> bool:
+        if self.convergence_tolerance <= 0.0:
+            return False
+        # A Python boolean forces a device synchronization. Keep training
+        # iterations fixed and deterministic; inference can stop early.
+        if torch.is_grad_enabled() and bool(current.requires_grad):
+            return False
+        with torch.no_grad():
+            delta = torch.nan_to_num(
+                (current.detach().float() - previous.detach().float()).abs(),
+                nan=float("inf"),
+                posinf=float("inf"),
+                neginf=float("inf"),
+            )
+            return bool(delta.max().item() <= self.convergence_tolerance)
 
     def _should_checkpoint_relaxation(self, *tensors: Tensor) -> bool:
+        dynamic_problem_size = max(
+            (
+                int(t.numel())
+                for t in tensors
+                if isinstance(t, torch.Tensor)
+            ),
+            default=0,
+        )
         return (
             bool(torch.is_grad_enabled())
-            and int(self.num_iterations) > 32
+            and (
+                int(self.num_iterations) > 32
+                or (self.full_coverage and dynamic_problem_size > 64)
+            )
             and any(isinstance(t, torch.Tensor) and bool(t.requires_grad) for t in tensors)
         )
 
@@ -189,7 +255,6 @@ class DifferentiablePathfinder(nn.Module):
         step_cost = traversal_cost + wall_cost
         candidates = torch.stack(
             [
-                dist,
                 up + step_cost,
                 down + step_cost,
                 left + step_cost,
@@ -197,11 +262,17 @@ class DifferentiablePathfinder(nn.Module):
             ],
             dim=0,
         ).clamp(-inf, inf)
-        has_finite_candidate = (candidates < (inf - 1e-6)).any(dim=0)
-        relaxed = soft_min(candidates, dim=0, temperature=max(self.temperature, 1e-4))
+        finite_candidates = candidates < (inf - 1e-6)
+        has_finite_candidate = finite_candidates.any(dim=0)
+        relaxed = conservative_soft_min(
+            candidates,
+            dim=0,
+            temperature=max(self.temperature, 1e-4),
+            finite_mask=finite_candidates,
+        )
         relaxed = torch.where(has_finite_candidate, relaxed, torch.full_like(relaxed, inf))
-        dist = relaxed.clamp(-inf, inf)
-        dist = dist * (1.0 - start) + torch.zeros_like(dist) * start
+        dist = torch.minimum(dist, relaxed).clamp(0.0, inf)
+        dist = torch.where(start > 0.5, torch.zeros_like(dist), dist)
         return dist.clamp(-inf, inf)
 
     def _graph_relax_step(
@@ -226,24 +297,18 @@ class DifferentiablePathfinder(nn.Module):
         else:
             raise ValueError(f"Graph relaxation expects distances [N] or [B,N], got {tuple(distances.shape)}.")
         has_finite_candidate = (candidates < (inf - 1e-6)).any(dim=reduce_dim)
-        new_distances = soft_min(candidates, dim=reduce_dim, temperature=self.temperature)
+        new_distances = conservative_soft_min(
+            candidates,
+            dim=reduce_dim,
+            temperature=self.temperature,
+            finite_mask=candidates < (inf - 1e-6),
+        )
         new_distances = torch.where(
             has_finite_candidate,
             new_distances,
             torch.full_like(new_distances, inf),
         )
-        keep_candidates = torch.stack([distances, new_distances], dim=0)
-        keep_has_finite = (keep_candidates < (inf - 1e-6)).any(dim=0)
-        distances = soft_min(
-            keep_candidates,
-            dim=0,
-            temperature=max(self.temperature, 1e-4),
-        )
-        distances = torch.where(
-            keep_has_finite,
-            distances,
-            torch.full_like(distances, inf),
-        ).clamp(-inf, inf)
+        distances = torch.minimum(distances, new_distances).clamp(0.0, inf)
         return torch.where(source_mask.bool(), torch.zeros_like(distances), distances)
     
     def forward(
@@ -314,7 +379,12 @@ class DifferentiablePathfinder(nn.Module):
             B, H, W = walkability.shape
             device = walkability.device
 
-            dist = torch.full((B, H, W), float(self.inf_distance), device=device)
+            dist = torch.full(
+                (B, H, W),
+                float(self.inf_distance),
+                device=device,
+                dtype=torch.float32,
+            )
             dist = torch.where(start > 0.5, torch.zeros_like(dist), dist)
 
             # Soft Bellman-style relaxation over 4-neighborhood. Historical
@@ -323,7 +393,8 @@ class DifferentiablePathfinder(nn.Module):
             # source mask; this still computes a valid distance field from the
             # requested source while avoiding ambiguous argument inversion.
             use_checkpoint = self._should_checkpoint_relaxation(walkability, traversal_cost, start)
-            for _ in range(self.num_iterations):
+            for _ in range(self._iteration_limit(H * W)):
+                previous = dist
                 if use_checkpoint:
                     dist = checkpoint(
                         self._grid_relax_step,
@@ -335,6 +406,8 @@ class DifferentiablePathfinder(nn.Module):
                     )
                 else:
                     dist = self._grid_relax_step(dist, walkability, traversal_cost, start)
+                if self._has_converged(previous, dist):
+                    break
 
             return dist
 
@@ -349,6 +422,9 @@ class DifferentiablePathfinder(nn.Module):
                 raise ValueError(
                     f"Batched graph source_mask shape {tuple(source_mask.shape)} must match [B,N]={tuple(adjacency.shape[:2])}."
                 )
+            adjacency = adjacency.float()
+            edge_weights = edge_weights.float()
+            source_mask = source_mask.float()
             B, N, _ = adjacency.shape
             device = adjacency.device
             distances = torch.where(
@@ -362,7 +438,8 @@ class DifferentiablePathfinder(nn.Module):
                 torch.full_like(edge_weights, self.inf_distance),
             ).clamp(-float(self.inf_distance), float(self.inf_distance))
             use_checkpoint = self._should_checkpoint_relaxation(effective_weights, source_mask)
-            for _ in range(self.num_iterations):
+            for _ in range(self._iteration_limit(N)):
+                previous = distances
                 if use_checkpoint:
                     distances = checkpoint(
                         self._graph_relax_step,
@@ -373,6 +450,8 @@ class DifferentiablePathfinder(nn.Module):
                     )
                 else:
                     distances = self._graph_relax_step(distances, effective_weights, source_mask)
+                if self._has_converged(previous, distances):
+                    break
             return distances
 
         if adjacency.ndim != 2 or edge_weights.ndim != 2 or source_mask.ndim != 1:
@@ -393,6 +472,9 @@ class DifferentiablePathfinder(nn.Module):
                 f"Graph mode source_mask length {source_mask.shape[0]} must equal N={adjacency.shape[0]}."
             )
 
+        adjacency = adjacency.float()
+        edge_weights = edge_weights.float()
+        source_mask = source_mask.float()
         N = adjacency.shape[0]
         device = adjacency.device
         
@@ -412,7 +494,8 @@ class DifferentiablePathfinder(nn.Module):
         
         # Bellman-Ford iterations
         use_checkpoint = self._should_checkpoint_relaxation(effective_weights, source_mask)
-        for _ in range(self.num_iterations):
+        for _ in range(self._iteration_limit(N)):
+            previous = distances
             if use_checkpoint:
                 distances = checkpoint(
                     self._graph_relax_step,
@@ -423,6 +506,8 @@ class DifferentiablePathfinder(nn.Module):
                 )
             else:
                 distances = self._graph_relax_step(distances, effective_weights, source_mask)
+            if self._has_converged(previous, distances):
+                break
         
         return distances
 
@@ -518,6 +603,7 @@ class SoftBellmanFordGridPathfinder(nn.Module):
         num_iterations: int = 20,
         temperature: float = 0.1,
         num_classes: int = 44,
+        full_coverage: bool = True,
     ):
         super().__init__()
         self.num_classes = int(max(1, num_classes))
@@ -535,6 +621,7 @@ class SoftBellmanFordGridPathfinder(nn.Module):
         self.pathfinder = DifferentiablePathfinder(
             num_iterations=num_iterations,
             temperature=temperature,
+            full_coverage=full_coverage,
         )
 
         walkability = torch.zeros(self.num_classes)
@@ -1175,6 +1262,7 @@ class LogicNet(nn.Module):
         global_reach_weight: float = 1.0,
         global_room_weight: float = 0.25,
         grid_pathfinder_type: str = "bellman_ford",
+        full_coverage: bool = True,
         # --- Phase 1D: Temperature annealing (Jang et al., 2017) ---
         initial_temperature: float = 1.0,
         final_temperature: float = 0.05,
@@ -1192,6 +1280,7 @@ class LogicNet(nn.Module):
         self.global_reach_weight = float(max(0.0, global_reach_weight))
         self.global_room_weight = float(max(0.0, global_room_weight))
         self.grid_pathfinder_type = str(grid_pathfinder_type).strip().lower()
+        self.full_coverage = bool(full_coverage)
         if self.grid_pathfinder_type in {"bellman-ford", "soft_bellman_ford", "soft-bellman-ford"}:
             self.grid_pathfinder_type = "bellman_ford"
         if self.grid_pathfinder_type in {"value_iteration", "value-iteration"}:
@@ -1228,6 +1317,7 @@ class LogicNet(nn.Module):
                 num_iterations=num_iterations,
                 temperature=temperature,
                 num_classes=num_classes,
+                full_coverage=self.full_coverage,
             )
         elif self.grid_pathfinder_type == "vin":
             self.grid_pathfinder = LearnableGridPathfinder(
@@ -1252,6 +1342,7 @@ class LogicNet(nn.Module):
         self.graph_pathfinder = DifferentiablePathfinder(
             num_iterations=num_iterations,
             temperature=temperature,
+            full_coverage=self.full_coverage,
         )
         self.semantic_edge_encoder = SemanticEdgeEncoder()
         
@@ -1371,8 +1462,6 @@ class LogicNet(nn.Module):
             boundary_constraints[:, 0::2],
             boundary_constraints[:, 1::2],
         ).clamp(0.0, 1.0)
-        if float(active.sum().item()) <= 0.0:
-            return None
 
         height, width = int(spatial_hw[0]), int(spatial_hw[1])
         mask = torch.zeros(batch_size, 1, height, width, device=device, dtype=dtype)
@@ -1402,6 +1491,32 @@ class LogicNet(nn.Module):
         }
         if not isinstance(graph_data, dict):
             return targets
+
+        def _explicit_mask(name: str) -> Optional[Tensor]:
+            value = graph_data.get(name)
+            if not isinstance(value, torch.Tensor):
+                return None
+            mask = value.to(device=device, dtype=dtype)
+            if mask.dim() == 3:
+                mask = mask.unsqueeze(1)
+            if mask.dim() != 4 or int(mask.shape[1]) != 1:
+                raise ValueError(
+                    f"LogicNet graph_data[{name!r}] must have shape [B,1,H,W] or [B,H,W], "
+                    f"got {tuple(mask.shape)}."
+                )
+            if int(mask.shape[0]) == 1 and batch_size > 1:
+                mask = mask.expand(batch_size, -1, -1, -1)
+            elif int(mask.shape[0]) != batch_size:
+                raise ValueError(
+                    f"LogicNet graph_data[{name!r}] batch {int(mask.shape[0])} "
+                    f"does not match latent batch {batch_size}."
+                )
+            if tuple(mask.shape[-2:]) != tuple(spatial_hw):
+                mask = F.interpolate(mask.float(), size=spatial_hw, mode="nearest")
+            return mask.clamp(0.0, 1.0)
+
+        explicit_source = _explicit_mask("logic_source_mask")
+        explicit_target = _explicit_mask("logic_target_mask")
 
         topology_map = self._normalize_room_topology_map(
             graph_data.get("room_topology_map"),
@@ -1453,22 +1568,42 @@ class LogicNet(nn.Module):
         elif boundary_door_target is not None:
             door_target = torch.maximum(door_target, boundary_door_target)
 
-        if start_target is not None and float(start_target.sum().item()) > 0.0:
-            targets["source_mask"] = start_target
-        elif door_target is not None and float(door_target.sum().item()) > 0.0:
-            targets["source_mask"] = door_target
+        def _first_nonempty_per_sample(*candidates: Optional[Tensor]) -> Optional[Tensor]:
+            available = [candidate for candidate in candidates if candidate is not None]
+            if not available:
+                return None
+            selected = torch.zeros_like(available[0])
+            assigned = torch.zeros(
+                batch_size,
+                1,
+                1,
+                1,
+                device=device,
+                dtype=torch.bool,
+            )
+            for candidate in available:
+                has_signal = candidate.amax(dim=(1, 2, 3), keepdim=True) > 0.0
+                choose = has_signal & ~assigned
+                selected = torch.where(choose, candidate, selected)
+                assigned = assigned | has_signal
+            return selected
 
-        if goal_target is not None and float(goal_target.sum().item()) > 0.0:
-            targets["target_mask"] = goal_target
-        elif trace_target is not None and float(trace_target.sum().item()) > 0.0:
-            targets["target_mask"] = trace_target
-        elif door_target is not None and float(door_target.sum().item()) > 0.0:
-            targets["target_mask"] = door_target
+        targets["source_mask"] = _first_nonempty_per_sample(
+            explicit_source,
+            start_target,
+            door_target,
+        )
+        targets["target_mask"] = _first_nonempty_per_sample(
+            explicit_target,
+            goal_target,
+            trace_target,
+            door_target,
+        )
 
         anchor_parts = [
             maybe
             for maybe in (start_target, goal_target, door_target)
-            if maybe is not None and float(maybe.sum().item()) > 0.0
+            if maybe is not None
         ]
         if anchor_parts:
             targets["anchor_target"] = torch.clamp(
@@ -1476,7 +1611,7 @@ class LogicNet(nn.Module):
                 0.0,
                 1.0,
             )
-        if trace_target is not None and float(trace_target.sum().item()) > 0.0:
+        if trace_target is not None:
             targets["trace_target"] = trace_target
 
         return targets
@@ -1874,9 +2009,14 @@ class LogicNet(nn.Module):
                 if not isinstance(pair, (list, tuple)) or len(pair) != 2:
                     continue
                 k = self._coerce_optional_int(pair[0])
-                l = self._coerce_optional_int(pair[1])
-                if k is not None and l is not None and 0 <= k < n and 0 <= l < n:
-                    pairs.append((k, l))
+                lock_idx = self._coerce_optional_int(pair[1])
+                if (
+                    k is not None
+                    and lock_idx is not None
+                    and 0 <= k < n
+                    and 0 <= lock_idx < n
+                ):
+                    pairs.append((k, lock_idx))
         if not pairs and isinstance(node_features, torch.Tensor) and node_features.dim() == 2 and node_features.shape[1] > 1:
             key_nodes = torch.nonzero(node_features[:n, 1] > 0.5, as_tuple=False).flatten().tolist()
             locked_targets: List[int] = []
@@ -2234,11 +2374,8 @@ class LogicNet(nn.Module):
         )
         source_mask = room_logic_targets.get("source_mask")
         if source_mask is None:
-            source_mask = self._create_single_cell_source_mask(
-                walkability,
-                differentiable=self.grid_pathfinder_type != "perturb_and_map",
-            )
-            info["source_mask_mode"] = "single_walkable_cell"
+            source_mask = self._create_single_cell_source_mask(walkability)
+            info["source_mask_mode"] = "shape_center_fallback"
         else:
             info["source_mask_mode"] = "topology"
 
@@ -2256,7 +2393,13 @@ class LogicNet(nn.Module):
         soft_walkable_mask = torch.sigmoid(10.0 * (walkability - 0.5))
         grid_target_mask = room_logic_targets.get("target_mask")
         if grid_target_mask is None:
-            grid_target_mask = soft_walkable_mask
+            # Without topology there is no defensible start-goal claim. Use a
+            # fixed coverage objective instead of letting the prediction define
+            # its own target mask, which made all-wall rooms nearly loss-free.
+            grid_target_mask = torch.ones_like(soft_walkable_mask)
+            info["target_mask_mode"] = "room_coverage_fallback"
+        else:
+            info["target_mask_mode"] = "topology"
         grid_reach_scores, grid_reach_loss = self.reachability(
             grid_distances.reshape(B, -1),
             grid_target_mask.reshape(B, -1),
@@ -2338,26 +2481,13 @@ class LogicNet(nn.Module):
     def _create_single_cell_source_mask(
         self,
         walkability: Tensor,
-        *,
-        differentiable: bool = True,
     ) -> Tensor:
-        """Create one fallback source when topology metadata is unavailable."""
+        """Create a deterministic fallback source when topology is unavailable."""
         if walkability.dim() != 4 or int(walkability.shape[1]) != 1:
             raise ValueError(f"walkability must be [B,1,H,W], got {tuple(walkability.shape)}.")
         B, _C, H, W = walkability.shape
-        flat_walkability = walkability.reshape(B, -1)
-        if differentiable:
-            # Keep the fallback differentiable for Bellman-Ford/VIN so the
-            # reachability proxy can still shape the walkability field.
-            return F.softmax((flat_walkability / 0.1).float(), dim=1).to(dtype=flat_walkability.dtype).reshape(B, 1, H, W)
-
-        # Perturb-and-MAP samples discrete shortest-path structures and expects
-        # a single anchored source. Use the old hard anchor only for that mode.
-        flat_idx = flat_walkability.detach().argmax(dim=1)
         mask = torch.zeros(B, 1, H, W, device=walkability.device, dtype=walkability.dtype)
-        rows = flat_idx // W
-        cols = flat_idx % W
-        mask[torch.arange(B, device=walkability.device), 0, rows, cols] = 1.0
+        mask[:, 0, H // 2, W // 2] = 1.0
         return mask
     
     def get_gradient(

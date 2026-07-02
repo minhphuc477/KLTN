@@ -1,0 +1,8 @@
+# Default differentiable planning treatment: conservative Bellman relaxation
+# with enough iterations to cover the complete room grid.
+training:
+  stage: diffusion
+
+diffusion:
+  logic_grid_pathfinder: bellman_ford
+  logic_full_coverage: true

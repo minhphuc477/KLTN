@@ -164,6 +164,7 @@ diffusion:
   logic_learning_rate: null  # type=float|null, default=null, valid>=1e-8; optional LogicNet-specific LR
   logic_lr_warmup_epochs: 5  # type=int, default=5, valid>=0; linearly warm up only the LogicNet optimizer group
   logic_grid_pathfinder: bellman_ford  # type=str, default=bellman_ford, valid={cnn,bellman_ford,vin,perturb_and_map}; grid-pathfinder ablation
+  logic_full_coverage: true  # type=bool, default=true; false is the explicitly truncated Bellman-planning ablation
   num_logic_iterations: 30  # type=int, default=30, valid>=1
   logic_topology_trace_weight: 0.25  # type=float, default=0.25, valid>=0; extra LogicNet pressure on mission-conditioned traversability traces
   logic_topology_anchor_weight: 0.25  # type=float, default=0.25, valid>=0; extra LogicNet pressure on start/goal/door anchor walkability
@@ -182,6 +183,10 @@ diffusion:
   alpha_logic: 0.1  # type=float, default=0.1, valid>=0
   alpha_logic_tile: 0.05  # type=float, default=0.05, valid>=0; supervised TileClassifier CE loss on frozen VQ-VAE latents
   alpha_wfc_pseudo: 0.0  # type=float, default=0.0, valid>=0; disabled by default because WFC pseudo-label distillation is an opt-in repair teacher
+  wfc_pseudo_max_samples: 2  # type=int, default=2, valid>=0; bounds pseudo-repair cost per training batch
+  wfc_pseudo_confidence_threshold: 0.75  # type=float, default=0.75, valid=0..1; pins only sufficiently confident predictions
+  min_logic_tile_accuracy_for_guidance: 0.4  # type=float, default=0.4, valid>=0; disables uncalibrated LogicNet sampling guidance
+  graph_spatial_alignment_weight: 0.0  # type=float, default=0.0, valid>=0; opt-in graph-to-grid attention alignment ablation
   logic_loss_mode: predicted_latent  # type=str, default=predicted_latent, valid={predicted_latent,detached_real}
   warmup_epochs: 5  # type=int, default=5, valid>=0
   logic_loss_ramp_epochs: 2  # type=int, default=2, valid>=1; linearly ramps alpha_logic after warmup so LogicNet pressure does not destabilize early denoising
@@ -208,12 +213,16 @@ topology:
   qd_archive_cells: 128  # type=int, default=128, valid>=32
   qd_init_random_fraction: 0.35  # type=float, default=0.35, valid=0.05..0.95
   qd_emitter_mutation_rate: 0.18  # type=float, default=0.18, valid=0.01..0.95
+  qd_archive_path: null  # type=str|null, default=null; optional persisted CVT archive
+  qd_load_archive: false  # type=bool, default=false; warm-start from qd_archive_path
+  qd_autosave_archive: false  # type=bool, default=false; persist the archive during and after search
   max_lock_key_rules: 3  # type=int, default=3, valid>=0
   enable_rule_credit_assignment: false  # type=bool, default=false, valid={true,false}
   enforce_generation_constraints: false  # type=bool, default=false, valid={true,false}
   allow_candidate_repairs: false  # type=bool, default=false, valid={true,false}
 
 generation:
+  room_generator_mode: latent_diffusion  # type=str, default=latent_diffusion, valid={latent_diffusion,discrete_masked}
   guidance_scale: 3.0  # type=float, default=3.0, valid>=0; align runtime CFG with the trained diffusion teacher
   logic_guidance_scale: 0.0  # type=float, default=0.0, valid>=0; keep extra LogicNet gradient guidance opt-in at runtime
   logic_guidance_strategy: late  # type=str, default=late, valid={none,late,full}; late=final reverse steps only, full=full-trajectory DPPS ablation
@@ -347,6 +356,7 @@ masked_room:
   logic_topology_trace_weight: 0.25  # type=float, default=0.25, valid>=0
   logic_topology_anchor_weight: 0.25  # type=float, default=0.25, valid>=0
   logic_grid_pathfinder: bellman_ford  # type=str, default=bellman_ford, valid={bellman_ford,conv,cnn,vin,learnable,perturb_and_map}
+  logic_full_coverage: true  # type=bool, default=true; false is the truncated Bellman-planning ablation
   num_logic_iterations: 30  # type=int, default=30, valid>=1
   puzzle_structure_dropout_prob: 0.35  # type=float, default=0.35, valid=0..1; train-only paired augmentation rate for puzzle rooms so masked-room learns puzzle-on / puzzle-off room structure explicitly
   puzzle_stage_conditioning_enabled: false  # type=bool, default=false, valid={true,false}; append ordered puzzle-stage tokens to masked-room conditioning for the staged-puzzle retrain only

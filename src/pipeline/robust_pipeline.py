@@ -41,6 +41,11 @@ class PipelineConfig:
     backoff_multiplier: float = 2.0  # Exponential backoff multiplier
     enable_logging: bool = True
     timeout_per_block: Optional[float] = None  # Seconds, None = no timeout
+    human_playability_filter_enabled: bool = False
+    human_playability_persona: str = "balanced"
+    human_playability_astar_budget: int = 100_000
+    human_playability_pcbs_budget: int = 5_000
+    human_playability_max_normalized_confusion: float = 1.0
 
 
 class PipelineBlock:
@@ -287,6 +292,34 @@ class RobustPipeline:
                 # Block failed after all retries
                 logger.error(f"Pipeline aborted at {block_name}")
                 return False, pipeline_state, diagnostics
+
+            if (
+                block_name == "wfc_refiner"
+                and self.config.human_playability_filter_enabled
+            ):
+                started = time.time()
+                accepted, metrics = evaluate_human_playability(
+                    pipeline_state,
+                    persona=self.config.human_playability_persona,
+                    astar_budget=self.config.human_playability_astar_budget,
+                    pcbs_budget=self.config.human_playability_pcbs_budget,
+                    max_normalized_confusion=(
+                        self.config.human_playability_max_normalized_confusion
+                    ),
+                )
+                diagnostics["human_playability"] = BlockResult(
+                    status=BlockStatus.SUCCESS if accepted else BlockStatus.FAILED,
+                    output=metrics,
+                    error=None if accepted else "P-CBS acceptance policy rejected the dungeon",
+                    execution_time=time.time() - started,
+                )
+                pipeline_state["human_playability_metrics"] = metrics
+                if not accepted:
+                    logger.info(
+                        "Pipeline rejected the exact-solvable dungeon under the "
+                        "opt-in P-CBS acceptance policy"
+                    )
+                    return False, pipeline_state, diagnostics
         
         logger.info("=" * 60)
         logger.info("[OK] Pipeline completed successfully")
@@ -326,7 +359,7 @@ class RobustPipeline:
 # ===== Built-in Validators =====
 
 def validate_mission_graph(graph: Any) -> bool:
-    """Validate mission graph structure."""
+    """Validate mission graph structure and resource-aware progression."""
     if not isinstance(graph, dict):
         return False
     
@@ -375,7 +408,25 @@ def validate_mission_graph(graph: Any) -> bool:
             if len(seen) != len(nodes):
                 return False
     
-    return True
+    try:
+        import networkx as nx
+        from src.evaluation.validator import ExternalValidator
+
+        directed = nx.DiGraph()
+        directed.add_nodes_from(
+            (node_id, dict(attrs))
+            for node_id, attrs in dict(graph["nodes"]).items()
+        )
+        for edge in graph["edges"]:
+            if not isinstance(edge, (list, tuple)) or len(edge) < 2:
+                return False
+            attrs = dict(edge[2]) if len(edge) >= 3 and isinstance(edge[2], dict) else {}
+            directed.add_edge(edge[0], edge[1], **attrs)
+        result = ExternalValidator(mode="full").validate(directed)
+        return bool(result.is_solvable)
+    except (ImportError, AttributeError, RuntimeError, ValueError, TypeError):
+        logger.exception("Mission-graph validation failed")
+        return False
 
 
 def validate_layout(layout: Any) -> bool:
@@ -416,7 +467,7 @@ def validate_layout(layout: Any) -> bool:
 
 
 def validate_solvability(dungeon: Any) -> bool:
-    """Validate dungeon is solvable (path exists from start to goal)."""
+    """Validate the exact semantic grid with the canonical tile-state oracle."""
     if not isinstance(dungeon, dict):
         return False
     
@@ -424,17 +475,71 @@ def validate_solvability(dungeon: Any) -> bool:
     if 'visual_grid' not in dungeon:
         return False
     
-    # Try to use existing validator if available
     try:
-        from src.simulation.validator import is_solvable
-        return is_solvable(dungeon)
-    except (ImportError, Exception):
-        # Fallback: basic checks
-        if 'mission_graph' not in dungeon:
+        import numpy as np
+        from src.simulation.validator import ZeldaValidator
+
+        grid = np.asarray(dungeon["visual_grid"])
+        if grid.ndim != 2:
             return False
-        
-        # Check that final dungeon has reasonable structure
-        return 'rooms' in dungeon or 'room_boundaries' in dungeon
+        return bool(ZeldaValidator().validate_single(grid).is_solvable)
+    except (ImportError, AttributeError, RuntimeError, ValueError, TypeError):
+        logger.exception("Tile-state validation failed")
+        return False
+
+
+def _extract_visual_grid(payload: Any) -> Any:
+    """Find the final semantic grid in a pipeline-state or block wrapper."""
+    if isinstance(payload, dict):
+        if "visual_grid" in payload:
+            return payload["visual_grid"]
+        for key in ("wfc_refiner", "wfc_refiner_output", "layout", "dungeon"):
+            if key in payload:
+                grid = _extract_visual_grid(payload[key])
+                if grid is not None:
+                    return grid
+    return None
+
+
+def evaluate_human_playability(
+    dungeon: Any,
+    *,
+    persona: str = "balanced",
+    astar_budget: int = 100_000,
+    pcbs_budget: int = 5_000,
+    max_normalized_confusion: float = 1.0,
+) -> Tuple[bool, Dict[str, Any]]:
+    """
+    Apply an opt-in bounded-player acceptance policy after exact validation.
+
+    P-CBS failure is reported as a human-model rejection, not as mathematical
+    unsolvability. Thresholds therefore belong in calibrated ablations.
+    """
+    import math
+    import numpy as np
+
+    from src.evaluation.cbs_fitness import compute_cbs_fitness
+
+    grid = _extract_visual_grid(dungeon)
+    if grid is None:
+        return False, {"failure_reason": "missing visual_grid"}
+    metrics = compute_cbs_fitness(
+        np.asarray(grid),
+        persona=str(persona),
+        astar_timeout=max(1, int(astar_budget)),
+        cbs_timeout=max(1, int(pcbs_budget)),
+    )
+    normalized = float(metrics.get("normalized_confusion_ratio", float("inf")))
+    accepted = (
+        bool(metrics.get("solvable_astar", False))
+        and bool(metrics.get("solvable_cbs", False))
+        and math.isfinite(normalized)
+        and normalized <= float(max_normalized_confusion)
+    )
+    metrics = dict(metrics)
+    metrics["accepted_by_human_playability_policy"] = bool(accepted)
+    metrics["max_normalized_confusion"] = float(max_normalized_confusion)
+    return bool(accepted), metrics
 
 
 # ===== Example Usage =====
@@ -497,6 +602,7 @@ def create_example_robust_pipeline():
         for node_id, attrs in directed.nodes(data=True):
             attrs.setdefault('is_start', node_id == 0)
             attrs.setdefault('is_boss', node_id == directed.number_of_nodes() - 1)
+            attrs.setdefault('is_goal', node_id == directed.number_of_nodes() - 1)
             attrs.setdefault('tension', float(tension_curve[min(node_id, len(tension_curve) - 1)]))
         
         payload = {

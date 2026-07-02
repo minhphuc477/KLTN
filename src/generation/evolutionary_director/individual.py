@@ -10,6 +10,7 @@ class Individual:
     genome: List[int]
     fitness: float = 0.0
     feasible: bool = False
+    target_constraints_satisfied: bool = False
     constraint_violation: float = float("inf")
     topology_realism_error: float = float("inf")
     generation_rejection_ratio: float = 1.0

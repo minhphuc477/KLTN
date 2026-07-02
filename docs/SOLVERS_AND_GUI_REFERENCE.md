@@ -179,6 +179,11 @@ Canonical export validation uses:
 - behavioral probe: `CognitiveBoundedSearch`
 - benchmark artifact: `scripts/run_search_role_benchmark.py`
 
+`src/pipeline/robust_pipeline.py` can apply an opt-in P-CBS acceptance policy
+after symbolic refinement and before MAP-Elites admission. It is disabled by
+default. A P-CBS rejection means "rejected by this persona/budget/threshold,"
+not "mathematically unsolvable."
+
 `src/simulation/search_factory.py` now exposes
 `recommended_game_state_algorithm_specs(...)` so report-facing validation can
 select algorithms by environment class. On maps with Zelda state mechanics
@@ -187,11 +192,30 @@ semantics, or graph transitions, the publication-safe hard oracle is full-state
 `A*`. `Bidirectional A*` is only an independent diagnostic on reversible,
 stateless grids; `D* Lite` is only a replanning diagnostic.
 
+Oracle outcomes are tri-state for reporting:
+
+- `solved`: a valid state-space route was found.
+- `exhausted`: the reachable state space was exhausted, proving no route.
+- `budget_exhausted`: the configured state budget ended first; the result is
+  indeterminate and must not be counted as proven unsolvable.
+
+The budget is a state-expansion budget. Bidirectional A* and its canonical A*
+fallback share that one budget, and reported expansions include both phases.
+Diagonal movement uses cardinal cost `1` and diagonal cost `sqrt(2)` across the
+validator, Bidirectional A*, and the D* Lite diagnostic.
+
 For MAP-Elites / Quality-Diversity reporting, the archive may use graph
 topology as behavior descriptors, but the quality score must come from a
 progression-aware validator or a validated semantic grid. Undirected
 START-to-GOAL connectivity is not sufficient when locks, keys, switches,
-tokens, item gates, or consumable resources are present.
+tokens, item gates, or consumable resources are present. Infeasible candidates
+must not occupy otherwise empty elite cells.
+
+For end-to-end generation, graph solvability is only a precondition. The exact
+stitched semantic artifact must pass the tile-state oracle after typed doors,
+START/GOAL anchors, and gameplay entities are materialized. Full-grammar
+graph experiments remain separate from spatial generation until every enabled
+mechanic has matching tile, compiler, entity, and oracle semantics.
 
 More precise search roles in current code:
 

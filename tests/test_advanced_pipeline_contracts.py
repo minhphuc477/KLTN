@@ -3,6 +3,9 @@ import networkx as nx
 from types import SimpleNamespace
 
 from src.generation.style_transfer import ThemeType
+from src.core.definitions import SEMANTIC_PALETTE
+from src.generation.graph_constraint_enforcer import GraphConstraintEnforcer, enforce_all_rooms
+from src.simulation.validator import ZeldaValidator
 import src.pipeline.advanced_pipeline as advanced_pipeline_module
 from src.pipeline.advanced_pipeline import (
     AdvancedNeuralSymbolicPipeline,
@@ -22,6 +25,38 @@ def _make_test_config() -> AdvancedPipelineConfig:
         record_demo=False,
         enable_explainability=False,
     )
+
+
+def test_hazard_edges_compile_to_element_only_when_protection_is_required():
+    enforcer = GraphConstraintEnforcer(
+        {
+            "wall": SEMANTIC_PALETTE["WALL"],
+            "floor": SEMANTIC_PALETTE["FLOOR"],
+            "door": SEMANTIC_PALETTE["DOOR_OPEN"],
+            "hazard": SEMANTIC_PALETTE["ELEMENT"],
+        }
+    )
+
+    assert enforcer._door_tile_for_edge(
+        {"edge_type": "HAZARD", "protection_item_id": "FIRE_TUNIC"}
+    ) == SEMANTIC_PALETTE["ELEMENT"]
+    assert enforcer._door_tile_for_edge(
+        {"edge_type": "HAZARD"}
+    ) == SEMANTIC_PALETTE["DOOR_OPEN"]
+
+
+def test_spatial_pipeline_rejects_multiple_unrepresentable_protection_identities():
+    graph = nx.DiGraph()
+    graph.add_edges_from(
+        [
+            (0, 1, {"edge_type": "HAZARD", "protection_item_id": "FIRE_TUNIC"}),
+            (1, 2, {"edge_type": "HAZARD", "protection_item_id": "SPIKE_BOOTS"}),
+        ]
+    )
+    pipeline = object.__new__(AdvancedNeuralSymbolicPipeline)
+
+    with np.testing.assert_raises_regex(ValueError, "multiple named hazard protections"):
+        pipeline._validate_spatial_mechanics(graph)
 
 
 def test_advanced_pipeline_disables_requested_lcm_without_real_backend():
@@ -153,11 +188,45 @@ def test_advanced_pipeline_fun_evaluation_resolves_graph_route_not_insertion_ord
     graph = nx.DiGraph()
     graph.add_node(2, is_boss=True, is_triforce=True)
     graph.add_node(0, is_start=True)
-    graph.add_node(1)
+    graph.add_node(1, type="BIG_KEY")
     graph.add_edge(0, 1, edge_type="open")
     graph.add_edge(1, 2, edge_type="boss_locked")
 
     assert AdvancedNeuralSymbolicPipeline._resolve_mission_solution_path(graph) == [0, 1, 2]
+
+
+def test_graph_to_grid_compiler_preserves_one_lock_as_one_consumable_gate():
+    """A physical room connection must not duplicate one graph lock into two locks."""
+    palette = SEMANTIC_PALETTE
+    tile_config = {
+        "wall": int(palette["WALL"]),
+        "floor": int(palette["FLOOR"]),
+        "door": int(palette["DOOR_OPEN"]),
+        "door_locked": int(palette["DOOR_LOCKED"]),
+        "door_bomb": int(palette["DOOR_BOMB"]),
+        "door_puzzle": int(palette["DOOR_PUZZLE"]),
+        "door_boss": int(palette["DOOR_BOSS"]),
+        "door_soft": int(palette["DOOR_SOFT"]),
+        "start": int(palette["START"]),
+        "goal": int(palette["TRIFORCE"]),
+    }
+    grid = np.full((7, 14), int(palette["FLOOR"]), dtype=np.int64)
+    mission_graph = {
+        "nodes": {0: {"type": "START"}, 1: {"type": "GOAL"}},
+        "edges": [(0, 1, {"edge_type": "LOCKED"})],
+    }
+    layout = {0: (0, 0, 6, 6), 1: (7, 0, 13, 6)}
+
+    compiled = enforce_all_rooms(grid, mission_graph, layout, tile_config)
+    compiled[2, 3] = int(palette["KEY_SMALL"])
+
+    assert sorted((int(compiled[3, 6]), int(compiled[3, 7]))) == sorted(
+        (int(palette["DOOR_LOCKED"]), int(palette["DOOR_OPEN"]))
+    )
+    assert ZeldaValidator().validate_single(compiled).is_solvable is True
+    capped = ZeldaValidator().validate_single(compiled, solver_timeout=1)
+    assert capped.termination_status == "budget_exhausted"
+    assert capped.proven_unsolvable is False
 
 
 def test_advanced_pipeline_fun_contents_preserve_graph_and_entity_semantics():
