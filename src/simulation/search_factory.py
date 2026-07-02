@@ -34,7 +34,7 @@ GAME_STATE_ALGORITHM_SPECS: Tuple[GameStateAlgorithmSpec, ...] = (
     GameStateAlgorithmSpec(index=1, key="bfs", label="BFS", validation_role="small_exact_baseline", canonical_use="exact_baseline"),
     GameStateAlgorithmSpec(index=2, key="dijkstra", label="Dijkstra", validation_role="cost_exact_baseline", canonical_use="exact_fallback"),
     GameStateAlgorithmSpec(index=3, key="greedy", label="Greedy", validation_role="inadmissible_baseline", canonical_use="heuristic_baseline"),
-    GameStateAlgorithmSpec(index=4, key="dstar_lite", label="Forward LPA* replanning", validation_role="replanning_diagnostic", canonical_use="incremental_replanning"),
+    GameStateAlgorithmSpec(index=4, key="dstar_lite", label="D* Lite", validation_role="replanning_diagnostic", canonical_use="incremental_replanning"),
     GameStateAlgorithmSpec(index=5, key="dfs_iddfs", label="DFS/IDDFS", validation_role="bounded_exhaustive_probe", canonical_use="exhaustive_probe"),
     GameStateAlgorithmSpec(index=6, key="bidirectional_astar", label="Bidirectional A*", validation_role="reversible_grid_diagnostic", canonical_use="reversible_grid_comparison"),
 )

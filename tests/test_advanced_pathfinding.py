@@ -187,9 +187,9 @@ def verify_path_validity(env: ZeldaLogicEnv, path: list) -> Tuple[bool, str]:
 class TestDStarLite:
     """Test D* Lite incremental replanning."""
 
-    def test_simple_dungeon(self):
-        """Test D* Lite on simple dungeon."""
-        logger.info("==== Testing D* Lite: Simple Dungeon ====")
+    def test_stateful_dungeon_uses_full_state_fallback(self):
+        """Inventory transitions are outside textbook D* Lite's problem class."""
+        logger.info("==== Testing D* Lite: Stateful Dungeon Fallback ====")
         
         grid = create_simple_dungeon()
         env = ZeldaLogicEnv(grid)
@@ -202,10 +202,53 @@ class TestDStarLite:
         assert len(path) > 0, "D* Lite returned empty path"
         assert path[0] == env.start_pos, "Path doesn't start at start position"
         assert path[-1] == env.goal_pos, "Path doesn't end at goal position"
-        assert solver.used_fallback is False
+        assert solver.used_fallback is True
         
         logger.info(f"✓ D* Lite: path_len={len(path)}, nodes={nodes}")
     
+    def test_reversible_grid_uses_goal_rooted_backward_search(self):
+        """Textbook core must root rhs at the goal and solve without fallback."""
+        grid = create_long_corridor()
+        env = ZeldaLogicEnv(grid)
+        solver = DStarLiteSolver(env, heuristic_mode="balanced")
+
+        start_state = env.state.copy()
+        success, path, _nodes = solver.solve(start_state)
+        goal_state = start_state.copy()
+        goal_state.position = env.goal_pos
+
+        assert success
+        assert solver.used_fallback is False
+        assert solver.rhs_scores[game_state_key(goal_state)] == 0.0
+        assert solver.g_scores[game_state_key(goal_state)] == 0.0
+        assert solver.g_scores[game_state_key(start_state)] > 0.0
+        assert path[0] == env.start_pos
+        assert path[-1] == env.goal_pos
+
+    def test_reversible_grid_reuses_search_after_obstacle_change(self):
+        """A changed edge cost should be repaired without abandoning D* Lite."""
+        grid = np.full((7, 9), SEMANTIC_PALETTE["FLOOR"], dtype=np.int64)
+        grid[0, :] = SEMANTIC_PALETTE["WALL"]
+        grid[-1, :] = SEMANTIC_PALETTE["WALL"]
+        grid[:, 0] = SEMANTIC_PALETTE["WALL"]
+        grid[:, -1] = SEMANTIC_PALETTE["WALL"]
+        grid[1, 1] = SEMANTIC_PALETTE["START"]
+        grid[5, 7] = SEMANTIC_PALETTE["TRIFORCE"]
+        env = ZeldaLogicEnv(grid)
+        solver = DStarLiteSolver(env)
+
+        success, original_path, _nodes = solver.solve(env.state.copy())
+        blocked_position = original_path[1]
+        env.grid[blocked_position] = SEMANTIC_PALETTE["WALL"]
+
+        replanned, new_path, updates = solver.replan(env.state.copy())
+
+        assert success and replanned
+        assert solver.used_fallback is False
+        assert blocked_position not in new_path
+        assert updates > 0
+        assert new_path[-1] == env.goal_pos
+
     def test_complex_dungeon(self):
         """D* Lite must solve the deterministic complex fixture."""
         logger.info("==== Testing D* Lite: Complex Dungeon ====")
@@ -360,6 +403,23 @@ class TestBidirectionalAStar:
         assert path[-1] == env.goal_pos
         assert len(path) - 1 > solver._grid_distance(env.start_pos, env.goal_pos)
         assert solver.used_fallback is False
+
+    def test_frontier_bound_uses_stronger_directional_lower_bound(self):
+        grid = create_long_corridor()
+        env = ZeldaLogicEnv(grid)
+        solver = BidirectionalAStar(env)
+        forward_state = GameState(position=env.start_pos)
+        backward_state = GameState(position=env.goal_pos)
+        forward_node = SearchNode(forward_state, g_score=0.0, f_score=14.0)
+        backward_node = SearchNode(backward_state, g_score=0.0, f_score=12.0)
+        solver.forward_open = [
+            (14.0, 0, game_state_key(forward_state), forward_node)
+        ]
+        solver.backward_open = [
+            (12.0, 0, game_state_key(backward_state), backward_node)
+        ]
+
+        assert solver._frontier_lower_bound() == 14.0
 
     def test_simple_dungeon(self):
         """Test Bidirectional A* on simple dungeon."""

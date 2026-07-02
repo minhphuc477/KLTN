@@ -207,7 +207,7 @@ topology:
   mutation_rate: 0.15  # type=float, default=0.15, valid=0..1
   crossover_rate: 0.7  # type=float, default=0.7, valid=0..1
   genome_length: 0  # type=int, default=0, valid>=0; 0 auto-derives genome length from num_rooms
-  rule_space: full  # type=str, default=full, valid={core,full}
+  rule_space: spatial  # type=str, default=spatial, valid={core,spatial,full}; full is graph-only
   transition_mix: 0.7  # type=float, default=0.7, valid=0..1
   search_strategy: ga  # type=str, default=ga, valid={ga,cvt_emitter,map_elites,cvt,cvt_map_elites}
   qd_archive_cells: 128  # type=int, default=128, valid>=32

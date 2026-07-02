@@ -121,7 +121,7 @@ class AdvancedPipelineConfig:
     # Evaluation
     calculate_fun_metrics: bool = True
     enable_diversity_analysis: bool = True
-    mission_rule_space: str = "core"
+    mission_rule_space: str = "spatial"
     mission_search_strategy: str = "cvt_emitter"
     topology_qd_archive_cells: int = 128
     require_graph_solvability: bool = True

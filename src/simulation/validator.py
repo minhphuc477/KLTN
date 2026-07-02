@@ -1690,7 +1690,6 @@ class StateSpaceAStar:
         
         # VIRTUAL NODE TRAVERSAL: Cache for graph-based room-to-room transitions
         # This enables traversal through "virtual nodes" (graph nodes without physical rooms)
-        self._virtual_transition_cache = {}
         self._node_to_room = None  # Lazy-initialized reverse mapping
         self._best_at_pos = {}
         self._best_g_at_pos = {}
@@ -3767,6 +3766,10 @@ class StateSpaceAStar:
         normalized = str(edge_type or "open").strip().lower()
         if normalized in {"open", "path", "stair", "hazard", "soft_locked", "one_way", "switch", "puzzle"}:
             return True, state.copy()
+        if normalized == "hazard_protected":
+            if not state.has_item:
+                return False, state
+            return True, state.copy()
         if edge_key in state.opened_graph_edges:
             return True, state.copy()
 
@@ -3882,123 +3885,6 @@ class StateSpaceAStar:
         self._stair_dest_cache[current_pos] = destinations
         return destinations
     
-    def _get_virtual_node_destinations(self, current_pos: Tuple[int, int], 
-                                        _state: GameState) -> List[Tuple[Tuple[int, int], int, str]]:
-        """
-        Find reachable physical rooms via graph edges through virtual nodes.
-        
-        VIRTUAL NODE TRAVERSAL:
-        When the graph path goes through "virtual nodes" (nodes without physical room
-        mappings), this method finds all reachable physical rooms by traversing 
-        through those virtual connections.
-        
-        Example (D7-1):
-        - Path: 11 -> 13 -> 16 -> 22 -> 23 -> ...
-        - Nodes 16 and 22 have no physical rooms (virtual nodes)
-        - Player in room mapped to node 13 can reach room mapped to node 23
-        
-        This enables the solver to follow graph connectivity even when intermediate
-        nodes don't have physical rooms to walk through.
-        
-        Args:
-            current_pos: Current (row, col) position in the grid
-            state: Current game state (for checking edge requirements)
-            
-        Returns:
-            List of (dest_pos, cost, edge_type) tuples:
-            - dest_pos: Walkable position in the destination room
-            - cost: Traversal cost (number of edges traversed)
-            - edge_type: Type of edge constraint (for locked doors, etc.)
-        """
-        # Quick check: do we have graph connectivityx
-        if not self.env.graph or not self.env.room_to_node or not self.env.room_positions:
-            return []
-        
-        # Check cache first (using position as key)
-        cache_key = current_pos
-        if cache_key in self._virtual_transition_cache:
-            return self._virtual_transition_cache[cache_key]
-        
-        # Use node_to_room from environment if available (includes virtual nodes)
-        # Otherwise, lazy-initialize the reverse mapping (node -> room)
-        if self._node_to_room is None:
-            if hasattr(self.env, 'node_to_room') and self.env.node_to_room:
-                self._node_to_room = self.env.node_to_room
-            else:
-                self._node_to_room = {v: k for k, v in self.env.room_to_node.items()}
-        
-        # Find which room contains current position
-        current_room = None
-        for room_pos, (r_off, c_off) in self.env.room_positions.items():
-            r_end = r_off + ROOM_HEIGHT
-            c_end = c_off + ROOM_WIDTH
-            if r_off <= current_pos[0] < r_end and c_off <= current_pos[1] < c_end:
-                current_room = room_pos
-                break
-        
-        if not current_room:
-            self._virtual_transition_cache[cache_key] = []
-            return []
-        
-        current_node = self.env.room_to_node.get(current_room)
-        if current_node is None:
-            self._virtual_transition_cache[cache_key] = []
-            return []
-        
-        # BFS through graph to find reachable physical rooms via virtual nodes
-        # Track: (node, edges_traversed, accumulated_edge_type, path_through_virtual)
-        destinations = []
-        visited_nodes = {current_node}
-        
-        # Initialize queue with immediate successors
-        # Format: (node, distance, most_restrictive_edge_type, went_through_virtual)
-        node_queue = deque()
-        for neighbor in self.env.graph.successors(current_node):
-            edge_data = self.env.graph.get_edge_data(current_node, neighbor, {}) or {}
-            edge_type = self._edge_type_from_data(edge_data)
-            node_queue.append((neighbor, 1, edge_type, False))
-        
-        while node_queue:
-            neighbor_node, distance, edge_type, went_through_virtual = node_queue.popleft()
-            
-            if neighbor_node in visited_nodes:
-                continue
-            visited_nodes.add(neighbor_node)
-            
-            # Check if this node has a physical room
-            neighbor_room = self._node_to_room.get(neighbor_node)
-            
-            if neighbor_room and neighbor_room in self.env.room_positions:
-                # Found a physical room - only add as destination if we went through virtual nodes
-                # (Otherwise, normal grid traversal should handle it)
-                if went_through_virtual or distance > 1:
-                    # Find a walkable destination in this room
-                    dest_pos = self._find_room_entry_point(neighbor_room)
-                    if dest_pos:
-                        destinations.append((dest_pos, distance, edge_type))
-                
-                # Still continue BFS through this node to find more destinations
-                for next_node in self.env.graph.successors(neighbor_node):
-                    if next_node not in visited_nodes:
-                        next_edge_data = self.env.graph.get_edge_data(neighbor_node, next_node, {}) or {}
-                        next_edge_type = self._edge_type_from_data(next_edge_data)
-                        # Propagate the most restrictive edge type
-                        combined_type = self._combine_edge_types(edge_type, next_edge_type)
-                        node_queue.append((next_node, distance + 1, combined_type, went_through_virtual))
-            else:
-                # Virtual node (no physical room) - continue BFS through it
-                for next_node in self.env.graph.successors(neighbor_node):
-                    if next_node not in visited_nodes:
-                        next_edge_data = self.env.graph.get_edge_data(neighbor_node, next_node, {}) or {}
-                        next_edge_type = self._edge_type_from_data(next_edge_data)
-                        combined_type = self._combine_edge_types(edge_type, next_edge_type)
-                        # Mark that we went through a virtual node
-                        node_queue.append((next_node, distance + 1, combined_type, True))
-        
-        # Cache the results
-        self._virtual_transition_cache[cache_key] = destinations
-        return destinations
-
     def _get_controlled_virtual_destinations(self, current_pos: Tuple[int, int], 
                                               state: GameState) -> List[Tuple[Tuple[int, int], int, str]]:
         """
@@ -4122,42 +4008,14 @@ class StateSpaceAStar:
         return destinations
 
     def _can_traverse_edge(self, edge_type: str, state: GameState) -> bool:
-        """Check if the player can traverse an edge based on current game state.
-        
-        Handles all edge types from src.core.definitions.EDGE_TYPE_MAP:
-        - open: Normal passage (always passable)
-        - soft_locked: One-way door (passable in one direction)
-        - key_locked: Requires small key (consumed)
-        - boss_locked: Requires boss key (permanent)
-        - bombable: Requires bomb
-        - stair: Stair/warp connection (always passable)
-        - item_locked: Requires KEY_ITEM (ladder/raft)
-        - switch: Puzzle-activated door (simplified: always passable)
-        """
-        normalized = str(edge_type or '').strip().lower()
-
-        if normalized in ('soft_locked', 'one_way'):
-            if self.strict_original_mode:
-                current_room = self.env.get_room_for_position(state.position)
-                return self.env.is_room_cleared(current_room, state)
-            return True
-        if normalized in ('open', 'path', 'stair', 'hazard'):
-            return True
-        elif normalized == 'bombable':
-            return state.bomb_count > 0
-        elif normalized in ('key_locked', 'locked'):
-            return state.keys > 0
-        elif normalized == 'boss_locked':
-            return state.has_boss_key
-        elif normalized in ('item_locked', 'item_gate'):
-            return state.has_item  # Requires KEY_ITEM (ladder/raft)
-        elif normalized in ('switch', 'switch_locked', 'state_block', 'on_off_gate', 'shutter', 'puzzle'):
-            # Strict-original mode: model switch/puzzle gates as room-clear shutters.
-            if self.strict_original_mode:
-                current_room = self.env.get_room_for_position(state.position)
-                return self.env.is_room_cleared(current_room, state)
-            return True
-        return False
+        """Check graph-edge traversal using the shared canonical rule table."""
+        return can_traverse_edge_type(
+            edge_type,
+            state,
+            strict_original_mode=self.strict_original_mode,
+            get_room_for_position=self.env.get_room_for_position,
+            is_room_cleared=self.env.is_room_cleared,
+        )
     
     def _get_graph_warp_destinations(self, current_pos: Tuple[int, int], 
                                       state: GameState) -> List[Tuple[Tuple[int, int], int, str]]:
@@ -4291,7 +4149,7 @@ class StateSpaceAStar:
                 
                 # Check edge traversability
                 edge_data = self.env.graph.get_edge_data(node, next_node, {}) or {}
-                edge_type = edge_data.get('edge_type', 'open')
+                edge_type = self._edge_type_from_data(edge_data)
                 if not self._can_traverse_edge(edge_type, state):
                     continue
                 

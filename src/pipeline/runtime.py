@@ -152,7 +152,7 @@ def _initialize_pipeline_from_flat_kwargs(
     topology_mutation_rate: float = 0.15,
     topology_crossover_rate: float = 0.7,
     topology_genome_length: int = 0,
-    topology_rule_space: str = "full",
+    topology_rule_space: str = "spatial",
     topology_transition_mix: float = 0.7,
     topology_search_strategy: str = "ga",
     topology_qd_archive_cells: int = 128,
@@ -377,9 +377,10 @@ def _initialize_pipeline_from_flat_kwargs(
             "Expected 'constant', 'linear_decay', or 'cosine_decay'."
         )
     pipeline.diffusion_hedgehog_feature_dim = int(max(4, int(diffusion_hedgehog_feature_dim)))
-    if pipeline.topology_rule_space not in {"core", "full"}:
+    if pipeline.topology_rule_space not in {"core", "spatial", "full"}:
         raise ValueError(
-            f"Invalid topology_rule_space={topology_rule_space!r}. Expected 'core' or 'full'."
+            f"Invalid topology_rule_space={topology_rule_space!r}. "
+            "Expected 'core', 'spatial', or 'full'."
         )
     if pipeline.topology_search_strategy not in {"ga", "cvt_emitter", "map_elites", "cvt", "cvt_map_elites"}:
         raise ValueError(

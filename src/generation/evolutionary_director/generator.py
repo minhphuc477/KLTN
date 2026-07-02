@@ -22,11 +22,13 @@ from src.generation.grammar import (
     AddItemGateRule,
     AddMultiLockRule,
     AddSkillChainRule,
+    InsertLockKeyRule,
     MissionGrammar,
     MissionGraph,
     MissionNode,
     NodeType,
     EdgeType,
+    ProductionRule,
     PruneDeadEndRule,
 )
 from src.zelda_data.vglc_utils import filter_virtual_nodes, validate_topology
@@ -93,7 +95,9 @@ class EvolutionaryTopologyGenerator:
             genome_length: Length of genome (number of rules)
             max_nodes: Maximum nodes in generated graph (room count upper bound)
             rule_space: "full" (default) enables all MissionGrammar production
-                rules, "core" keeps legacy 5-rule behavior.
+                rules for graph-only studies, "spatial" keeps advanced rules
+                with faithful final-map mechanics, and "core" keeps legacy
+                5-rule behavior.
             rule_weight_overrides: Optional map of rule_name -> weight used to
                 calibrate scheduling/sampling against reference descriptors.
             descriptor_targets: Optional target descriptor means (linearity,
@@ -153,7 +157,7 @@ class EvolutionaryTopologyGenerator:
         self.enforce_generation_constraints = bool(enforce_generation_constraints)
         self.allow_candidate_repairs = bool(allow_candidate_repairs)
         parsed_rule_space = str(rule_space).strip().lower() if rule_space is not None else "full"
-        if parsed_rule_space not in {"core", "full"}:
+        if parsed_rule_space not in {"core", "spatial", "full"}:
             logger.warning("Unknown rule_space='%s', defaulting to 'full'", rule_space)
             parsed_rule_space = "full"
         self.rule_space = parsed_rule_space
@@ -166,7 +170,8 @@ class EvolutionaryTopologyGenerator:
         # Initialize components
         self.executor = GraphGrammarExecutor(
             seed=seed,
-            use_full_rule_space=(self.rule_space == "full"),
+            use_full_rule_space=(self.rule_space in {"spatial", "full"}),
+            rule_space=self.rule_space,
             max_lock_key_rules=self.max_lock_key_rules,
             rule_weight_overrides=self.rule_weight_overrides,
             enforce_generation_constraints=self.enforce_generation_constraints,
@@ -981,22 +986,51 @@ class EvolutionaryTopologyGenerator:
             return graph
 
         repaired = copy.deepcopy(graph)
+        repairs_applied = 0
+
+        # Remove structurally useless EMPTY leaves before optimizing descriptor
+        # gaps. Otherwise additive gate rules can improve the scalar objective
+        # while retaining arbitrary connector-room clutter.
+        cleanup_rule = PruneDeadEndRule()
+        cleanup_context = {
+            "rng": self.rng,
+            "difficulty": 0.5,
+            "spatial_compilable": self.rule_space == "spatial",
+        }
+        for _ in range(max(1, len(repaired.nodes))):
+            if not cleanup_rule.can_apply(repaired, cleanup_context):
+                break
+            candidate = cleanup_rule.apply(copy.deepcopy(repaired), cleanup_context)
+            candidate.sanitize()
+            if not candidate.is_graph_connected() or len(candidate.nodes) >= len(repaired.nodes):
+                break
+            repaired = candidate
+            repairs_applied += 1
+
         current_metrics = self.evaluator._extract_descriptor_metrics(repaired)
         current_gap = self._progression_balance_gap(current_metrics)
         if current_gap <= 1e-6:
+            if repairs_applied > 0:
+                repaired.record_repair("progression_repairs", amount=int(repairs_applied))
             return repaired
 
-        repair_rules = (
-            PruneDeadEndRule(),
-            AddGatekeeperRule(),
-            AddItemGateRule(),
-            AddHazardGateRule(),
-            AddEntangledBranchesRule(),
-            AddArenaRule(),
-            AddMultiLockRule(),
-        )
-        context = {"rng": self.rng, "difficulty": 0.5}
-        repairs_applied = 0
+        repair_rules: Tuple[ProductionRule, ...] = (PruneDeadEndRule(),)
+        if self.rule_space == "spatial":
+            repair_rules += (AddHazardGateRule(),)
+        elif self.rule_space == "full":
+            repair_rules += (
+                AddGatekeeperRule(),
+                AddItemGateRule(),
+                AddHazardGateRule(),
+                AddEntangledBranchesRule(),
+                AddArenaRule(),
+                AddMultiLockRule(),
+            )
+        context = {
+            "rng": self.rng,
+            "difficulty": 0.5,
+            "spatial_compilable": self.rule_space == "spatial",
+        }
         max_repairs = int(
             np.clip(round(self._rt("progression_balance_repair_iterations", 3.0)), 1.0, 6.0)
         )
@@ -1161,12 +1195,28 @@ class EvolutionaryTopologyGenerator:
 
         current_metrics = self.evaluator._extract_descriptor_metrics(repaired)
         current_gap = self._progression_balance_gap(current_metrics)
-        repair_rules = (
-            PruneDeadEndRule(),
-            AddGatekeeperRule(),
-            AddItemGateRule(),
-        )
-        context = {"rng": self.rng, "difficulty": 0.55}
+        if self.rule_space == "full":
+            repair_rules: Tuple[ProductionRule, ...] = (
+                PruneDeadEndRule(),
+                AddGatekeeperRule(),
+                AddItemGateRule(),
+            )
+        elif self.rule_space == "spatial":
+            repair_rules = (
+                PruneDeadEndRule(),
+                InsertLockKeyRule(),
+                AddHazardGateRule(),
+            )
+        else:
+            repair_rules = (
+                PruneDeadEndRule(),
+                InsertLockKeyRule(),
+            )
+        context = {
+            "rng": self.rng,
+            "difficulty": 0.55,
+            "spatial_compilable": self.rule_space == "spatial",
+        }
         repairs_applied = int(max(0, trim_changes))
         max_repairs = int(
             np.clip(round(self._rt("final_gate_calibration_iterations", 4.0)), 1.0, 8.0)
@@ -1346,8 +1396,15 @@ class EvolutionaryTopologyGenerator:
             List of Individual objects with random genomes
         """
         population = []
+        if self.rule_space in {"spatial", "full"} and self.population_size > 0:
+            population.append(
+                Individual(
+                    genome=self._build_feasible_anchor_seed_genome(),
+                    generation=0,
+                )
+            )
         pedagogical_seed_count = self._pedagogical_seed_genome_count()
-        for _ in range(pedagogical_seed_count):
+        for _ in range(min(pedagogical_seed_count, self.population_size - len(population))):
             population.append(Individual(genome=self._build_structured_seed_genome(), generation=0))
 
         # Weighted rule sampling.
@@ -1378,6 +1435,26 @@ class EvolutionaryTopologyGenerator:
         logger.debug("Generated initial population of %d individuals", len(population))
 
         return population
+
+    def _build_feasible_anchor_seed_genome(self) -> List[int]:
+        """
+        Build one minimal feasible seed for constrained full-rule evolution.
+
+        A feasible anchor prevents small populations from containing only
+        progression-invalid random phenotypes. It remains subject to ordinary
+        selection and does not bypass evaluation or final export validation.
+        """
+        by_name = {
+            str(name).strip().lower(): int(index)
+            for index, name in enumerate(self.executor.rule_names)
+        }
+        boss_rule = by_name.get("addbossgauntlet")
+        inert_rule = by_name.get("prunedeadend")
+        if boss_rule is None or inert_rule is None:
+            return self._build_structured_seed_genome()
+        if self.genome_length <= 0:
+            return []
+        return [int(boss_rule)] + [int(inert_rule)] * (self.genome_length - 1)
 
     def _pedagogical_seed_genome_count(self) -> int:
         """How many initial genomes should be biased toward tutorial progression."""

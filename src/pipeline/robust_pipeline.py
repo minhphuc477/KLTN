@@ -169,6 +169,24 @@ class PipelineBlock:
                 
                 if self.config.enable_logging:
                     logger.warning(f"[{self.name}] [FAIL] Attempt {attempt} failed: {error_msg}")
+
+                # Shape/configuration contract failures are deterministic for
+                # a fixed block input. Retrying the same state only hides the
+                # root cause and can exhaust an entire generation batch.
+                if getattr(e, "retryable", True) is False:
+                    if self.config.enable_logging:
+                        logger.error(
+                            "[%s] Non-retryable contract failure; aborting after attempt %d",
+                            self.name,
+                            attempt,
+                        )
+                    return BlockResult(
+                        status=BlockStatus.FAILED,
+                        error=error_msg,
+                        execution_time=execution_time,
+                        attempts=attempt,
+                        attempt_errors=list(attempt_errors),
+                    )
                 
                 # Check if we should retry
                 if attempt < self.config.max_retries:

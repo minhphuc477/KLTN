@@ -1472,22 +1472,42 @@ class TensionCurveEvaluator:
         }
 
     @staticmethod
-    def _curve_event_alignment_scores(extracted: np.ndarray, target: np.ndarray) -> Dict[str, float]:
-        """Score discrete tension beats without smoothing away intended spikes."""
+    def _align_curves_on_normalized_progress(
+        extracted: np.ndarray,
+        target: np.ndarray,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Align complete curves on a shared normalized-progress axis.
+
+        Using the longer sequence length ensures that neither the generated
+        dungeon suffix nor target narrative beats are dropped. Piecewise-linear
+        resampling is deterministic and preserves endpoint semantics.
+        """
         x = np.asarray(extracted, dtype=np.float32).reshape(-1)
         y = np.asarray(target, dtype=np.float32).reshape(-1)
-        if x.size != y.size:
-            n = min(x.size, y.size)
-            if n <= 0:
-                return {
-                    "curve_fitness": 0.0,
-                    "amplitude_score": 0.0,
-                    "delta_score": 0.0,
-                    "spike_score": 0.0,
-                }
-            x = x[:n]
-            y = y[:n]
-        if x.size == 0:
+        if x.size == 0 or y.size == 0:
+            return x, y
+        common_size = int(max(x.size, y.size))
+        if common_size <= 1:
+            return x[:1], y[:1]
+
+        common_progress = np.linspace(0.0, 1.0, common_size, dtype=np.float32)
+
+        def _resample(values: np.ndarray) -> np.ndarray:
+            if values.size == common_size:
+                return values.astype(np.float32, copy=False)
+            if values.size == 1:
+                return np.full(common_size, float(values[0]), dtype=np.float32)
+            source_progress = np.linspace(0.0, 1.0, values.size, dtype=np.float32)
+            return np.interp(common_progress, source_progress, values).astype(np.float32)
+
+        return _resample(x), _resample(y)
+
+    @staticmethod
+    def _curve_event_alignment_scores(extracted: np.ndarray, target: np.ndarray) -> Dict[str, float]:
+        """Score discrete tension beats without smoothing away intended spikes."""
+        x, y = TensionCurveEvaluator._align_curves_on_normalized_progress(extracted, target)
+        if x.size == 0 or y.size == 0:
             return {
                 "curve_fitness": 0.0,
                 "amplitude_score": 0.0,
@@ -1540,14 +1560,7 @@ class TensionCurveEvaluator:
     @staticmethod
     def _curve_trend_correlation(extracted: np.ndarray, target: np.ndarray) -> float:
         """Robust correlation of curve trend shape in [-1, 1]."""
-        x = np.asarray(extracted, dtype=np.float32).reshape(-1)
-        y = np.asarray(target, dtype=np.float32).reshape(-1)
-        if x.size != y.size:
-            n = min(x.size, y.size)
-            if n <= 1:
-                return 0.0
-            x = x[:n]
-            y = y[:n]
+        x, y = TensionCurveEvaluator._align_curves_on_normalized_progress(extracted, target)
         if x.size <= 1:
             return 0.0
         x_var = float(np.var(x))

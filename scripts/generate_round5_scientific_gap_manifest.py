@@ -239,22 +239,21 @@ def build_experiments(args: argparse.Namespace) -> List[GapExperiment]:
         )
 
     generated_branch_metrics = (
-        "raw_oracle_solved_rate",
-        "post_oracle_solved_rate",
-        "raw_pcbs_valid_rate",
-        "post_pcbs_valid_rate",
+        "hybrid_oracle_pass_rate",
+        "cbs_success_rate",
+        "repair_rate_mean",
         "tiles_repaired_mean",
-        "teacher_fallback_used",
-        "paired_logicnet_delta",
+        "generation_time_sec_mean",
     )
     for seed in seeds:
         experiments.append(
             GapExperiment(
-                name=f"generated_branch_astar_pcbs_prepost_seed_{seed}",
+                name=f"generated_branch_astar_pcbs_final_seed_{seed}",
                 family="generated_branch_astar_pcbs",
                 hypothesis=(
-                    "A* and P-CBS must be reported side-by-side on the same generated branches, "
-                    "with raw/pre-repair validity separated from post-repair validity."
+                    "A* and P-CBS must be reported side-by-side on the same final generated "
+                    "artifacts for each room-generator branch. Raw/pre-repair effects belong "
+                    "to the separate conditioning/repair ablation."
                 ),
                 required_metrics=generated_branch_metrics,
                 command=[
@@ -276,7 +275,18 @@ def build_experiments(args: argparse.Namespace) -> List[GapExperiment]:
                     "round7_generated_branch_prepost",
                     "--room-budget-cap",
                     str(int(args.generated_branch_room_budget_cap)),
+                    "--rule-space",
+                    "spatial",
                 ],
+                required_inputs=(str(args.run_dir),),
+                output_paths=(
+                    str(
+                        output_dir
+                        / "generated_branch_astar_pcbs"
+                        / f"seed_{seed}"
+                        / "full_pipeline_aggregate.csv"
+                    ),
+                ),
             )
         )
 
@@ -370,12 +380,13 @@ def build_experiments(args: argparse.Namespace) -> List[GapExperiment]:
             )
 
     paired_significance_metrics = (
-        "paired_n",
-        "mean_delta",
-        "bootstrap_ci_low",
-        "bootstrap_ci_high",
-        "permutation_p_value",
-        "effect_size",
+        "n_pairs",
+        "delta_mean_cfg_minus_full",
+        "delta_ci_low",
+        "delta_ci_high",
+        "p_value",
+        "effect_size_d",
+        "p_value_bh_fdr",
     )
     experiments.append(
         GapExperiment(
@@ -404,48 +415,60 @@ def build_experiments(args: argparse.Namespace) -> List[GapExperiment]:
                 "--methods",
                 str(args.significance_methods),
             ],
+            output_paths=(
+                str(output_dir / "matched_budget_significance" / "matched_budget_significance.csv"),
+            ),
         )
     )
 
     target_response_metrics = (
-        "semantic_target_delta",
-        "pre_repair_anchor_error_delta",
-        "pre_repair_role_match_delta",
-        "post_repair_role_match_delta",
-        "target_response_monotonicity",
+        "target_family",
+        "metric",
+        "target_mean",
+        "actual_mean",
+        "mean_norm_error",
+        "pass_rate",
+        "monotonic_non_decreasing_from_previous",
     )
     for seed in seeds:
+        target_response_output = output_dir / "graph_target_response" / f"seed_{seed}"
         target_response_command = [
             args.python,
-            "scripts/run_conditioning_logicnet_repair_ablation.py",
+            "scripts/run_designer_controllability_proof.py",
             "--execute",
-            "--config",
-            str(args.config),
             "--output",
-            str(output_dir / "target_response_semantics" / f"seed_{seed}"),
-            "--seeds",
+            str(target_response_output),
+            "--data-root",
+            str(args.data_root),
+            "--seed",
             str(seed),
-            "--num-rooms",
-            str(int(args.target_response_num_rooms)),
-            "--timeout-astar",
-            str(int(args.timeout_astar)),
-            "--timeout-pcbs",
-            str(int(args.timeout_pcbs)),
+            "--samples-per-target",
+            str(int(args.controllability_samples_per_target)),
+            "--population-size",
+            str(int(args.controllability_population_size)),
+            "--generations",
+            str(int(args.controllability_generations)),
+            "--target-names",
+            (
+                "axis_linearity_0p36,axis_linearity_0p52,axis_linearity_0p68,"
+                "axis_keylock_k5_l2,axis_keylock_k3_l3,axis_keylock_k2_l6,"
+                "axis_size_12,axis_size_24,axis_size_36"
+            ),
         ]
-        if args.vqvae_checkpoint:
-            target_response_command.extend(["--vqvae-checkpoint", str(args.vqvae_checkpoint)])
-        if args.diffusion_checkpoint:
-            target_response_command.extend(["--diffusion-checkpoint", str(args.diffusion_checkpoint)])
         experiments.append(
             GapExperiment(
-                name=f"target_response_semantic_pre_repair_seed_{seed}",
-                family="target_response_semantics",
+                name=f"graph_target_response_seed_{seed}",
+                family="graph_target_response",
                 hypothesis=(
-                    "Changing graph semantics must measurably change generated room semantics before "
-                    "symbolic repair; otherwise the repair layer, not the model, may be carrying the claim."
+                    "Changing one graph target at a time should produce a monotonic response in "
+                    "the generated mission-graph descriptor under matched search budgets."
                 ),
                 required_metrics=target_response_metrics,
                 command=target_response_command,
+                required_inputs=(str(args.data_root),),
+                output_paths=(
+                    str(target_response_output / "designer_target_response_monotonicity.csv"),
+                ),
             )
         )
 
@@ -463,7 +486,7 @@ def build_experiments(args: argparse.Namespace) -> List[GapExperiment]:
 
 def build_manifest(args: argparse.Namespace) -> Dict[str, Any]:
     experiments = build_experiments(args)
-    return {
+    payload = {
         "script": Path(__file__).name,
         "mode": "execute" if args.execute else "plan",
         "config": str(args.config),
@@ -522,6 +545,35 @@ def build_manifest(args: argparse.Namespace) -> Dict[str, Any]:
             for exp in experiments
         ],
     }
+    produced_outputs: set[Path] = set()
+    for run in payload["runs"]:
+        missing_inputs: List[str] = []
+        dependency_inputs: List[str] = []
+        for raw_path in run.get("required_inputs", []):
+            if not raw_path:
+                missing_inputs.append(str(raw_path))
+                continue
+            resolved = _resolve_artifact_path(raw_path).resolve()
+            if resolved.exists():
+                continue
+            if resolved in produced_outputs:
+                dependency_inputs.append(str(raw_path))
+            else:
+                missing_inputs.append(str(raw_path))
+        if missing_inputs:
+            run["status"] = "blocked_missing_inputs"
+            run["missing_inputs"] = missing_inputs
+        elif dependency_inputs:
+            run["status"] = "waiting_for_manifest_dependencies"
+            run["dependency_inputs"] = dependency_inputs
+        else:
+            run["status"] = "ready_to_execute"
+        produced_outputs.update(
+            _resolve_artifact_path(path).resolve()
+            for path in run.get("output_paths", [])
+            if path
+        )
+    return payload
 
 
 def write_manifest(payload: Dict[str, Any], manifest_path: Path, csv_path: Path) -> None:
@@ -665,7 +717,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--lcm-checkpoint", type=Path, default=None)
     parser.add_argument("--masked-room-checkpoint", type=Path, default=None)
     parser.add_argument("--mission-graph-json", type=Path, default=None)
-    parser.add_argument("--generated-branch-variants", type=str, default="diffusion,fast_sampler,masked_room")
+    parser.add_argument("--generated-branch-variants", type=str, default="diffusion,fast,masked")
     parser.add_argument("--generated-branch-min-rooms", type=int, default=18)
     parser.add_argument("--generated-branch-max-rooms", type=int, default=32)
     parser.add_argument("--generated-branch-room-budget-cap", type=int, default=64)

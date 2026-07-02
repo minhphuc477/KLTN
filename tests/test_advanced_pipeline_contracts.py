@@ -5,7 +5,8 @@ from types import SimpleNamespace
 from src.generation.style_transfer import ThemeType
 from src.core.definitions import SEMANTIC_PALETTE
 from src.generation.graph_constraint_enforcer import GraphConstraintEnforcer, enforce_all_rooms
-from src.simulation.validator import ZeldaValidator
+from src.simulation.edge_logic import can_traverse_edge_type, edge_type_from_data
+from src.simulation.validator import GameState, StateSpaceAStar, ZeldaLogicEnv, ZeldaValidator
 import src.pipeline.advanced_pipeline as advanced_pipeline_module
 from src.pipeline.advanced_pipeline import (
     AdvancedNeuralSymbolicPipeline,
@@ -43,6 +44,71 @@ def test_hazard_edges_compile_to_element_only_when_protection_is_required():
     assert enforcer._door_tile_for_edge(
         {"edge_type": "HAZARD"}
     ) == SEMANTIC_PALETTE["DOOR_OPEN"]
+
+
+def test_protected_hazard_metadata_requires_generic_traversal_item():
+    edge_type = edge_type_from_data(
+        {"edge_type": "HAZARD", "protection_item_id": "FIRE_TUNIC"}
+    )
+    callbacks = {
+        "strict_original_mode": False,
+        "get_room_for_position": lambda _position: None,
+        "is_room_cleared": lambda _room, _state: False,
+    }
+
+    assert edge_type == "hazard_protected"
+    assert not can_traverse_edge_type(
+        edge_type,
+        GameState(position=(0, 0), has_item=False),
+        **callbacks,
+    )
+    assert can_traverse_edge_type(
+        edge_type,
+        GameState(position=(0, 0), has_item=True),
+        **callbacks,
+    )
+    assert edge_type_from_data({"edge_type": "HAZARD"}) == "hazard"
+
+
+def test_graph_transition_does_not_bypass_protected_hazard():
+    grid = np.full((16, 22), SEMANTIC_PALETTE["FLOOR"], dtype=np.int64)
+    grid[1, 1] = SEMANTIC_PALETTE["START"]
+    grid[1, 12] = SEMANTIC_PALETTE["TRIFORCE"]
+    graph = nx.DiGraph()
+    graph.add_edge(
+        0,
+        1,
+        edge_type="HAZARD",
+        protection_item_id="FIRE_TUNIC",
+    )
+    room_positions = {(0, 0): (0, 0), (0, 1): (0, 11)}
+    room_to_node = {(0, 0): 0, (0, 1): 1}
+    env = ZeldaLogicEnv(
+        grid,
+        graph=graph,
+        room_positions=room_positions,
+        room_to_node=room_to_node,
+        node_to_room={0: (0, 0), 1: (0, 1)},
+    )
+    solver = StateSpaceAStar(env)
+    edge_type = solver._edge_type_from_data(graph.get_edge_data(0, 1))
+
+    blocked, _ = solver.apply_graph_edge_transition(
+        GameState(position=(1, 1), has_item=False),
+        (1, 1),
+        (1, 12),
+        edge_type,
+    )
+    allowed, _ = solver.apply_graph_edge_transition(
+        GameState(position=(1, 1), has_item=True),
+        (1, 1),
+        (1, 12),
+        edge_type,
+    )
+
+    assert edge_type == "hazard_protected"
+    assert blocked is False
+    assert allowed is True
 
 
 def test_spatial_pipeline_rejects_multiple_unrepresentable_protection_identities():

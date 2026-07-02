@@ -20,6 +20,16 @@ def edge_constraints_from_data(edge_data: Optional[Dict[str, Any]]) -> List[str]
 def edge_type_from_data(edge_data: Optional[Dict[str, Any]]) -> str:
     """Return primary canonical edge type from edge attributes."""
     primary = select_primary_edge_type(edge_constraints_from_data(edge_data))
+    if (
+        primary == "hazard"
+        and edge_data
+        and edge_data.get("protection_item_id") is not None
+        and str(edge_data.get("protection_item_id")).strip()
+    ):
+        # The tile-state validator has one generic permanent traversal item.
+        # Named identity is checked by the abstract graph oracle before this
+        # lossy graph-to-grid boundary.
+        return "hazard_protected"
     traversal_aliases = {
         "item_gate": "item_locked",
         "switch_locked": "switch",
@@ -41,6 +51,7 @@ def combine_edge_types(type1: str, type2: str) -> str:
         "locked": 3,
         "key_locked": 3,
         "puzzle": 2,
+        "hazard_protected": 2,
         "hazard": 1,
         "open": 1,
         "": 1,
@@ -63,6 +74,8 @@ def can_traverse_edge_type(
 
     if normalized in ("open", "", "path", "stair", "hazard"):
         return True
+    if normalized == "hazard_protected":
+        return state.has_item
     if normalized in ("locked", "key_locked"):
         return state.keys > 0
     if normalized in ("bomb", "bombable"):

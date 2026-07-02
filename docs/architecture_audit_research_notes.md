@@ -280,9 +280,17 @@ better than the referenced methods.
 - Deterministic linear mission fallback is disabled by default. Evolutionary
   generation failures now remain failures unless a diagnostic run explicitly
   enables `allow_linear_graph_fallback`.
-- End-to-end generation defaults to the spatially representable core grammar.
-  Full-grammar mechanics remain graph-only until tile, compiler, entity, and
-  oracle semantics agree.
+- End-to-end generation defaults to the explicit `spatial` grammar profile.
+  It retains mechanics with a faithful tile/entity/oracle contract; `core` is
+  the minimal grammar ablation and `full` remains graph-only until every
+  additional mechanic has matching compiler and validator semantics.
+- Progression and gate-economy repair use the same grammar profile as the
+  evolutionary run. Repairs can no longer inject graph-only item gates,
+  state blocks, shutters, or multi-locks into a spatially compilable graph.
+- Constrained spatial/full populations include one fully evaluated feasible
+  anchor genome. It is not a fallback artifact and receives no privileged
+  score; it prevents a small random initial population from containing no
+  feasible parent at all.
 - Topology CVT-emitter search is now the advanced pipeline default. Its archive
   rejects mechanically infeasible genomes, while soft target mismatch remains
   a quality penalty rather than an impossible exact-zero feasibility test.
@@ -327,7 +335,9 @@ must not be described as graph conditioned.
 ### Implemented Publication Matrix
 
 `scripts/generate_round5_scientific_gap_manifest.py` now defaults to the five
-requested experiment families and emits paired seed-42/43/44 jobs:
+requested experiment families and emits paired seed-42/43/44 jobs. Plan rows
+are classified as `ready_to_execute`, `waiting_for_manifest_dependencies`, or
+`blocked_missing_inputs`; a planned row is never treated as evidence:
 
 - additive versus SPADE diffusion training and paired evaluation, including
   topology preservation, validity, runtime, and parameter-count disclosure;
@@ -404,7 +414,10 @@ Research basis:
   paper-faithful LCM-LoRA baseline.
 - a scientifically powered weighted versus flat-prior WFC run.
 - full persona/component tables and paired significance tests.
-- target-response and large-dungeon controllability studies.
+- room-semantic target-response before repair remains unimplemented. The
+  current executable target-response protocol tests mission-graph descriptor
+  response only and must be labeled as such.
+- large-dungeon controllability studies.
 
 ### Hard blocker
 
@@ -526,8 +539,15 @@ Test policy:
 
 Latest local verification (2026-07-02):
 
-- `python -m pytest tests -q --tb=short`: 1,599 passed, 0 failed.
-- Ruff `F821`, `F811`, and `F841`: passed.
+- The complete non-GUI suite is rerun after architecture changes; the exact
+  result belongs in the final session report rather than being hard-coded in
+  this long-lived document.
+- Focused evolutionary, configuration, pipeline, model, evaluation, and
+  publication-protocol checks pass on the current working tree.
+- A 50-seed spatial-profile probe emitted only compiler-supported edge and
+  protection semantics.
+- Ruff `F821`, `F811`, and `F841`: passed before this pass; rerun it for a
+  publication lock.
 - `python -m compileall -q src scripts tests experiments`: passed.
 - `python -m vulture src --min-confidence 90`: no findings.
 - `git diff --check`: passed.

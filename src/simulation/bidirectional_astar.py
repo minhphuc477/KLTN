@@ -19,7 +19,6 @@ Scientific Basis:
 - Pohl, I. (1971). "Bi-directional Search." Machine Intelligence, 6, 127-140.
 - Kaindl, H., & Kainz, G. (1997). "Bidirectional Heuristic Search Reconsidered."  
   Journal of Artificial Intelligence Research, 7, 283-317.
-- Complexity: O(b^(d/2)) time and space vs O(b^d) for unidirectional A*
 
 Critical limitation:
 - A single backward state cannot enumerate every predecessor inventory for
@@ -61,11 +60,9 @@ class BidirectionalAStar:
     - Path reconstruction by concatenating forward and backward paths
     - Lower-bound certification before accepting a first frontier meeting
     
-    Performance:
-    - Time: O(b^(d/2)) vs O(b^d) for unidirectional A*
-    - Space: O(b^(d/2)) - maintains two frontiers
-    - Best for: Long paths where meeting point exists
-    - Speedup: ~50% reduction in nodes expanded on average
+    Bidirectional search can reduce expansions on suitable reversible problems,
+    but no domain-independent speedup is claimed; frontier balance, obstacles,
+    heuristic quality, and optimality proof overhead determine actual cost.
     
     Stateful Zelda transitions are delegated to ``StateSpaceAStar`` because a
     guessed goal inventory does not define a complete reverse transition graph.
@@ -342,7 +339,13 @@ class BidirectionalAStar:
         return float(DIAGONAL_COST if dr == 1 and dc == 1 else CARDINAL_COST)
 
     def _frontier_lower_bound(self) -> float:
-        """Return the best remaining full-path lower bound from either frontier."""
+        """
+        Return the strongest admissible front-to-end lower bound.
+
+        Each direction's minimum f-value independently lower-bounds the optimal
+        solution cost. Their maximum is therefore also admissible and avoids
+        continuing merely because the opposite frontier has a weaker bound.
+        """
         candidates: List[float] = []
         for heap, closed in (
             (self.forward_open, self.forward_closed),
@@ -352,7 +355,7 @@ class BidirectionalAStar:
                 heapq.heappop(heap)
             if heap:
                 candidates.append(float(heap[0][0]))
-        return min(candidates) if candidates else float("inf")
+        return max(candidates) if candidates else float("inf")
 
     def _fallback_to_astar(self) -> Tuple[bool, List[Tuple[int, int]], int]:
         """Fallback to canonical A* when bidirectional search cannot complete reliably."""

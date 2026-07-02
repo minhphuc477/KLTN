@@ -28,6 +28,12 @@ from src.core.definitions import (
 logger = logging.getLogger(__name__)
 
 
+class ModelContextContractError(ValueError):
+    """Deterministic graph-context contract failure that retries cannot repair."""
+
+    retryable = False
+
+
 class _DisabledTransformerDecoder(nn.Module):
     """No-parameter placeholder for concat mode where cross-decoder is disabled."""
 
@@ -104,7 +110,9 @@ class MaskedTokenTransformerBackbone(nn.Module):
         if context.dim() == 2:
             context = context.unsqueeze(1)
         if context.dim() != 3:
-            raise ValueError(f"context must be [B,C] or [B,N,C], got {tuple(context.shape)}.")
+            raise ModelContextContractError(
+                f"context must be [B,C] or [B,N,C], got {tuple(context.shape)}."
+            )
         return self.context_proj(context)
 
     def _context_key_padding_mask(
@@ -123,11 +131,13 @@ class MaskedTokenTransformerBackbone(nn.Module):
         if valid.dim() == 1:
             valid = valid.unsqueeze(0)
         if valid.dim() != 2:
-            raise ValueError(f"node_mask must have shape [B,N] or [N], got {tuple(valid.shape)}.")
+            raise ModelContextContractError(
+                f"node_mask must have shape [B,N] or [N], got {tuple(valid.shape)}."
+            )
         if int(valid.shape[0]) == 1 and batch_size > 1:
             valid = valid.expand(batch_size, -1)
         if int(valid.shape[0]) != batch_size:
-            raise ValueError(
+            raise ModelContextContractError(
                 f"node_mask batch size {int(valid.shape[0])} does not match context batch size {batch_size}."
             )
 
@@ -135,7 +145,7 @@ class MaskedTokenTransformerBackbone(nn.Module):
             anchor = torch.ones(batch_size, 1, device=valid.device, dtype=torch.bool)
             valid = torch.cat([anchor, valid], dim=1)
         elif int(valid.shape[1]) != seq_len:
-            raise ValueError(
+            raise ModelContextContractError(
                 "node_mask/context token contract mismatch: "
                 f"node_mask has {int(valid.shape[1])} entries but context has {seq_len} tokens. "
                 "Refusing to pad or truncate graph context silently; fix the condition encoder "

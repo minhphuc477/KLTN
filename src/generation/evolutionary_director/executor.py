@@ -18,6 +18,7 @@ class GraphGrammarExecutor:
         self,
         seed: Optional[int] = None,
         use_full_rule_space: bool = False,
+        rule_space: Optional[str] = None,
         max_lock_key_rules: int = 3,
         rule_weight_overrides: Optional[Dict[str, float]] = None,
         enforce_generation_constraints: bool = True,
@@ -28,8 +29,11 @@ class GraphGrammarExecutor:
         
         Args:
             seed: Random seed for deterministic execution
-            use_full_rule_space: If True, expose full MissionGrammar rule set
-                (core + advanced + wave3) instead of the legacy 5-rule subset.
+            use_full_rule_space: Backward-compatible switch for the full rule
+                set. ``rule_space`` takes precedence when supplied.
+            rule_space: ``core`` for the legacy rules, ``full`` for graph-only
+                research, or ``spatial`` for mechanics that the final-map
+                compiler and tile oracle can represent faithfully.
             max_lock_key_rules: Hard cap on progression key/lock-style rule
                 applications allowed per genome execution.
             enforce_generation_constraints: Reject rule outcomes that violate
@@ -39,7 +43,17 @@ class GraphGrammarExecutor:
         """
         self.seed = seed
         self.rng = random.Random(seed)
-        self.use_full_rule_space = bool(use_full_rule_space)
+        requested_rule_space = (
+            str(rule_space).strip().lower()
+            if rule_space is not None
+            else ("full" if use_full_rule_space else "core")
+        )
+        if requested_rule_space not in {"core", "full", "spatial"}:
+            raise ValueError(
+                f"Unsupported grammar rule_space={rule_space!r}; expected core, spatial, or full."
+            )
+        self.rule_space = requested_rule_space
+        self.use_full_rule_space = requested_rule_space in {"full", "spatial"}
         self.max_lock_key_rules = int(max(0, max_lock_key_rules))
         self.rule_weight_overrides = rule_weight_overrides or {}
         self.enforce_generation_constraints = bool(enforce_generation_constraints)
@@ -49,7 +63,32 @@ class GraphGrammarExecutor:
             # Reuse canonical grammar rule registry so evolutionary search
             # can explore the same topology mechanics as direct generation.
             canonical = MissionGrammar(seed=seed)
-            self.rules = canonical.rules
+            if self.rule_space == "spatial":
+                spatial_rule_names = {
+                    "Start",
+                    "InsertChallenge_ENEMY",
+                    "InsertChallenge_PUZZLE",
+                    "InsertLockKey",
+                    "Branch",
+                    "MergeShortcut",
+                    "AddBossGauntlet",
+                    "CreateHub",
+                    "AddSecret",
+                    "PruneGraph",
+                    "AddFungibleLock",
+                    "FormBigRoom",
+                    "AddForeshadowing",
+                    "AddSector",
+                    "AddHazardGate",
+                    "AddSkillChain",
+                    "AddPacingBreaker",
+                    "PruneDeadEnd",
+                }
+                self.rules = [
+                    rule for rule in canonical.rules if rule.name in spatial_rule_names
+                ]
+            else:
+                self.rules = canonical.rules
             self.rule_names = [rule.name for rule in self.rules]
         else:
             # Define available rules (indexed by ID)
@@ -288,6 +327,7 @@ class GraphGrammarExecutor:
             'difficulty': difficulty,
             'goal_row': 5,
             'goal_col': 5,
+            'spatial_compilable': self.rule_space == "spatial",
         }
         
         # Always apply start rule first
@@ -524,6 +564,7 @@ class GraphGrammarExecutor:
                 "difficulty": float(difficulty),
                 "max_nodes": int(max_nodes),
                 "allow_override": bool(allow_override),
+                "rule_space": str(self.rule_space),
                 "use_full_rule_space": bool(self.use_full_rule_space),
                 "max_lock_key_rules": int(self.max_lock_key_rules),
                 "enforce_generation_constraints": bool(self.enforce_generation_constraints),
@@ -702,6 +743,7 @@ class GraphGrammarExecutor:
             "difficulty",
             "max_nodes",
             "allow_override",
+            "rule_space",
             "use_full_rule_space",
             "max_lock_key_rules",
             "enforce_generation_constraints",
@@ -779,6 +821,23 @@ class GraphGrammarExecutor:
                 seen_rule_names.add(name)
                 safe_rule_names.append(name)
 
+        replay_rule_space = payload.get("rule_space")
+        if replay_rule_space is None:
+            replay_rule_space = (
+                "full"
+                if _bounded_bool(
+                    "use_full_rule_space",
+                    payload.get("use_full_rule_space", False),
+                    default=False,
+                )
+                else "core"
+            )
+        replay_rule_space = str(replay_rule_space).strip().lower()
+        if replay_rule_space not in {"core", "spatial", "full"}:
+            raise ValueError(
+                "Replay payload field 'rule_space' must be core, spatial, or full."
+            )
+
         executor = cls(
             seed=(
                 None
@@ -791,11 +850,8 @@ class GraphGrammarExecutor:
                     hi=(2**31) - 1,
                 )
             ),
-            use_full_rule_space=_bounded_bool(
-                "use_full_rule_space",
-                payload.get("use_full_rule_space", False),
-                default=False,
-            ),
+            use_full_rule_space=replay_rule_space in {"spatial", "full"},
+            rule_space=replay_rule_space,
             max_lock_key_rules=_bounded_int(
                 "max_lock_key_rules",
                 payload.get("max_lock_key_rules", 3),

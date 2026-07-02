@@ -388,6 +388,7 @@ def _generate_graph(
     descriptor_targets: Mapping[str, float],
     search_strategy: str,
     qd_archive_cells: int,
+    rule_space: str,
 ) -> Tuple[nx.Graph, float]:
     graphs, times = generate_block_i_graphs(
         num_samples=1,
@@ -396,7 +397,7 @@ def _generate_graph(
         max_rooms=int(max_rooms),
         population_size=int(population_size),
         generations=int(generations),
-        rule_space="full",
+        rule_space=str(rule_space),
         descriptor_targets=dict(descriptor_targets),
         room_count_bias=0.45,
         search_strategy=str(search_strategy),
@@ -427,6 +428,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--generations", type=int, default=24)
     parser.add_argument("--search-strategy", choices=["ga", "cvt"], default="ga")
     parser.add_argument("--qd-archive-cells", type=int, default=128)
+    parser.add_argument(
+        "--rule-space",
+        choices=["core", "spatial"],
+        default="spatial",
+        help="End-to-end runs exclude graph-only mechanics that lack a faithful tile representation.",
+    )
     parser.add_argument("--reuse-existing", action="store_true")
     return parser.parse_args()
 
@@ -486,6 +493,7 @@ def main() -> None:
                     descriptor_targets=targets,
                     search_strategy=str(args.search_strategy),
                     qd_archive_cells=int(args.qd_archive_cells),
+                    rule_space=str(args.rule_space),
                 )
                 graph_path.write_text(
                     json.dumps(_json_sanitize(json_graph.node_link_data(graph, edges="links")), indent=2),

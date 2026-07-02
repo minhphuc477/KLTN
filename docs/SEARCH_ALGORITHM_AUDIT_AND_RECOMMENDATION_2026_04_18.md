@@ -13,8 +13,9 @@ Zelda state model implemented in `src/simulation/validator.py`.
 - Use `Dijkstra` as an exact cost fallback/baseline when heuristic behavior is
   under scrutiny.
 - Use `Bidirectional A*` only for reversible, stateless grid comparisons.
-- Use the forward LPA*/D* Lite-style replanner only for incremental replanning
-  diagnostics.
+- Use backward D* Lite only for reversible position-only grids and incremental
+  edge-cost changes. Stateful Zelda maps automatically delegate to full-state
+  A*.
 - Use `P-CBS` as a bounded-agent behavioral probe, not as a hard solvability
   oracle.
 - Use `JPS`, `HPA*`, or `Theta*` only in separate ablations whose assumptions
@@ -27,7 +28,7 @@ The current selector lives in
 
 - `A*`: `validation_role="oracle"`, `canonical_use="hard_oracle"`.
 - `Dijkstra`: exact fallback and baseline.
-- `dstar_lite`: compatibility key for `label="Forward LPA* replanning"` and
+- `dstar_lite`: compatibility key for `label="D* Lite"` and
   `validation_role="replanning_diagnostic"`.
 - `Bidirectional A*`: `validation_role="reversible_grid_diagnostic"`.
 - `recommended_game_state_algorithm_specs(...)` selects algorithms by
@@ -83,7 +84,7 @@ the environment is proven stateless and reversible.
 | Dijkstra | Exact no-heuristic baseline/fallback | Fast default |
 | BFS | Small uniform-cost sanity baseline | Scalable validator |
 | Greedy | Inadmissible heuristic baseline | Correctness oracle |
-| Forward LPA*/D* Lite-style replanner | Dynamic replanning diagnostic | Primary static oracle or textbook D* Lite |
+| Backward D* Lite | Reversible-grid incremental replanning | Inventory/puzzle oracle |
 | DFS/IDDFS | Bounded exhaustive probe | Optimal default |
 | Bidirectional A* | Reversible stateless-grid comparison | Valid on inventory maps |
 | P-CBS | Bounded-agent behavioral/readability probe | Mechanical oracle |
@@ -99,19 +100,25 @@ Current fixes applied:
 - The role-separated benchmark entry point is
   [`scripts/run_search_role_benchmark.py`](../scripts/run_search_role_benchmark.py).
 - Bidirectional A* now continues after the first frontier meeting until the
-  incumbent path is certified against the remaining frontier lower bound.
+  incumbent is certified against `max(min_f_forward, min_f_backward)`, the
+  stronger admissible front-to-end lower bound.
 - Bidirectional fallback uses only the unspent expansion budget and reports
   the sum of bidirectional and fallback expansions. A single solver request
   can no longer silently spend the full budget twice.
 - Reversible-grid bidirectional search initializes backward inventory from the
   start state, avoiding false collision rejection on stateless maps.
-- The historical `dstar_lite` key now reports `Forward LPA* replanning` in
-  public solver metadata. It is explicitly marked as non-textbook D* Lite and
-  not an independent oracle.
+- The historical `dstar_lite` key now runs a goal-rooted backward D* Lite core
+  with `rhs(goal)=0` on reversible position graphs. Inventory, consumables,
+  blocks, directed graph transitions, and staged puzzles explicitly select
+  full-state A* and report `fallback_used=True`.
 - Diagonal movement is opt-in and uses the canonical `sqrt(2)` cost
-  consistently across validator, forward replanning, and Bidirectional A*.
-- Hazard graph edges parse and traverse as risk-bearing open edges rather than
-  silently becoming non-traversable.
+  consistently with octile distance across validator, D* Lite, and
+  Bidirectional A*. Changing only the cost to `1.0` would require changing all
+  heuristics to Chebyshev distance and would define a different movement model.
+- Unprotected hazard graph edges remain risk-bearing open edges. Hazards with
+  `protection_item_id` become `hazard_protected` at the tile-state boundary and
+  require the generic permanent traversal item; the abstract graph oracle
+  still checks the named item identity.
 - A protected hazard compiles to the canonical `ELEMENT` tile by default, and
   its `PROTECTION_ITEM` provider compiles to the generic `KEY_ITEM` traversal
   item. The current tile vocabulary has only one generic protection-item
@@ -140,7 +147,15 @@ Current fixes applied:
 - Robust pipeline retries now retain per-attempt error history in
   `BlockResult.attempt_errors`, so bulk generation can distinguish "model did
   not generate advanced mechanics" from "validator/stitcher rejected advanced
-  mechanics repeatedly."
+  mechanics repeatedly." Masked-model context-shape failures are marked
+  non-retryable, so a deterministic node-mask/token mismatch terminates the
+  block on its first attempt instead of consuming every retry.
+- Tension curves of unequal length are resampled on normalized narrative
+  progress to the longer sequence length. The generated suffix and target
+  beats are both included; no prefix truncation remains.
+- The unused permissive virtual-transition BFS was removed. Runtime graph
+  transitions now use only the controlled virtual-node path and the explicit
+  non-adjacent warp path; adjacent physical rooms remain grid transitions.
 - P-CBS telemetry calibration artifacts now include calibration provenance:
   hard oracle = full-state A*, bounded agent = P-CBS, and bidirectional /
   replanning diagnostics are excluded as persona anchors.
@@ -199,10 +214,11 @@ Current fixes applied:
   they were expansion counts.
 - Composite graph gates enforce every listed constraint, and typed token locks
   count only matching token identities.
-- End-to-end generation defaults to the `core` mission rule space. The full
-  grammar remains available for graph-only experiments, but a full-grammar
-  graph is rejected by spatial compilation when its mechanic has no faithful
-  tile/entity/oracle representation.
+- End-to-end generation defaults to the `spatial` mission rule space. This
+  profile keeps representable lock/key, hazard, secret, pacing, and boss
+  mechanics while excluding graph-only productions that have no faithful
+  tile/entity/oracle representation. The five-rule `core` profile remains a
+  minimal ablation, and `full` remains graph-only.
 
 ## End-To-End Solvability Contract
 
@@ -266,8 +282,8 @@ For final tables:
 1. Report hard solvability with full-state A* plus graph progression and
    softlock checks.
 2. Report Dijkstra only as an exact comparator or fallback.
-3. Report the forward replanner under a replanning section with dynamic-change
-   scenarios; do not call it textbook D* Lite.
+3. Report D* Lite under a replanning section with reversible dynamic-change
+   scenarios. Report stateful cases as A* fallbacks, not D* Lite results.
 4. Report Bidirectional A* only on reversible stateless grids, or explicitly
    mark `fallback_used=True` when it delegates to A*.
 5. Report P-CBS separately as bounded-agent readability and difficulty. If the
@@ -282,6 +298,16 @@ For final tables:
 
 ## Remaining Search Work
 
+- Completed after the grammar/compiler contract audit: Block I now has an
+  explicit `spatial` rule profile, and runtime, YAML, and full-pipeline
+  evaluation defaults use it. Candidate-repair rules are profile-aware, so a
+  spatial run cannot reintroduce unsupported item gates, state blocks,
+  shutters, or multi-locks after evolution.
+- Completed after constrained-evolution audit: constrained spatial/full
+  populations receive one ordinary, fully evaluated feasible anchor genome.
+  This prevents small initial populations from being entirely infeasible
+  without bypassing selection, graph validation, spatial compilation, or the
+  final tile oracle.
 - Implemented after the bridge-mechanics audit: the tile validator now permits
   pushing a `BLOCK` into an `ELEMENT` tile and converts it into an
   `ELEMENT_FLOOR` bridge in both mutable stepping and pure search transitions.

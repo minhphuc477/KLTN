@@ -1946,7 +1946,15 @@ class AddHazardGateRule(ProductionRule):
         
         # Choose hazard type
         hazard_types = ["LAVA", "SPIKES", "POISON", "ICE"]
-        hazard_type = rng.choice(hazard_types)
+        # The current final-map vocabulary has one generic protection-item
+        # tile. Keep graph-only experiments expressive, but use one stable
+        # semantic identity in the spatially compilable profile so the tile
+        # oracle does not conflate several mutually exclusive protections.
+        hazard_type = (
+            "LAVA"
+            if bool(context.get("spatial_compilable", False))
+            else rng.choice(hazard_types)
+        )
         protection_item = f"{hazard_type}_PROTECTION"  # e.g., LAVA_PROTECTION (fire tunic)
         
         # Convert edge to HAZARD
@@ -2898,37 +2906,20 @@ class PruneDeadEndRule(ProductionRule):
         super().__init__("PruneDeadEnd", weight=0.1)
     
     def can_apply(self, graph: MissionGraph, context: Dict[str, Any]) -> bool:
-        """Can apply if there are degree-1 nodes without valuable content."""
-        valuable_types = {
-            NodeType.KEY, NodeType.ITEM, NodeType.BOSS, NodeType.MINI_BOSS,
-            NodeType.SWITCH, NodeType.GOAL, NodeType.START, NodeType.BIG_KEY,
-            NodeType.TREASURE, NodeType.TOKEN,
-            NodeType.TUTORIAL_PUZZLE, NodeType.COMBAT_PUZZLE, NodeType.COMPLEX_PUZZLE,
-            NodeType.ARENA,
-        }
-        
+        """Return whether a truly empty connector leaf can be removed."""
         for node in graph.nodes.values():
             degree = graph.get_node_degree(node.id)
-            if degree == 1 and node.node_type not in valuable_types:
+            if degree == 1 and node.node_type == NodeType.EMPTY:
                 if not node.is_hub and not node.is_secret:
                     return True
         return False
     
     def apply(self, graph: MissionGraph, context: Dict[str, Any]) -> MissionGraph:
-        """Prune useless dead ends."""
-        valuable_types = {
-            NodeType.KEY, NodeType.ITEM, NodeType.BOSS, NodeType.MINI_BOSS,
-            NodeType.SWITCH, NodeType.GOAL, NodeType.START, NodeType.BIG_KEY,
-            NodeType.TREASURE, NodeType.TOKEN,
-            NodeType.TUTORIAL_PUZZLE, NodeType.COMBAT_PUZZLE, NodeType.COMPLEX_PUZZLE,
-            NodeType.ARENA,
-        }
-        
-        # Find dead ends without value
+        """Prune one empty connector leaf while preserving authored content."""
         dead_ends = []
         for node in graph.nodes.values():
             degree = graph.get_node_degree(node.id)
-            if degree == 1 and node.node_type not in valuable_types:
+            if degree == 1 and node.node_type == NodeType.EMPTY:
                 if not node.is_hub and not node.is_secret:
                     dead_ends.append(node.id)
         

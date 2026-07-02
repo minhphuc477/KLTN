@@ -1417,6 +1417,15 @@ class CrossAttentionFusion(nn.Module):
         
         # Add sequence dimension to local (single query)
         c_local = c_local.unsqueeze(1)  # [B, 1, local_dim]
+
+        # An empty graph is a valid boundary case for graph-free ablations.
+        # Attention over a zero-length key sequence is backend-dependent and
+        # can produce NaNs, so preserve the local residual explicitly.
+        if N == 0:
+            residual = self.residual_proj(c_local)
+            c_out = self.layer_norm(residual)
+            c_out = self.ffn_norm(c_out + self.ffn(c_out))
+            return c_out.squeeze(1)
         
         # Project Q, K, V
         Q = self.query_proj(c_local)  # [B, 1, output_dim]

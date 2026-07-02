@@ -271,7 +271,15 @@ class FrustrationAnalyzer:
                     content.get("enemies", 0) > 0,
                     content.get("keys", 0) > 0,
                     content.get("treasures", 0) > 0,
+                    content.get("items", 0) > 0,
                     content.get("puzzles", 0) > 0,
+                    content.get("landmarks", 0) > 0,
+                    content.get("health_pickups", 0) > 0,
+                    content.get("scenic", False),
+                    content.get("rest_area", False),
+                    content.get("safe_room", False),
+                    content.get("boss", False),
+                    content.get("goal", False),
                 ]
             )
             if not has_content:

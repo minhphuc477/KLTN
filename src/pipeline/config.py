@@ -144,7 +144,7 @@ class GraphConfig:
     topology_mutation_rate: float = 0.15
     topology_crossover_rate: float = 0.7
     topology_genome_length: int = 0
-    topology_rule_space: str = "full"
+    topology_rule_space: str = "spatial"
     topology_transition_mix: float = 0.7
     topology_search_strategy: str = "ga"
     topology_qd_archive_cells: int = 128

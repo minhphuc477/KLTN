@@ -116,10 +116,14 @@ Hierarchy strategy in `solve()`:
 ### 3.5 D* Lite
 
 Implementation highlights:
+- Uses the textbook backward recurrence with `rhs(goal)=0` on reversible,
+  position-only grids
 - Maintains `g(s)` and `rhs(s)`
-- Key: `[min(g,rhs)+h, min(g,rhs)]`
+- Key: `[min(g,rhs)+h(start,s)+km, min(g,rhs)]`
 - Supports replan API (`replan`, `needs_replan`)
-- If primary search fails, falls back to `StateSpaceAStar` for correctness
+- Stateful inventory, consumable, block, graph, and staged-puzzle mechanics
+  fall back to `StateSpaceAStar` because their reverse transitions are not
+  position-only
 
 Important role boundary:
 

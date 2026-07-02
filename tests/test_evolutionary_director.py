@@ -427,6 +427,23 @@ class TestTensionCurveEvaluator:
         assert len(curve) == len(target)
         assert all(0.0 <= v <= 1.0 for v in curve)
 
+    def test_curve_alignment_scores_the_complete_generated_suffix(self):
+        """Generated rooms beyond target length must affect narrative fitness."""
+        target = [0.0, 0.5, 1.0]
+        aligned = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
+        broken_suffix = [0.0, 0.2, 0.4, 0.0, 0.0, 0.0]
+
+        aligned_score = TensionCurveEvaluator._curve_event_alignment_scores(
+            aligned,
+            target,
+        )["curve_fitness"]
+        broken_score = TensionCurveEvaluator._curve_event_alignment_scores(
+            broken_suffix,
+            target,
+        )["curve_fitness"]
+
+        assert aligned_score > broken_score
+
     def test_pedagogical_descriptor_metrics_detect_skill_chain(self):
         """Evaluator should reward explicit item -> tutorial -> combat -> complex progression."""
         target = [0.2, 0.4, 0.7, 1.0]
@@ -614,8 +631,18 @@ class TestTensionCurveEvaluator:
         repaired = gen._repair_progression_balance(graph, constraint_grammar=constraint_grammar)
         after = gen.evaluator._extract_descriptor_metrics(repaired)
 
-        assert 8 not in repaired.nodes
-        assert after["linearity"] > before["linearity"]
+        removable_empty_leaves = [
+            node.id
+            for node in repaired.nodes.values()
+            if node.node_type == NodeType.EMPTY
+            and repaired.get_node_degree(node.id) == 1
+            and not node.is_hub
+            and not node.is_secret
+        ]
+        assert removable_empty_leaves == []
+        # Path linearity intentionally ignores optional dead-end padding, so
+        # cleanup must preserve rather than artificially improve this metric.
+        assert after["linearity"] >= before["linearity"]
         assert after["pedagogical_puzzle_variety"] >= before["pedagogical_puzzle_variety"]
         assert after["skill_chain_score"] >= before["skill_chain_score"]
 

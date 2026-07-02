@@ -2,8 +2,10 @@ import time
 from types import SimpleNamespace
 
 import numpy as np
+import torch
 
 from src.core.definitions import SEMANTIC_PALETTE
+from src.core.discrete_masked_model import MaskedTokenTransformerBackbone
 from src.generation.global_state import StateAwareRoomGenerator
 from src.pipeline.robust_pipeline import (
     BlockStatus,
@@ -51,6 +53,37 @@ def test_pipeline_block_reports_failure_after_retries():
     assert result.status == BlockStatus.FAILED
     assert result.attempts == 2
     assert "RuntimeError" in (result.error or "")
+
+
+def test_pipeline_block_does_not_retry_deterministic_model_contract_failure():
+    attempts = {"count": 0}
+    backbone = MaskedTokenTransformerBackbone(
+        hidden_dim=8,
+        context_dim=4,
+        num_steps=4,
+        num_layers=1,
+        num_heads=2,
+        dropout=0.0,
+        room_topology_channels=1,
+    )
+    context_tokens = torch.zeros(1, 3, 8)
+    graph_data = {"node_mask": torch.ones(1, 2, dtype=torch.bool)}
+
+    def invalid_context(_state):
+        attempts["count"] += 1
+        return backbone._context_key_padding_mask(context_tokens, graph_data)
+
+    block = PipelineBlock(
+        name="masked_room",
+        executor=invalid_context,
+        config=PipelineConfig(max_retries=5, base_backoff=0.0, enable_logging=False),
+    )
+
+    result = block.execute(state={})
+
+    assert result.status == BlockStatus.FAILED
+    assert result.attempts == 1
+    assert attempts["count"] == 1
 
 
 def test_advanced_pipeline_module_imports_and_config_defaults():
