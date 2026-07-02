@@ -11,6 +11,8 @@ from typing import Any, Dict, List, Tuple
 from dataclasses import dataclass
 import logging
 
+from src.core.definitions import SEMANTIC_PALETTE
+
 logger = logging.getLogger(__name__)
 
 
@@ -75,6 +77,7 @@ class GraphConstraintEnforcer:
         self.WALL_ID = tile_config['wall']
         self.FLOOR_ID = tile_config['floor']
         self.DOOR_ID = tile_config.get('door', 2)
+        hazard_default = int(tile_config.get('element', SEMANTIC_PALETTE.get('ELEMENT', self.DOOR_ID)))
         self.DOOR_TILE_IDS = {
             'open': self.DOOR_ID,
             'locked': tile_config.get('door_locked', self.DOOR_ID),
@@ -82,7 +85,7 @@ class GraphConstraintEnforcer:
             'puzzle': tile_config.get('door_puzzle', self.DOOR_ID),
             'boss': tile_config.get('door_boss', self.DOOR_ID),
             'soft': tile_config.get('door_soft', self.DOOR_ID),
-            'hazard': tile_config.get('hazard', self.DOOR_ID),
+            'hazard': tile_config.get('hazard', hazard_default),
         }
         self.START_ID = tile_config.get('start')
         self.GOAL_ID = tile_config.get('goal')

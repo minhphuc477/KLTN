@@ -9,8 +9,8 @@ import time
 import logging
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from enum import Enum
-from typing import Dict, Any, Callable, Tuple, Optional
-from dataclasses import dataclass
+from typing import Dict, Any, Callable, Tuple, Optional, List
+from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +30,7 @@ class BlockResult:
     error: Optional[str] = None
     execution_time: float = 0.0
     attempts: int = 1
+    attempt_errors: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -89,6 +90,7 @@ class PipelineBlock:
             BlockResult with status, output, and diagnostics
         """
         backoff = self.config.base_backoff
+        attempt_errors: List[str] = []
         
         for attempt in range(1, self.config.max_retries + 1):
             if self.config.enable_logging:
@@ -138,6 +140,7 @@ class PipelineBlock:
                     f"TimeoutError: {self.name} exceeded timeout_per_block="
                     f"{self.config.timeout_per_block}s"
                 )
+                attempt_errors.append(error_msg)
 
                 if self.config.enable_logging:
                     logger.warning(f"[{self.name}] [FAIL] Attempt {attempt} failed: {error_msg}")
@@ -156,11 +159,13 @@ class PipelineBlock:
                         status=BlockStatus.FAILED,
                         error=error_msg,
                         execution_time=execution_time,
-                        attempts=attempt
+                        attempts=attempt,
+                        attempt_errors=list(attempt_errors),
                     )
             except (AttributeError, RuntimeError, ValueError, TypeError) as e:
                 execution_time = time.time() - start_time
                 error_msg = f"{type(e).__name__}: {str(e)}"
+                attempt_errors.append(error_msg)
                 
                 if self.config.enable_logging:
                     logger.warning(f"[{self.name}] [FAIL] Attempt {attempt} failed: {error_msg}")
@@ -181,14 +186,16 @@ class PipelineBlock:
                         status=BlockStatus.FAILED,
                         error=error_msg,
                         execution_time=execution_time,
-                        attempts=attempt
+                        attempts=attempt,
+                        attempt_errors=list(attempt_errors),
                     )
         
         # Should never reach here, but handle gracefully
         return BlockResult(
             status=BlockStatus.FAILED,
             error="Max retries exceeded",
-            attempts=self.config.max_retries
+            attempts=self.config.max_retries,
+            attempt_errors=list(attempt_errors),
         )
 
 
@@ -349,6 +356,10 @@ class RobustPipeline:
             
             if result.error:
                 lines.append(f"   Error: {result.error}")
+            if result.attempt_errors:
+                recent = result.attempt_errors[-3:]
+                for idx, err in enumerate(recent, start=max(1, len(result.attempt_errors) - len(recent) + 1)):
+                    lines.append(f"   Attempt {idx}: {err}")
         
         lines.append(f"\nTotal time: {total_time:.2f}s")
         lines.append(f"Total attempts: {total_attempts}")

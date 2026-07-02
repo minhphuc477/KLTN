@@ -12,6 +12,17 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from src.simulation.cognitive_bounded_search import AgentPersona, PersonaConfig
 
+PCBS_CALIBRATION_PROVENANCE = {
+    "hard_oracle": "full_state_astar",
+    "bounded_agent": "p_cbs",
+    "diagnostic_solvers_excluded": ["bidirectional_astar", "forward_lpa_replanning", "greedy"],
+    "note": (
+        "Persona calibration must use hard-oracle A* and P-CBS outputs from "
+        "the same semantic-grid validator. Bidirectional and replanning "
+        "diagnostics are not calibration anchors."
+    ),
+}
+
 
 NUMERIC_KEYS = (
     "success_rate",
@@ -143,6 +154,7 @@ def calibrate_persona_overrides(
             "target_sessions": int(target.sessions),
             "target_metrics": asdict(target),
             "baseline_metrics": asdict(baseline) if baseline is not None else None,
+            "calibration_provenance": dict(PCBS_CALIBRATION_PROVENANCE),
             "overrides": overrides,
             "calibrated_config": calibrated_payload,
         }
@@ -191,6 +203,8 @@ def render_calibration_markdown(
             "The calibrator normalizes telemetry into success, path effort, revisits, confusion, entropy, cognitive load, and decision-time targets. "
             "If a P-CBS sweep CSV is supplied, it adjusts each built-in persona toward the human target relative to that simulated baseline. "
             "Without a sweep baseline, it uses conservative built-in anchors so the output remains stable.",
+            "",
+            "Calibration provenance: hard oracle = full-state A*; bounded agent = P-CBS; bidirectional and replanning diagnostics are excluded from persona anchoring.",
         ]
     )
     return "\n".join(lines) + "\n"
@@ -521,6 +535,7 @@ def _fmt_pct(value: Optional[float]) -> str:
 __all__ = [
     "TelemetrySessionMetrics",
     "TelemetryAggregate",
+    "PCBS_CALIBRATION_PROVENANCE",
     "load_telemetry_sessions",
     "aggregate_sessions",
     "calibrate_persona_overrides",

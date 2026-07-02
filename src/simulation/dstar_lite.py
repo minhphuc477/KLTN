@@ -1,15 +1,18 @@
 """
-D* Lite Implementation for Real-Time Replanning
-===============================================
+Forward Incremental Replanning Diagnostic
+=========================================
 
 Based on: Koenig, S., & Likhachev, M. (2002). "D* Lite." AAAI Conference.
 
-D* Lite is an incremental heuristic search algorithm. This module implements
-a forward LPA*/D* Lite-style variant over Zelda game states:
+This module implements a forward LPA*/D* Lite-style variant over Zelda game
+states. It is useful as a replanning diagnostic, but it is not the textbook
+backward D* Lite algorithm and must not be reported as an independent solvability
+oracle:
 1. Efficiently replans when the environment changes
 2. Maintains g(s) and rhs(s) values for all states
 3. Uses priority queue with two-component keys
-4. Achieves O(log N) update time vs O(N^2) for full A* restart
+4. Falls back to the canonical full-state A* oracle when consistency or path
+   extraction cannot be certified
 
 Key Concepts:
 - g(s): Current best cost from start to s
@@ -51,7 +54,7 @@ class DStarKey:
 
 class DStarLiteSolver:
     """
-    D* Lite incremental search for real-time replanning.
+    Forward incremental replanning over full Zelda game state.
     
     Features:
     - Efficient replanning when environment changes
@@ -60,7 +63,8 @@ class DStarLiteSolver:
     
     Performance:
     - Initial search: Similar to A* (O(N log N))
-    - Replan after change: O(M log N) where M = affected states
+    - Replan after change: diagnostic only; exact runtime depends on how many
+      full game states become locally inconsistent
     """
     
     def __init__(

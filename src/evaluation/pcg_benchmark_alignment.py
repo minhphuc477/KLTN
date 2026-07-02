@@ -121,6 +121,80 @@ def _node_tokens(attrs: Dict[str, Any]) -> set[str]:
     return out
 
 
+_RICH_NODE_TOKENS = {
+    "boss_key",
+    "big_key",
+    "switch",
+    "puzzle",
+    "tutorial_puzzle",
+    "combat_puzzle",
+    "complex_puzzle",
+    "token",
+    "protection_item",
+    "secret",
+    "treasure",
+    "mini_boss",
+    "resource_farm",
+    "stairs_up",
+    "stairs_down",
+    "arena",
+}
+
+_RICH_EDGE_TOKENS = {
+    "boss_locked",
+    "item_gate",
+    "on_off_gate",
+    "state_block",
+    "warp",
+    "stairs",
+    "visual_link",
+    "shutter",
+    "hazard",
+    "multi_lock",
+    "soft_locked",
+    "hidden",
+    "shortcut",
+}
+
+
+def _semantic_loss_summary(graph: nx.Graph) -> Dict[str, Any]:
+    """
+    Quantify mechanics collapsed by the external six-tile Zelda benchmark.
+
+    The PCG Benchmark Zelda representation can only see wall, empty, player,
+    key, door, and enemy. These counts make that limitation explicit in every
+    exported row so rich-grammar claims are not inferred from benchmark scores.
+    """
+    rich_nodes = 0
+    rich_edges = 0
+    for _, attrs in graph.nodes(data=True):
+        if _node_tokens(dict(attrs)).intersection(_RICH_NODE_TOKENS):
+            rich_nodes += 1
+    for _, _, attrs in graph.edges(data=True):
+        raw_values = {
+            str(attrs.get("edge_type", "") or ""),
+            str(attrs.get("type", "") or ""),
+            str(attrs.get("label", "") or ""),
+        }
+        normalized = {
+            value.strip().lower().replace("edgetype.", "")
+            for value in raw_values
+            if value and value.strip()
+        }
+        if normalized.intersection(_RICH_EDGE_TOKENS):
+            rich_edges += 1
+    node_total = max(1, int(graph.number_of_nodes()))
+    edge_total = max(1, int(graph.number_of_edges()))
+    collapsed_total = int(rich_nodes + rich_edges)
+    return {
+        "benchmark_mapping_is_lossy": True,
+        "benchmark_tile_vocabulary": ["wall", "empty", "player", "key", "door", "enemy"],
+        "rich_semantic_nodes_collapsed": int(rich_nodes),
+        "rich_semantic_edges_collapsed": int(rich_edges),
+        "rich_semantic_collapse_ratio": float(collapsed_total / float(node_total + edge_total)),
+    }
+
+
 def _ordered_nodes(graph: nx.Graph) -> List[Any]:
     return sorted(graph.nodes(), key=stable_node_sort_key)
 
@@ -177,6 +251,10 @@ def _invalid_mapping(
         "content_control_final": {"player_key": 0, "key_door": 0},
         "mapper_mode": "invalid_semantics",
         "control_fallback_applied": False,
+        "benchmark_mapping_is_lossy": True,
+        "rich_semantic_nodes_collapsed": 0,
+        "rich_semantic_edges_collapsed": 0,
+        "rich_semantic_collapse_ratio": 0.0,
     }
     if metadata:
         payload.update(metadata)
@@ -806,6 +884,7 @@ def map_graph_to_pcg_benchmark_zelda(
         "num_nodes": int(graph.number_of_nodes()),
         "num_edges": int(graph.number_of_edges()),
     }
+    metadata.update(_semantic_loss_summary(graph))
     return PCGBenchmarkZeldaMapping(
         problem_name=variant.name,
         content=content,
@@ -944,6 +1023,10 @@ def evaluate_graphs_with_pcg_benchmark_zelda(
                 "semantic_valid": float(bool(mapping.metadata.get("semantic_valid", True))),
                 "semantic_error": str(mapping.metadata.get("semantic_error", "")),
                 "control_fallback_applied": float(bool(mapping.metadata.get("control_fallback_applied", False))),
+                "benchmark_mapping_is_lossy": float(bool(mapping.metadata.get("benchmark_mapping_is_lossy", True))),
+                "rich_semantic_nodes_collapsed": float(mapping.metadata.get("rich_semantic_nodes_collapsed", 0.0)),
+                "rich_semantic_edges_collapsed": float(mapping.metadata.get("rich_semantic_edges_collapsed", 0.0)),
+                "rich_semantic_collapse_ratio": float(mapping.metadata.get("rich_semantic_collapse_ratio", 0.0)),
                 "quality": quality_value,
                 "diversity": diversity_value,
                 "controlability": control_value,

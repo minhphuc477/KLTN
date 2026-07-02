@@ -99,6 +99,10 @@ WATER_IDS = {
     SEMANTIC_PALETTE['ELEMENT'],  # Water/lava - needs KEY_ITEM (Ladder) to cross
 }
 
+BRIDGE_FILL_IDS = {
+    SEMANTIC_PALETTE['ELEMENT'],  # Push a block into water/lava to create ELEMENT_FLOOR.
+}
+
 PICKUP_IDS = {
     SEMANTIC_PALETTE['KEY_SMALL'],
     SEMANTIC_PALETTE['KEY_BOSS'],
@@ -205,6 +209,8 @@ class GameState:
     opened_doors: Set[Tuple[int, int]] = field(default_factory=set)
     collected_items: Set[Tuple[int, int]] = field(default_factory=set)
     pushed_blocks: Set[Tuple[Tuple[int, int], Tuple[int, int]]] = field(default_factory=set)  # (from_pos, to_pos)
+    filled_block_origins: Set[Tuple[int, int]] = field(default_factory=set)
+    bridged_tiles: Set[Tuple[int, int]] = field(default_factory=set)
     defeated_enemies: Set[Tuple[int, int]] = field(default_factory=set)
     completed_puzzle_stages: Set[Tuple[str, int]] = field(default_factory=set)
     current_floor: int = 0  # NEW: Multi-floor dungeon support
@@ -235,6 +241,8 @@ class GameState:
             frozenset(self.opened_doors),
             frozenset(self.collected_items),
             frozenset(self.pushed_blocks),
+            frozenset(self.filled_block_origins),
+            frozenset(self.bridged_tiles),
             frozenset(self.defeated_enemies),
             frozenset(self.completed_puzzle_stages),
             self.current_floor,
@@ -253,6 +261,8 @@ class GameState:
             self.opened_doors == other.opened_doors and
             self.collected_items == other.collected_items and
             self.pushed_blocks == other.pushed_blocks and
+            self.filled_block_origins == other.filled_block_origins and
+            self.bridged_tiles == other.bridged_tiles and
             self.defeated_enemies == other.defeated_enemies and
             self.completed_puzzle_stages == other.completed_puzzle_stages and
             self.current_floor == other.current_floor and
@@ -270,6 +280,8 @@ class GameState:
             collected_items=self.collected_items.copy(),
             # Use set() to safely copy both set and frozenset types
             pushed_blocks=set(self.pushed_blocks),
+            filled_block_origins=set(self.filled_block_origins),
+            bridged_tiles=set(self.bridged_tiles),
             defeated_enemies=set(self.defeated_enemies),
             completed_puzzle_stages=set(self.completed_puzzle_stages),
             current_floor=self.current_floor,
@@ -288,6 +300,8 @@ def game_state_key(state: GameState) -> Tuple[Any, ...]:
         frozenset(state.opened_doors),
         frozenset(state.collected_items),
         frozenset(state.pushed_blocks),
+        frozenset(state.filled_block_origins),
+        frozenset(state.bridged_tiles),
         frozenset(state.defeated_enemies),
         frozenset(state.completed_puzzle_stages),
         state.current_floor,
@@ -302,14 +316,30 @@ def has_pushed_block_at(state: GameState, pos: Tuple[int, int]) -> bool:
 
 def was_block_vacated(state: GameState, pos: Tuple[int, int]) -> bool:
     """Return whether the static block originally at ``pos`` has moved away."""
-    return any(from_pos == pos for from_pos, _ in state.pushed_blocks)
+    return tuple(pos) in state.filled_block_origins or any(
+        from_pos == pos for from_pos, _ in state.pushed_blocks
+    )
+
+
+def dynamic_geometry_key(state: GameState) -> Tuple[FrozenSet, FrozenSet, FrozenSet]:
+    """Canonical dynamic-geometry key for block movement and bridge filling."""
+    return (
+        frozenset(state.pushed_blocks),
+        frozenset(state.filled_block_origins),
+        frozenset(state.bridged_tiles),
+    )
 
 
 def is_push_destination_available(state: GameState, pos: Tuple[int, int], static_tile: int) -> bool:
     """Check dynamic block occupancy before falling back to the immutable grid."""
     return (
         not has_pushed_block_at(state, pos)
-        and (int(static_tile) in WALKABLE_IDS or was_block_vacated(state, pos))
+        and (
+            int(static_tile) in WALKABLE_IDS
+            or int(static_tile) in BRIDGE_FILL_IDS
+            or was_block_vacated(state, pos)
+            or tuple(pos) in state.bridged_tiles
+        )
     )
 
 
@@ -382,6 +412,10 @@ def dominates(state_a: GameState, state_b: GameState) -> bool:
     # Block-pushing changes world geometry; only identical block histories are
     # comparable without a full canonical dynamic-grid representation.
     if state_a.pushed_blocks != state_b.pushed_blocks:
+        return False
+    if state_a.filled_block_origins != state_b.filled_block_origins:
+        return False
+    if state_a.bridged_tiles != state_b.bridged_tiles:
         return False
     
     # All checks passed: A dominates B
@@ -1088,13 +1122,24 @@ class ZeldaLogicEnv:
             if not is_push_destination_available(new_state, push_dest, push_dest_tile):
                 return False, self.state, 0.0, {'msg': 'Cannot push block - destination blocked'}
 
-            # Move block in the grid (mutable environment)
-            self.grid[push_dest_r, push_dest_c] = SEMANTIC_PALETTE['BLOCK']
+            fills_bridge = (
+                int(push_dest_tile) in BRIDGE_FILL_IDS
+                and push_dest not in new_state.bridged_tiles
+            )
+            # Move block in the grid (mutable environment). Pushing into an
+            # ELEMENT tile fills it rather than leaving a blocking block there.
+            self.grid[push_dest_r, push_dest_c] = (
+                SEMANTIC_PALETTE['ELEMENT_FLOOR'] if fills_bridge else SEMANTIC_PALETTE['BLOCK']
+            )
             exposed_tile = self._underlay_tile_for_block_origin(target_pos)
             self.grid[target_pos[0], target_pos[1]] = exposed_tile
 
             # Track push in state
-            new_state.pushed_blocks = new_state.pushed_blocks | {(target_pos, push_dest)}
+            if fills_bridge:
+                new_state.filled_block_origins = new_state.filled_block_origins | {target_pos}
+                new_state.bridged_tiles = new_state.bridged_tiles | {push_dest}
+            else:
+                new_state.pushed_blocks = new_state.pushed_blocks | {(target_pos, push_dest)}
             new_state.position = target_pos
 
             # Bug #3 fix: if a pickup item was at the player's new position *before*
@@ -1219,6 +1264,13 @@ class ZeldaLogicEnv:
         new_state.position = target_pos
         
         # Handle special tiles based on STATE, not grid modifications
+        if target_pos in state.bridged_tiles and int(target_tile) in BRIDGE_FILL_IDS:
+            new_state = self._update_puzzle_stage_progress(
+                new_state,
+                target_pos=target_pos,
+                target_tile=int(SEMANTIC_PALETTE['ELEMENT_FLOOR']),
+            )
+            return True, new_state
         
         # Check if this door was already opened (in state)
         if target_pos in state.opened_doors:
@@ -1263,14 +1315,26 @@ class ZeldaLogicEnv:
                     # Can push - update pushed_blocks
                     # CRITICAL: Preserve ORIGINAL from_pos to keep track of empty positions!
                     new_pushed = set()
+                    filled_origin: Optional[Tuple[int, int]] = None
+                    fills_bridge = (
+                        int(push_dest_tile) in BRIDGE_FILL_IDS
+                        and push_dest not in state.bridged_tiles
+                    )
                     for (fp, tp) in state.pushed_blocks:
                         if tp == target_pos:
-                            # Keep original from_pos, update destination to new position
-                            new_pushed.add((fp, push_dest))
+                            if fills_bridge:
+                                filled_origin = fp
+                            else:
+                                # Keep original from_pos, update destination to new position
+                                new_pushed.add((fp, push_dest))
                         else:
                             new_pushed.add((fp, tp))
                     # Use set (not frozenset) to maintain consistency with GameState.copy()
                     new_state.pushed_blocks = new_pushed
+                    if fills_bridge:
+                        if filled_origin is not None:
+                            new_state.filled_block_origins = state.filled_block_origins | {filled_origin}
+                        new_state.bridged_tiles = state.bridged_tiles | {push_dest}
                     # Trigger puzzle progression for re-pushed blocks (was missing).
                     new_state = self._update_puzzle_stage_progress(
                         new_state,
@@ -1424,8 +1488,16 @@ class ZeldaLogicEnv:
             push_dest = (push_dest_r, push_dest_c)
 
             if is_push_destination_available(state, push_dest, int(push_dest_tile)):
-                # Can push - record in pushed_blocks
-                new_state.pushed_blocks = state.pushed_blocks | {(target_pos, push_dest)}
+                fills_bridge = (
+                    int(push_dest_tile) in BRIDGE_FILL_IDS
+                    and push_dest not in state.bridged_tiles
+                )
+                if fills_bridge:
+                    new_state.filled_block_origins = state.filled_block_origins | {target_pos}
+                    new_state.bridged_tiles = state.bridged_tiles | {push_dest}
+                else:
+                    # Can push - record dynamic block occupancy.
+                    new_state.pushed_blocks = state.pushed_blocks | {(target_pos, push_dest)}
                 underlay_tile = self._underlay_tile_for_block_origin(target_pos)
                 new_state, _pickup_reward, _pickup_info = self._apply_pickup_if_present(
                     new_state,
@@ -1912,7 +1984,7 @@ class StateSpaceAStar:
                 continue
             state_bucket = (
                 current_state.position,
-                frozenset(current_state.pushed_blocks),
+                dynamic_geometry_key(current_state),
             )
             if self._pareto_frontier_dominates(
                 self._best_at_pos.get(state_bucket, []),
@@ -3054,7 +3126,7 @@ class StateSpaceAStar:
             # STATE DOMINATION PRUNING: keep a Pareto frontier per
             # position/dynamic-block bucket. A single "best" state is invalid
             # when incomparable inventories meet at the same tile.
-            state_bucket = (current_state.position, frozenset(current_state.pushed_blocks))
+            state_bucket = (current_state.position, dynamic_geometry_key(current_state))
             frontier = self._best_at_pos.get(state_bucket, [])
             if self._pareto_frontier_dominates(frontier, current_state, float(current_g)):
                 dominated_states_pruned += 1
@@ -3431,7 +3503,7 @@ class StateSpaceAStar:
             if current_key in closed_set:
                 continue
             
-            state_bucket = (current_state.position, frozenset(current_state.pushed_blocks))
+            state_bucket = (current_state.position, dynamic_geometry_key(current_state))
             frontier = self._best_at_pos.get(state_bucket, [])
             if self._pareto_frontier_dominates(frontier, current_state, float(current_g)):
                 dominated_states_pruned += 1

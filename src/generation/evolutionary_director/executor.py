@@ -30,8 +30,8 @@ class GraphGrammarExecutor:
             seed: Random seed for deterministic execution
             use_full_rule_space: If True, expose full MissionGrammar rule set
                 (core + advanced + wave3) instead of the legacy 5-rule subset.
-            max_lock_key_rules: Soft cap on how many InsertLockKey applications
-                are allowed per genome execution.
+            max_lock_key_rules: Hard cap on progression key/lock-style rule
+                applications allowed per genome execution.
             enforce_generation_constraints: Reject rule outcomes that violate
                 lock/progression constraints at generation-time.
             allow_candidate_repairs: If True, try repairing an invalid candidate
@@ -121,6 +121,31 @@ class GraphGrammarExecutor:
         return any(k in name for k in edge_keywords)
 
     @staticmethod
+    def _is_lock_key_pressure_rule_name(rule_name: str) -> bool:
+        """Classify rules that add progression gates or key-like resources."""
+        name = str(rule_name or "").strip().lower()
+        exact = {
+            "insertlockkey",
+            "addfungiblelock",
+            "addmultilock",
+            "addbossgauntlet",
+            "addcollectionchallenge",
+        }
+        compact = name.replace("_", "").replace("-", "").replace(" ", "")
+        if compact in exact:
+            return True
+        return any(
+            token in name
+            for token in (
+                "lock",
+                "key",
+                "multi_lock",
+                "multilock",
+                "collection",
+            )
+        )
+
+    @staticmethod
     def _estimate_rule_node_delta(rule_name: str) -> int:
         """Conservative node growth estimate for masking against max_nodes."""
         name = str(rule_name or "").strip().lower()
@@ -141,7 +166,7 @@ class GraphGrammarExecutor:
         *,
         max_nodes: int,
         allow_override: bool,
-        key_count: int,
+        lock_key_rule_count: int,
     ) -> Dict[int, bool]:
         """Dynamic admissible action mask for current graph state."""
         mask: Dict[int, bool] = {}
@@ -153,7 +178,10 @@ class GraphGrammarExecutor:
             rule = self.rules[rid]
             rule_name = self.rule_names[rid]
 
-            if isinstance(rule, InsertLockKeyRule) and key_count >= self.max_lock_key_rules:
+            if (
+                self._is_lock_key_pressure_rule_name(rule_name)
+                and lock_key_rule_count >= self.max_lock_key_rules
+            ):
                 mask[rid] = False
                 continue
 
@@ -270,7 +298,8 @@ class GraphGrammarExecutor:
         # Track statistics
         rules_applied = 0
         rules_skipped = 0
-        key_count = 0
+        lock_key_rule_count = 0
+        lock_key_rule_skips = 0
         generation_constraint_rejections = 0
         candidate_repairs_applied = 0
         rule_trace: List[Dict[str, Any]] = []
@@ -312,7 +341,7 @@ class GraphGrammarExecutor:
                 context,
                 max_nodes=max_nodes,
                 allow_override=allow_override,
-                key_count=key_count,
+                lock_key_rule_count=lock_key_rule_count,
             )
 
             allowed_rule_ids = [rid for rid, allowed in action_mask.items() if allowed]
@@ -320,6 +349,11 @@ class GraphGrammarExecutor:
 
             if not requested_allowed:
                 rules_skipped += 1
+                if (
+                    self._is_lock_key_pressure_rule_name(str(self.rule_names[rule_id]))
+                    and lock_key_rule_count >= self.max_lock_key_rules
+                ):
+                    lock_key_rule_skips += 1
                 if record_trace:
                     trace_row: Dict[str, Any] = {
                         "genome_index": int(genome_index),
@@ -327,7 +361,14 @@ class GraphGrammarExecutor:
                         "rule_id": int(rule_id),
                         "rule_name": str(self.rule_names[rule_id]),
                         "status": "skipped_action_masked",
-                        "reason": "requested action masked by dynamic feasibility constraints",
+                        "reason": (
+                            "lock/key hard cap reached"
+                            if (
+                                self._is_lock_key_pressure_rule_name(str(self.rule_names[rule_id]))
+                                and lock_key_rule_count >= self.max_lock_key_rules
+                            )
+                            else "requested action masked by dynamic feasibility constraints"
+                        ),
                         "nodes_before": before_nodes,
                         "edges_before": before_edges,
                         "nodes_after": before_nodes,
@@ -443,11 +484,14 @@ class GraphGrammarExecutor:
                     trace_row["nodes_after"] = int(len(graph.nodes))
                     trace_row["edges_after"] = int(len(graph.edges))
                     trace_row["pruned_edges_for_degree_cap"] = int(pruned_edges)
-                    trace_row["lock_key_count"] = int(key_count + (1 if isinstance(rule, InsertLockKeyRule) else 0))
+                    trace_row["lock_key_rule_count"] = int(
+                        lock_key_rule_count
+                        + (1 if self._is_lock_key_pressure_rule_name(str(self.rule_names[rule_id])) else 0)
+                    )
                     rule_trace.append(trace_row)
                 
-                if isinstance(rule, InsertLockKeyRule):
-                    key_count += 1
+                if self._is_lock_key_pressure_rule_name(str(self.rule_names[rule_id])):
+                    lock_key_rule_count += 1
                     
             except (RuntimeError, ValueError, TypeError, KeyError, AttributeError) as error:
                 logger.debug("Rule %s failed: %s", self.rule_names[rule_id], error)
@@ -467,6 +511,12 @@ class GraphGrammarExecutor:
         graph.generation_stats["candidate_repairs_applied"] = int(
             graph.generation_stats.get("candidate_repairs_applied", 0)
         ) + int(candidate_repairs_applied)
+        graph.generation_stats["lock_key_rule_applications"] = int(
+            graph.generation_stats.get("lock_key_rule_applications", 0)
+        ) + int(lock_key_rule_count)
+        graph.generation_stats["lock_key_rule_cap_skips"] = int(
+            graph.generation_stats.get("lock_key_rule_cap_skips", 0)
+        ) + int(lock_key_rule_skips)
         if record_trace:
             graph.generation_stats["rule_trace"] = rule_trace
             graph.generation_stats["generation_replay"] = {

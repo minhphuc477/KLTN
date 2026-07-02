@@ -1,5 +1,8 @@
-"""
-D* Lite game-state search wrapper.
+"""Forward incremental replanning wrapper.
+
+This adapter exposes the historical ``dstar_lite`` CLI key for compatibility,
+but the implementation is a forward LPA*/D* Lite-style diagnostic over full
+Zelda game state, not a textbook backward D* Lite oracle.
 """
 
 from __future__ import annotations
@@ -11,7 +14,7 @@ from src.simulation.search_base import GameStateSearchConfig, GameStateSearchRes
 
 
 class DStarLiteGameStateSolver:
-    """Run D* Lite over full game state with A* fallback metadata preserved."""
+    """Run the forward replanning diagnostic with A* fallback metadata preserved."""
 
     def __init__(self, env: Any, config: GameStateSearchConfig):
         self.env = env
@@ -30,9 +33,9 @@ class DStarLiteGameStateSolver:
             path=list(path or []),
             states_explored=int(states or 0),
             algorithm=(
-                "D* Lite (fallback: A*)"
+                "Forward LPA* replanning (fallback: A*)"
                 if getattr(solver, "used_fallback", False)
-                else "D* Lite"
+                else "Forward LPA* replanning"
             ),
             metadata={
                 "fallback_used": bool(getattr(solver, "used_fallback", False)),
@@ -40,5 +43,6 @@ class DStarLiteGameStateSolver:
                 "allow_diagonals": bool(self.config.allow_diagonals),
                 "intended_use": "incremental_replanning",
                 "independent_oracle": False,
+                "textbook_dstar_lite": False,
             },
         )

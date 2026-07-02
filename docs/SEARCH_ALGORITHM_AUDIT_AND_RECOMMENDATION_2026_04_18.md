@@ -13,7 +13,8 @@ Zelda state model implemented in `src/simulation/validator.py`.
 - Use `Dijkstra` as an exact cost fallback/baseline when heuristic behavior is
   under scrutiny.
 - Use `Bidirectional A*` only for reversible, stateless grid comparisons.
-- Use `D* Lite` only for incremental replanning experiments.
+- Use the forward LPA*/D* Lite-style replanner only for incremental replanning
+  diagnostics.
 - Use `P-CBS` as a bounded-agent behavioral probe, not as a hard solvability
   oracle.
 - Use `JPS`, `HPA*`, or `Theta*` only in separate ablations whose assumptions
@@ -26,7 +27,8 @@ The current selector lives in
 
 - `A*`: `validation_role="oracle"`, `canonical_use="hard_oracle"`.
 - `Dijkstra`: exact fallback and baseline.
-- `D* Lite`: `validation_role="replanning_diagnostic"`.
+- `dstar_lite`: compatibility key for `label="Forward LPA* replanning"` and
+  `validation_role="replanning_diagnostic"`.
 - `Bidirectional A*`: `validation_role="reversible_grid_diagnostic"`.
 - `recommended_game_state_algorithm_specs(...)` selects algorithms by
   environment class.
@@ -81,7 +83,7 @@ the environment is proven stateless and reversible.
 | Dijkstra | Exact no-heuristic baseline/fallback | Fast default |
 | BFS | Small uniform-cost sanity baseline | Scalable validator |
 | Greedy | Inadmissible heuristic baseline | Correctness oracle |
-| D* Lite | Dynamic replanning diagnostic | Primary static oracle |
+| Forward LPA*/D* Lite-style replanner | Dynamic replanning diagnostic | Primary static oracle or textbook D* Lite |
 | DFS/IDDFS | Bounded exhaustive probe | Optimal default |
 | Bidirectional A* | Reversible stateless-grid comparison | Valid on inventory maps |
 | P-CBS | Bounded-agent behavioral/readability probe | Mechanical oracle |
@@ -103,17 +105,68 @@ Current fixes applied:
   can no longer silently spend the full budget twice.
 - Reversible-grid bidirectional search initializes backward inventory from the
   start state, avoiding false collision rejection on stateless maps.
-- D* Lite documentation now explicitly states this implementation is a forward
-  LPA*/D* Lite-style variant.
-- Diagonal movement uses the canonical `sqrt(2)` cost consistently across
-  validator, D* Lite, and Bidirectional A*.
+- The historical `dstar_lite` key now reports `Forward LPA* replanning` in
+  public solver metadata. It is explicitly marked as non-textbook D* Lite and
+  not an independent oracle.
+- Diagonal movement is opt-in and uses the canonical `sqrt(2)` cost
+  consistently across validator, forward replanning, and Bidirectional A*.
 - Hazard graph edges parse and traverse as risk-bearing open edges rather than
   silently becoming non-traversable.
-- A protected hazard compiles to the canonical `ELEMENT` tile and its
-  `PROTECTION_ITEM` provider compiles to `KEY_ITEM`. Because the semantic tile
-  vocabulary has only one generic protection-item identity, end-to-end
-  generation rejects graphs containing multiple distinct named protection
-  requirements instead of collapsing them.
+- A protected hazard compiles to the canonical `ELEMENT` tile by default, and
+  its `PROTECTION_ITEM` provider compiles to the generic `KEY_ITEM` traversal
+  item. The current tile vocabulary has only one generic protection-item
+  identity, so claims about distinct named protections must remain graph-level
+  unless new semantic tiles/entities are added.
+- The external PCG Benchmark adapter now exports `rich_semantic_*_collapsed`
+  fields and `rich_semantic_collapse_ratio` so six-tile Zelda benchmark scores
+  cannot be mistaken for measurements of multi-locks, hazards, switches,
+  boss-key economy, or other rich grammar mechanics.
+- Strict room stitching now reports its search budget, component size, edge
+  count, and cycle pressure when a strict orthogonal embedding fails. The
+  budget can be set with the `strict_search_budget` API parameter or
+  `HMOLQD_STRICT_STITCH_BUDGET`; the default scales with component size and
+  loop pressure instead of being only a hidden fixed constant.
+- Strict room stitching now distinguishes same-floor spatial doorway edges
+  from non-spatial graph links such as stairs, warps, visual links, balconies,
+  basements, and cross-floor edges. Non-spatial links are excluded from flat
+  adjacency metrics and are not carved as ordinary doors. This prevents the
+  2D renderer from corrupting multi-floor graph semantics, but it is not yet a
+  full overlapping-floor renderer.
+- Frustration backtracking in `fun_analyzers.py` is depth-aware: repeated
+  local dithering is a weak signal, while returning from deep graph layers to
+  earlier rooms is the intended Metroidvania-style signal. Empty dead-end
+  penalties now ignore shallow leaves, content-bearing rooms, and explicit
+  scenic/rest/safe/courtyard/balcony/lore roles.
+- Robust pipeline retries now retain per-attempt error history in
+  `BlockResult.attempt_errors`, so bulk generation can distinguish "model did
+  not generate advanced mechanics" from "validator/stitcher rejected advanced
+  mechanics repeatedly."
+- P-CBS telemetry calibration artifacts now include calibration provenance:
+  hard oracle = full-state A*, bounded agent = P-CBS, and bidirectional /
+  replanning diagnostics are excluded as persona anchors.
+- P-CBS working memory now has explicit ablation parameters for spatial recall
+  error (`spatial_memory_error_rate` and `spatial_memory_error_radius`). The
+  weaker `Novice` and `Forgetful` personas use nonzero spatial confusion by
+  default, and `CBSMetrics.spatial_memory_confusions` reports how often recall
+  was displaced. This remains a behavioral proxy and still requires human
+  calibration before making human-likeness claims.
+- Evolutionary topology generation treats `max_lock_key_rules` as a hard cap
+  across progression key/lock-style rule operators, not only the legacy
+  `InsertLockKey` rule. Cap skips are surfaced in generation stats as
+  `lock_key_rule_cap_skips`, preventing a key-farm exploit where QD search
+  inflates progression complexity with repeated gates.
+- Tension-curve fitness is no longer plain MSE. The evaluator now reports
+  `curve_mse_legacy` for diagnostics but scores amplitude, first-difference
+  transitions, and spike/event overlap so intentional boss/key/puzzle beats are
+  not smoothed away by the objective.
+- MaskGIT graph-conditioning masks now fail fast when `node_mask` length and
+  context token length disagree, except for the explicit single room-anchor
+  token case. Padding/truncation is not allowed silently because it hides
+  dropped graph semantics.
+- `require_logic_net` is now a model/runtime config flag. Non-strict dev runs
+  may still disable LogicNet intentionally, but experiments that claim
+  LogicNet guidance can require a checkpoint without enabling global strict
+  checkpoint mode.
 - Graph-level QD fitness now checks progression solvability through
   `ExternalValidator` before scoring graph cognitive proxies. Undirected
   connectivity is not treated as enough for lock/key mission graphs.
@@ -213,7 +266,8 @@ For final tables:
 1. Report hard solvability with full-state A* plus graph progression and
    softlock checks.
 2. Report Dijkstra only as an exact comparator or fallback.
-3. Report D* Lite under a replanning section with dynamic-change scenarios.
+3. Report the forward replanner under a replanning section with dynamic-change
+   scenarios; do not call it textbook D* Lite.
 4. Report Bidirectional A* only on reversible stateless grids, or explicitly
    mark `fallback_used=True` when it delegates to A*.
 5. Report P-CBS separately as bounded-agent readability and difficulty. If the
@@ -228,20 +282,43 @@ For final tables:
 
 ## Remaining Search Work
 
+- Implemented after the bridge-mechanics audit: the tile validator now permits
+  pushing a `BLOCK` into an `ELEMENT` tile and converts it into an
+  `ELEMENT_FLOOR` bridge in both mutable stepping and pure search transitions.
+  Bridge-filled tiles are represented in `GameState`, state keys, and Pareto
+  pruning buckets so A*/P-CBS do not merge incompatible block-puzzle worlds.
+- Implemented after the topology-conditioning audit: hazard edge constraints
+  are part of the canonical edge-token set, trigger validator-plan topology
+  routing, and paint the existing `gate_hazard_{n,s,e,w}` channels. This does
+  not change tensor shape, but checkpoints must be retrained before claiming
+  learned hazard conditioning.
+- Implemented after the fun-metric audit: frustration goal clarity and
+  explorability now include explicit trap/soft-lock branch pressure. Optional
+  branches are no longer rewarded equally when they are labeled as traps or
+  unrecoverable softlocks.
 - Run the search-only benchmark over final generated maps with `A*`,
   `Dijkstra`, `P-CBS` personas, and diagnostic solvers separated by role.
 - Run the complete graph-to-final-map pipeline on real checkpoints and report
   both pre-compilation graph solvability and post-compilation tile solvability.
+- For complex/topologically dense graphs, report strict-stitch success rate,
+  strict-stitch budget, fallback-to-tree/relaxed placement rate, and final
+  tile-oracle validity. Dense topology claims are weak if the stitcher filters
+  them before room generation.
+- Report same-floor door embedding separately from non-spatial link support.
+  The current stitcher preserves stairs/warps/visual/cross-floor links as graph
+  semantics instead of flat doors, but does not yet render overlapping floor
+  plans.
 - Add an archive-materialization runner that generates rooms, stitches, and
   tile-validates every selected topology elite. Until then, call the current
   method "topology QD with post-hoc final-map archiving," not end-to-end map QD.
 - For full-grammar topology QD, recompute descriptors after final export
   repairs or disable repairs. Pre-repair descriptor cells must not be reported
   as properties of a materially changed post-repair graph.
-- Add explicit tile/entity/oracle semantics before enabling `ITEM_GATE`,
-  `MULTI_LOCK`, `ONE_WAY`, `STATE_BLOCK`, or `WARP` rules in end-to-end
-  generation. A single named protected-hazard class is supported; multiple
-  protection identities require distinct semantic tile/entity identities.
+- Add explicit tile/entity/oracle semantics before enabling unsupported
+  full-grammar mechanics such as `WARP` and nonlocal `STATE_BLOCK` in
+  end-to-end generation. `ITEM_GATE`, `MULTI_LOCK`, and generic protected
+  hazards have graph-level semantics, but final-map claims still need
+  post-compilation tile-oracle rates.
 - If large stitched maps become a runtime bottleneck, extend the static-grid
   ablation with HPA*. Keep it separate from Zelda-state validation just like
   the current JPS ablation.

@@ -293,7 +293,7 @@ CONFIG_FIELDS: List[ConfigField] = [
     ConfigField("topology.qd_archive_path", str, None, "Optional persisted CVT archive path for warm-started topology QD search.", allow_none=True),
     ConfigField("topology.qd_load_archive", bool, False, "Load topology.qd_archive_path before CVT-emitter search when available."),
     ConfigField("topology.qd_autosave_archive", bool, False, "Persist topology.qd_archive_path during and after CVT-emitter search."),
-    ConfigField("topology.max_lock_key_rules", int, 3, "Soft cap on InsertLockKey rule applications per genome execution.", min_value=0),
+    ConfigField("topology.max_lock_key_rules", int, 3, "Hard cap on progression key/lock-style rule applications per genome execution.", min_value=0),
     ConfigField("topology.enable_rule_credit_assignment", bool, False, "Enable adaptive rule-credit assignment during topology search."),
     ConfigField("topology.enforce_generation_constraints", bool, False, "Reject intermediate topology candidates that violate progression constraints."),
     ConfigField("topology.allow_candidate_repairs", bool, False, "Attempt local repairs when topology generation constraints fail."),

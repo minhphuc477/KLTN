@@ -168,7 +168,7 @@ class DifferentiablePathfinder(nn.Module):
     allowing gradients to flow through the path computation.
     
     Args:
-        num_iterations: Number of Bellman-Ford iterations (should be ≥ diameter)
+        num_iterations: Number of Bellman-Ford iterations (should be >= diameter)
         temperature: Soft-min temperature (lower = closer to hard min)
         inf_distance: Value representing infinity
     """

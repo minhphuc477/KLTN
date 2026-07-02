@@ -95,6 +95,7 @@ _VALIDATOR_COMPLEX_EDGE_TYPES = {
     "switch_locked",
     "state_block",
     "on_off_gate",
+    "hazard",
 }
 
 _TOPOLOGY_FOCUS_MARKER_CHANNEL_NAMES: Tuple[str, ...] = (
@@ -274,6 +275,8 @@ def _classify_puzzle_stage_gate_family(
         return "toggle"
     if "bombable" in normalized_tokens:
         return "bombable"
+    if "hazard" in normalized_tokens:
+        return "item_unlock"
     if normalized_tokens & {"item_locked", "item_gate"}:
         return "item_unlock"
     if normalized_tokens & {"key_locked", "locked", "boss_locked"}:
@@ -937,7 +940,7 @@ def _required_prerequisites(
 
     if tokens & {"key_locked", "locked", "boss_locked"} and "key" in anchors:
         prereqs.append("key")
-    if tokens & {"item_locked", "item_gate", "bombable"} and "item" in anchors:
+    if tokens & {"item_locked", "item_gate", "bombable", "hazard"} and "item" in anchors:
         prereqs.append("item")
     if tokens & {"soft_locked", "one_way", "shutter", "switch", "switch_locked", "state_block", "on_off_gate"}:
         for candidate in ("enemy", "boss", "puzzle"):
@@ -1008,7 +1011,20 @@ def _room_requires_validator_plan(
     return any(name in anchors for name in ("key", "item", "enemy", "boss", "puzzle"))
 
 
-def _state_key(state: GameState) -> Tuple[Tuple[int, int], int, int, bool, bool, frozenset, frozenset, frozenset, frozenset, int]:
+def _state_key(state: GameState) -> Tuple[
+    Tuple[int, int],
+    int,
+    int,
+    bool,
+    bool,
+    frozenset,
+    frozenset,
+    frozenset,
+    frozenset,
+    frozenset,
+    frozenset,
+    int,
+]:
     return (
         tuple(state.position),
         int(state.keys),
@@ -1018,6 +1034,8 @@ def _state_key(state: GameState) -> Tuple[Tuple[int, int], int, int, bool, bool,
         frozenset(state.opened_doors),
         frozenset(state.collected_items),
         frozenset(state.pushed_blocks),
+        frozenset(getattr(state, "filled_block_origins", set())),
+        frozenset(getattr(state, "bridged_tiles", set())),
         frozenset(state.defeated_enemies),
         int(getattr(state, "current_floor", 0)),
     )

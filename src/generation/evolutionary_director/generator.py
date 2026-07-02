@@ -113,8 +113,8 @@ class EvolutionaryTopologyGenerator:
                 when the file exists.
             qd_autosave_archive: If True, save qd_archive_path after each
                 completed generation and at the end of CVT search.
-            max_lock_key_rules: Soft cap on InsertLockKey rule applications
-                permitted during genome execution.
+            max_lock_key_rules: Hard cap on progression key/lock-style rule
+                applications permitted during genome execution.
             enforce_generation_constraints: If True, reject rule outcomes that
                 violate lock/progression constraints during genome execution.
                 Default is False to preserve QD diversity and avoid hard-kill

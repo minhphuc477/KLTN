@@ -51,6 +51,7 @@ class ModelConfig:
     fast_sampling_checkpoint: Optional[str] = None
     device: str = "auto"
     strict_checkpoint_mode: bool = False
+    require_logic_net: bool = False
     condition_encoder_fallback_config: Optional[Dict[str, Any]] = None
     diffusion_fallback_config: Optional[Dict[str, Any]] = None
     logic_net_fallback_config: Optional[Dict[str, Any]] = None

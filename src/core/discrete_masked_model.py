@@ -134,10 +134,13 @@ class MaskedTokenTransformerBackbone(nn.Module):
         if bool(graph_data.get("has_room_anchor", False)) and int(valid.shape[1]) + 1 == seq_len:
             anchor = torch.ones(batch_size, 1, device=valid.device, dtype=torch.bool)
             valid = torch.cat([anchor, valid], dim=1)
-        elif int(valid.shape[1]) > seq_len:
-            valid = valid[:, :seq_len]
-        elif int(valid.shape[1]) < seq_len:
-            valid = F.pad(valid, (0, seq_len - int(valid.shape[1])), value=False)
+        elif int(valid.shape[1]) != seq_len:
+            raise ValueError(
+                "node_mask/context token contract mismatch: "
+                f"node_mask has {int(valid.shape[1])} entries but context has {seq_len} tokens. "
+                "Refusing to pad or truncate graph context silently; fix the condition encoder "
+                "or set has_room_anchor=True only for a single prepended room-anchor token."
+            )
 
         valid_rows = valid.any(dim=1)
         if not bool(valid_rows.all()):

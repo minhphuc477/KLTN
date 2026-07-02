@@ -622,9 +622,11 @@ def load_logic_net(pipeline, checkpoint_path: Optional[str]) -> Optional[LogicNe
         pipeline.logic_net_checkpoint_loaded = True
         logger.info(f"Loaded LogicNet from {checkpoint_path}")
     else:
-        if pipeline.strict_checkpoint_mode:
+        if pipeline.strict_checkpoint_mode or bool(getattr(pipeline, "require_logic_net", False)):
             raise FileNotFoundError(
-                f"Strict checkpoint mode enabled: missing LogicNet checkpoint at {checkpoint_path!r}"
+                "LogicNet is required for this run but no loadable checkpoint was found "
+                f"at {checkpoint_path!r}. Enable a symbolic-only ablation explicitly by "
+                "setting require_logic_net=False."
             )
         pipeline.logic_net_checkpoint_loaded = False
         logger.warning("No LogicNet checkpoint; LogicNet-dependent guidance and evaluation are disabled.")

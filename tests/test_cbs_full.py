@@ -9,8 +9,8 @@ This module contains tests for:
 5. Persona parameter effects
 
 Research References:
-- Working memory capacity (Miller, 1956): 7±2 items
-- Memory decay (Anderson & Schooler, 1991): Exponential decay λ≈0.01
+- Working memory capacity (Miller, 1956): 7+/-2 items
+- Memory decay (Anderson & Schooler, 1991): Exponential decay lambda about 0.01
 - Bounded rationality (Simon, 1955): Satisficing over optimal
 """
 import sys

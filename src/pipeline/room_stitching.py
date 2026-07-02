@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import math
+import os
 from collections import deque
 from dataclasses import dataclass
 from heapq import heappop, heappush
@@ -25,6 +27,24 @@ NodePositionGetter = Callable[[nx.Graph, Any], Optional[Tuple[int, int]]]
 DiagnosticCallback = Callable[[str], None]
 ConnectorTileResolver = Callable[[Optional[Dict[str, Any]], bool], Tuple[int, int]]
 
+NON_SPATIAL_EDGE_TOKENS = frozenset(
+    {
+        "stairs",
+        "stair",
+        "warp",
+        "teleport",
+        "teleporter",
+        "visual_link",
+        "visual",
+        "window",
+        "balcony",
+        "basement",
+        "floor_transition",
+        "floor",
+        "layer",
+    }
+)
+
 
 @dataclass
 class StitchedRoomLayout:
@@ -34,6 +54,76 @@ class StitchedRoomLayout:
     slot_positions: Dict[Any, Tuple[int, int]]
     room_offsets: Dict[Any, Tuple[int, int]]
     layout_map: Dict[Any, Tuple[int, int, int, int]]
+
+
+def _edge_tokens(edge_data: Optional[Mapping[str, Any]]) -> set:
+    data = edge_data or {}
+    label = str(data.get("label", "") or "")
+    edge_type = data.get("edge_type", data.get("type", ""))
+    normalized_type = getattr(edge_type, "name", edge_type)
+    tokens = set(parse_edge_type_tokens(label=label, edge_type=str(normalized_type or "")))
+    for key in ("edge_type", "type", "label", "semantic"):
+        value = data.get(key)
+        if value is None:
+            continue
+        name = getattr(value, "name", value)
+        tokens.update(
+            part.strip().lower()
+            for part in str(name).replace(",", " ").replace("_", " ").split()
+            if part.strip()
+        )
+    return tokens
+
+
+def _node_floor_key(graph: nx.Graph, node_id: Any) -> int:
+    """Extract a coarse floor/layer identifier without changing 2D slot coordinates."""
+    attrs = graph.nodes.get(node_id, {}) if node_id in graph else {}
+    for key in ("floor", "z", "level", "layer", "virtual_layer"):
+        if key not in attrs:
+            continue
+        value = attrs.get(key)
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            continue
+    for key in ("position", "pos", "grid_pos", "coord", "coords"):
+        value = attrs.get(key)
+        if isinstance(value, (tuple, list, np.ndarray)) and len(value) >= 3:
+            try:
+                return int(value[2])
+            except (TypeError, ValueError):
+                continue
+        if isinstance(value, str):
+            parts = value.replace("(", "").replace(")", "").split(",")
+            if len(parts) >= 3:
+                try:
+                    return int(float(parts[2].strip()))
+                except ValueError:
+                    continue
+    return 0
+
+
+def _is_spatial_room_edge(
+    graph: nx.Graph,
+    source: Any,
+    target: Any,
+    edge_data: Optional[Mapping[str, Any]] = None,
+) -> bool:
+    """
+    Return True only for edges the flat stitcher should realize as adjacent doors.
+
+    Mission graphs may contain abstract, vertical, warp, and visual links. Forcing
+    those links into strict 2D adjacency makes valid multi-floor/non-planar logic
+    fail placement and then corrupts it by carving ordinary doors.
+    """
+    if source not in graph or target not in graph:
+        return False
+    tokens = _edge_tokens(edge_data)
+    if tokens.intersection(NON_SPATIAL_EDGE_TOKENS):
+        return False
+    if _node_floor_key(graph, source) != _node_floor_key(graph, target):
+        return False
+    return True
 
 def extract_room_grid(room_like: Any) -> np.ndarray:
     """Coerce a room-like object or raw array into a 2D int32 grid."""
@@ -50,6 +140,7 @@ def solve_component_strict_adjacency(
     explicit_pos: Dict[Any, Tuple[int, int]],
     *,
     sort_key: NodeSortKey = stable_node_sort_key,
+    search_budget: Optional[int] = None,
 ) -> Dict[Any, Tuple[int, int]]:
     """Backtracking solver for a single connected component strict embedding."""
     offsets = [(-1, 0), (1, 0), (0, -1), (0, 1)]
@@ -60,7 +151,35 @@ def solve_component_strict_adjacency(
     root_pos = explicit_pos.get(root, (0, 0))
     placement[root] = root_pos
     occupied.add(root_pos)
-    search_budget = 50000
+    edge_count = sum(len(adjacency.get(node, ())) for node in comp_nodes) // 2
+    cycle_pressure = max(0, int(edge_count) - int(len(comp_nodes)) + 1)
+    if search_budget is None:
+        env_budget = os.environ.get("HMOLQD_STRICT_STITCH_BUDGET", "").strip()
+        if env_budget:
+            try:
+                search_budget = int(env_budget)
+            except ValueError:
+                logger.warning(
+                    "Ignoring invalid HMOLQD_STRICT_STITCH_BUDGET=%r",
+                    env_budget,
+                )
+                search_budget = None
+    if search_budget is None:
+        # Strict orthogonal graph embedding is exponential in the worst case.
+        # Scale the default budget with both component size and loop pressure
+        # rather than hiding a fixed global magic number in the solver.
+        search_budget = int(
+            max(
+                50_000,
+                min(
+                    1_000_000,
+                    256 * max(1, len(comp_nodes)) * max(1, len(comp_nodes))
+                    * max(1, int(math.sqrt(cycle_pressure + 1))),
+                ),
+            )
+        )
+    initial_search_budget = int(max(1, search_budget))
+    search_budget = initial_search_budget
 
     def _neighbors_of(pos: Tuple[int, int]) -> set:
         r, c = pos
@@ -163,7 +282,10 @@ def solve_component_strict_adjacency(
     if not _dfs():
         raise ValueError(
             "Failed strict adjacency placement for component with nodes "
-            f"{comp_nodes}. Consider simplifying topology or providing explicit positions."
+            f"{comp_nodes}; exhausted budget={initial_search_budget}, "
+            f"nodes={len(comp_nodes)}, edges={edge_count}, cycle_pressure={cycle_pressure}. "
+            "Consider planarizing topology, providing explicit positions, or increasing "
+            "HMOLQD_STRICT_STITCH_BUDGET for this ablation."
         )
 
     seen_edges = set()
@@ -273,15 +395,24 @@ def compute_strict_room_placement(
     sort_key: NodeSortKey = stable_node_sort_key,
     node_position_getter: NodePositionGetter = get_node_grid_position,
     first_free_position_fn: Callable[[Tuple[int, int], set], Tuple[int, int]] = first_free_position,
+    strict_search_budget: Optional[int] = None,
 ) -> Dict[Any, Tuple[int, int]]:
     """Compute a strict room placement where every graph edge is Manhattan-adjacent."""
     nodes = [n for n in room_ids if n in graph]
     if not nodes:
         return {}
 
-    undirected = graph.to_undirected()
     node_set = set(nodes)
-    adjacency: Dict[Any, set] = {n: set(undirected.neighbors(n)) & node_set for n in nodes}
+    spatial_graph = nx.Graph()
+    spatial_graph.add_nodes_from(nodes)
+    for src, dst, edge_data in graph.edges(data=True):
+        if src not in node_set or dst not in node_set:
+            continue
+        if not _is_spatial_room_edge(graph, src, dst, edge_data):
+            continue
+        spatial_graph.add_edge(src, dst)
+
+    adjacency: Dict[Any, set] = {n: set(spatial_graph.neighbors(n)) & node_set for n in nodes}
     explicit_pos: Dict[Any, Tuple[int, int]] = {}
     for node_id in nodes:
         pos = node_position_getter(graph, node_id)
@@ -302,7 +433,10 @@ def compute_strict_room_placement(
             first_free_position_fn=first_free_position_fn,
         )
 
-    components = [sorted(comp, key=sort_key) for comp in nx.connected_components(undirected.subgraph(nodes))]
+    components = [sorted(comp, key=sort_key) for comp in nx.connected_components(spatial_graph.subgraph(nodes))]
+    for node_id in nodes:
+        if all(node_id not in comp for comp in components):
+            components.append([node_id])
     components.sort(key=lambda comp: sort_key(comp[0]) if comp else (99, ""))
 
     placement: Dict[Any, Tuple[int, int]] = {}
@@ -314,6 +448,7 @@ def compute_strict_room_placement(
                 adjacency,
                 explicit_pos,
                 sort_key=sort_key,
+                search_budget=strict_search_budget,
             )
         except ValueError as exc:
             logger.warning(
@@ -333,6 +468,7 @@ def compute_strict_room_placement(
                     tree_adjacency,
                     {},
                     sort_key=sort_key,
+                    search_budget=strict_search_budget,
                 )
             except ValueError as tree_exc:
                 logger.warning(
@@ -368,6 +504,7 @@ def compute_graph_aware_room_slots(
     sort_key: NodeSortKey = stable_node_sort_key,
     node_position_getter: NodePositionGetter = get_node_grid_position,
     first_free_position_fn: Callable[[Tuple[int, int], set], Tuple[int, int]] = first_free_position,
+    strict_search_budget: Optional[int] = None,
 ) -> Dict[Any, Tuple[int, int]]:
     """Compute one normalized slot position per room id using a shared policy."""
     placement = compute_strict_room_placement(
@@ -376,6 +513,7 @@ def compute_graph_aware_room_slots(
         sort_key=sort_key,
         node_position_getter=node_position_getter,
         first_free_position_fn=first_free_position_fn,
+        strict_search_budget=strict_search_budget,
     )
 
     occupied = set(placement.values())
@@ -458,7 +596,9 @@ def compute_layout_quality_metrics(
 
     edge_distances: List[int] = []
     seen_edges = set()
-    for src, dst in graph.edges():
+    for src, dst, edge_data in graph.edges(data=True):
+        if not _is_spatial_room_edge(graph, src, dst, edge_data):
+            continue
         if src not in slots or dst not in slots:
             continue
         edge_key = tuple(sorted((src, dst), key=sort_key))
@@ -870,6 +1010,7 @@ def build_stitched_room_layout(
     enforce_room_dimensions: Optional[Tuple[int, int]] = None,
     carve_connections: bool = True,
     diagnostic_callback: Optional[DiagnosticCallback] = None,
+    strict_search_budget: Optional[int] = None,
 ) -> StitchedRoomLayout:
     """Build a stitched dungeon grid and bbox layout map from room grids."""
     if not rooms:
@@ -896,6 +1037,7 @@ def build_stitched_room_layout(
         sort_key=sort_key,
         node_position_getter=node_position_getter,
         first_free_position_fn=first_free_position_fn,
+        strict_search_budget=strict_search_budget,
     )
 
     stitched = build_room_canvas_from_slots(
@@ -916,13 +1058,17 @@ def build_stitched_room_layout(
     )
 
     if carve_connections:
-        for u, v in graph.edges():
+        for u, v, edge_data in graph.edges(data=True):
+            if not _is_spatial_room_edge(graph, u, v, edge_data):
+                if diagnostic_callback is not None:
+                    diagnostic_callback("non_spatial_graph_edge_not_carved")
+                continue
             if u in stitched.layout_map and v in stitched.layout_map:
                 carve_room_connection_between_bboxes(
                     stitched.dungeon_grid,
                     stitched.layout_map[u],
                     stitched.layout_map[v],
-                    edge_data=graph.get_edge_data(u, v, default={}) or {},
+                    edge_data=edge_data or {},
                     has_reverse_edge=bool(graph.has_edge(v, u)),
                     fill_tile=int(fill_tile),
                     diagnostic_callback=diagnostic_callback,

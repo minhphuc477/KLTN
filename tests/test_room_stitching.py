@@ -216,14 +216,20 @@ def test_compute_graph_aware_room_slots_handles_duplicate_preferred_positions():
     slot_positions = compute_graph_aware_room_slots(graph, [0, 1, 2, 3])
 
     assert len(set(slot_positions.values())) == 4
-    for src, dst in graph.edges():
+    for src, dst in ((0, 1), (1, 2)):
         src_pos = slot_positions[src]
         dst_pos = slot_positions[dst]
         assert abs(src_pos[0] - dst_pos[0]) + abs(src_pos[1] - dst_pos[1]) == 1
+    cross_floor_dist = (
+        abs(slot_positions[1][0] - slot_positions[3][0])
+        + abs(slot_positions[1][1] - slot_positions[3][1])
+    )
+    assert cross_floor_dist != 1
 
     metrics = compute_layout_quality_metrics(graph, slot_positions)
     assert metrics["graph_edge_slot_adjacency_rate"] == 1.0
     assert metrics["graph_edge_slot_mean_distance"] == 1.0
+    assert metrics["graph_edge_count_evaluated"] == 2.0
     assert metrics["graph_preferred_position_duplicate_rate"] is not None
     assert metrics["graph_preferred_position_duplicate_rate"] > 0.0
 
@@ -278,7 +284,8 @@ def test_compute_graph_aware_room_slots_uses_tree_fallback_for_cyclic_progressio
     slot_positions = compute_graph_aware_room_slots(graph, sorted(graph.nodes()))
 
     assert abs(slot_positions[0][0] - slot_positions[2][0]) + abs(slot_positions[0][1] - slot_positions[2][1]) == 1
-    assert abs(slot_positions[0][0] - slot_positions[5][0]) + abs(slot_positions[0][1] - slot_positions[5][1]) == 1
+    assert abs(slot_positions[2][0] - slot_positions[8][0]) + abs(slot_positions[2][1] - slot_positions[8][1]) == 1
+    assert abs(slot_positions[8][0] - slot_positions[9][0]) + abs(slot_positions[8][1] - slot_positions[9][1]) == 1
     assert len({col for _, col in slot_positions.values()}) >= 3
 
 

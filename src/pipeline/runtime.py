@@ -70,6 +70,7 @@ def _initialize_pipeline_from_flat_kwargs(
     map_elites_autosave_archive: bool = False,
     enable_logging: bool = True,
     strict_checkpoint_mode: bool = False,
+    require_logic_net: bool = False,
     use_graph_node_cross_attention: bool = True,
     use_latent_boundary_masking: bool = True,
     condition_gnn_type: str = "gcn",
@@ -181,6 +182,7 @@ def _initialize_pipeline_from_flat_kwargs(
         logger.info(f"Initializing NeuralSymbolicDungeonPipeline on {pipeline.device}")
 
     pipeline.strict_checkpoint_mode = bool(strict_checkpoint_mode)
+    pipeline.require_logic_net = bool(require_logic_net)
     pipeline.domain_schema = resolve_domain_schema(domain_schema)
     pipeline.domain_schema_name = str(getattr(pipeline.domain_schema, "name", type(pipeline.domain_schema).__name__))
     pipeline.use_graph_node_cross_attention = bool(use_graph_node_cross_attention)

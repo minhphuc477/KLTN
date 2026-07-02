@@ -405,7 +405,19 @@ NODE_LABEL_ALIASES: Dict[str, List[str]] = {
 }
 
 # Known edge label tokens observed in VGLC graphs.
-KNOWN_EDGE_LABEL_TOKENS: Set[str] = {'', 'k', 'K', 'b', 'l', 's', 'S', 'S1', 'I'}
+KNOWN_EDGE_LABEL_TOKENS: Set[str] = {
+    '',
+    'k',
+    'K',
+    'b',
+    'l',
+    's',
+    'S',
+    'S1',
+    'I',
+    'hazard',
+    'multi_lock',
+}
 
 # Aliases for edge labels / canonical edge type names.
 EDGE_LABEL_ALIASES: Dict[str, List[str]] = {

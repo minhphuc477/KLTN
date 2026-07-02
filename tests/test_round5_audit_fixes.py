@@ -16,7 +16,7 @@ from src.generation.evolutionary_director import EvolutionaryTopologyGenerator
 from src.ml.logic_net import DifferentiableTortuosity, InventoryAwareLogicNet, SoftBellmanFord
 from src.core.logic_net import DifferentiablePathfinder
 from src.pipeline.room_stitching import carve_room_connection_between_bboxes
-from src.simulation.validator import GameState, SEMANTIC_PALETTE, StateSpaceAStar, ZeldaLogicEnv
+from src.simulation.validator import GameState, SEMANTIC_PALETTE, SolverOptions, StateSpaceAStar, ZeldaLogicEnv
 from src.zelda_data.stitching.graph_placement import find_boundary_doors
 from src.zelda_data.parsers.core_parsers import VGLCParser
 
@@ -352,6 +352,33 @@ def test_validator_collects_hidden_item_exposed_by_block_push_in_pure_and_mutabl
     ok, state, _reward, _info = env._try_move((1, 2), int(grid[1, 2]))
     assert ok
     assert state.keys == 1
+
+
+def test_validator_pushes_block_into_element_as_walkable_bridge_in_pure_and_mutable_paths():
+    grid = np.full((3, 7), SEMANTIC_PALETTE["WALL"], dtype=np.int64)
+    grid[1, 1:6] = SEMANTIC_PALETTE["FLOOR"]
+    grid[1, 1] = SEMANTIC_PALETTE["START"]
+    grid[1, 2] = SEMANTIC_PALETTE["BLOCK"]
+    grid[1, 3] = SEMANTIC_PALETTE["ELEMENT"]
+    grid[1, 5] = SEMANTIC_PALETTE["TRIFORCE"]
+
+    env = ZeldaLogicEnv(grid, solver_options=SolverOptions(start_item=False))
+    state = env.state.copy()
+    ok, state = env.try_move_pure(state, (1, 2), int(grid[1, 2]))
+    assert ok
+    assert (1, 2) in state.filled_block_origins
+    assert (1, 3) in state.bridged_tiles
+
+    ok, state = env.try_move_pure(state, (1, 3), int(grid[1, 3]))
+    assert ok
+    assert state.position == (1, 3)
+
+    env = ZeldaLogicEnv(grid, solver_options=SolverOptions(start_item=False))
+    env.state.position = (1, 1)
+    ok, state, _reward, _info = env._try_move((1, 2), int(grid[1, 2]))
+    assert ok
+    assert state.position == (1, 2)
+    assert int(env.grid[1, 3]) == int(SEMANTIC_PALETTE["ELEMENT_FLOOR"])
 
 
 def test_puzzle_stage_progress_updates_on_element_and_collected_item_tiles():

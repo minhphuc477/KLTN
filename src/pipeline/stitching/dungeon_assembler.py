@@ -199,8 +199,11 @@ def stitch_room_layout(
     *,
     enforce_room_dimensions: Optional[Tuple[int, int]] = (ROOM_HEIGHT, ROOM_WIDTH),
     carve_connections: bool = True,
+    strict_search_budget: Optional[int] = None,
 ) -> StitchedRoomLayout:
     """Build a stitched dungeon layout and room bbox metadata."""
+    if strict_search_budget is None:
+        strict_search_budget = getattr(pipeline, "strict_stitch_search_budget", None)
     return build_stitched_room_layout(
         rooms=rooms,
         graph=graph,
@@ -211,6 +214,7 @@ def stitch_room_layout(
         enforce_room_dimensions=enforce_room_dimensions,
         carve_connections=carve_connections,
         diagnostic_callback=pipeline._bump_diagnostic,
+        strict_search_budget=strict_search_budget,
     )
 
 
@@ -874,7 +878,7 @@ def generate_dungeon(
         qd_archive_cells: CVT archive cells when using QD search
         qd_init_random_fraction: Bootstrap random fraction for QD search
         qd_emitter_mutation_rate: Emitter mutation rate for QD search
-        max_lock_key_rules: Soft cap on InsertLockKey use per genome
+        max_lock_key_rules: Hard cap on progression key/lock-style rule use per genome
         enable_rule_credit_assignment: Enable adaptive rule-credit assignment
         enforce_generation_constraints: Reject invalid intermediate candidates
         allow_candidate_repairs: Attempt local candidate repairs when constraints fail

@@ -474,7 +474,7 @@ def test_room_topology_condition_map_preserves_typed_gate_channels():
         incoming_dirs={"W"},
         outgoing_dirs={"E"},
         edge_constraint_tokens={
-            "E": {"bombable", "secret"},
+            "E": {"bombable", "secret", "hazard"},
             "W": {"switch", "state_block"},
         },
     )
@@ -483,6 +483,7 @@ def test_room_topology_condition_map_preserves_typed_gate_channels():
     assert float(topo[ROOM_TOPOLOGY_CHANNELS["gated_e"]].sum()) > 0.0
     assert float(topo[ROOM_TOPOLOGY_CHANNELS["gate_bomb_e"]].sum()) > 0.0
     assert float(topo[ROOM_TOPOLOGY_CHANNELS["gate_secret_e"]].sum()) > 0.0
+    assert float(topo[ROOM_TOPOLOGY_CHANNELS["gate_hazard_e"]].sum()) > 0.0
     assert float(topo[ROOM_TOPOLOGY_CHANNELS["gated_w"]].sum()) > 0.0
     assert float(topo[ROOM_TOPOLOGY_CHANNELS["gate_switch_w"]].sum()) > 0.0
 

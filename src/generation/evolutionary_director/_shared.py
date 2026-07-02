@@ -39,7 +39,11 @@ from src.generation.grammar import (
 )
 from src.core.definitions import parse_edge_type_tokens, parse_node_label_tokens
 from src.zelda_data.vglc_utils import filter_virtual_nodes, validate_topology
-from src.evaluation.structural_metrics import compute_branching_factor, compute_cyclomatic_complexity
+from src.evaluation.structural_metrics import (
+    compute_branching_factor,
+    compute_cyclomatic_complexity,
+    compute_path_linearity,
+)
 from src.generation.pareto_objectives import apply_pareto_metrics, compute_pareto_objectives
 
 from src.evaluation.map_elites import CVTEliteArchive

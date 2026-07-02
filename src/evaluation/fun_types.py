@@ -14,6 +14,7 @@ class FrustrationMetrics:
     unclear_goal_score: float
     empty_room_ratio: float
     total_frustration: float
+    depth_backtracking_score: float = 0.0
 
 
 @dataclass

@@ -567,7 +567,15 @@ class TensionCurveEvaluator:
                     max(0.0, float(directed_path_len) - float(weak_path_len))
                     / max(1.0, float(weak_path_len))
                 )
-        linearity = self._clip01(float(path_len + 1) / float(max(1, node_count)))
+        if path and len(path) >= 2:
+            try:
+                linearity_graph = mission_graph_to_networkx(graph, directed=False)
+                linearity = self._clip01(compute_path_linearity(linearity_graph, tuple(path)))
+            except Exception:
+                logger.exception("Failed to compute branch-aware path linearity; using conservative zero")
+                linearity = 0.0
+        else:
+            linearity = 0.0
         critical_path_edges = self._critical_path_edges(graph, path)
         gate_edges_on_critical = sum(
             1 for edge in critical_path_edges if edge.edge_type in self.GATE_EDGE_TYPES
@@ -916,14 +924,21 @@ class TensionCurveEvaluator:
                 "descriptor_metrics": self._extract_descriptor_metrics(graph),
             }
 
-        # Extract tension curve.
+        # Extract tension curve.  Zelda-style mission tension is discrete and
+        # intentionally spiky; score both amplitude and beat transitions rather
+        # than using plain MSE, which over-rewards over-smoothed curves.
         extracted = self.extract_tension_curve(graph)
-        mse = np.mean((extracted - self.target_curve) ** 2)
-        curve_fitness = 1.0 - min(mse, 1.0)
+        mse = float(np.mean((extracted - self.target_curve) ** 2))
+        curve_scores = self._curve_event_alignment_scores(extracted, self.target_curve)
+        curve_fitness = float(curve_scores["curve_fitness"])
         curve_trend_corr = self._curve_trend_correlation(extracted, self.target_curve)
-        curve_alignment_score = float(np.clip((0.72 * curve_fitness) + (0.28 * ((curve_trend_corr + 1.0) * 0.5)), 0.0, 1.0))
+        curve_alignment_score = float(np.clip((0.78 * curve_fitness) + (0.22 * ((curve_trend_corr + 1.0) * 0.5)), 0.0, 1.0))
 
         descriptor_metrics = self._extract_descriptor_metrics(graph)
+        descriptor_metrics["curve_mse_legacy"] = float(mse)
+        descriptor_metrics["curve_amplitude_score"] = float(curve_scores["amplitude_score"])
+        descriptor_metrics["curve_delta_score"] = float(curve_scores["delta_score"])
+        descriptor_metrics["curve_spike_score"] = float(curve_scores["spike_score"])
         descriptor_metrics["curve_fitness"] = float(curve_fitness)
         descriptor_metrics["curve_trend_corr"] = float(curve_trend_corr)
         descriptor_metrics["curve_alignment_score"] = float(curve_alignment_score)
@@ -1454,6 +1469,72 @@ class TensionCurveEvaluator:
             "critical_edges": int(critical_edges),
             "node_count": int(node_count),
             "descriptor_metrics": descriptor_metrics,
+        }
+
+    @staticmethod
+    def _curve_event_alignment_scores(extracted: np.ndarray, target: np.ndarray) -> Dict[str, float]:
+        """Score discrete tension beats without smoothing away intended spikes."""
+        x = np.asarray(extracted, dtype=np.float32).reshape(-1)
+        y = np.asarray(target, dtype=np.float32).reshape(-1)
+        if x.size != y.size:
+            n = min(x.size, y.size)
+            if n <= 0:
+                return {
+                    "curve_fitness": 0.0,
+                    "amplitude_score": 0.0,
+                    "delta_score": 0.0,
+                    "spike_score": 0.0,
+                }
+            x = x[:n]
+            y = y[:n]
+        if x.size == 0:
+            return {
+                "curve_fitness": 0.0,
+                "amplitude_score": 0.0,
+                "delta_score": 0.0,
+                "spike_score": 0.0,
+            }
+
+        amplitude_score = float(np.clip(1.0 - float(np.mean(np.abs(x - y))), 0.0, 1.0))
+        if x.size <= 1:
+            delta_score = 1.0
+            spike_score = 1.0
+        else:
+            dx = np.diff(x)
+            dy = np.diff(y)
+            # L1 on first differences rewards matching rises/falls while
+            # preserving sharp beats instead of punishing their magnitude twice.
+            delta_score = float(np.clip(1.0 - float(np.mean(np.abs(dx - dy))), 0.0, 1.0))
+
+            target_threshold = max(0.12, float(np.quantile(np.abs(dy), 0.75)))
+            extracted_threshold = max(0.12, float(np.quantile(np.abs(dx), 0.75)))
+            target_spikes = {int(i) for i, value in enumerate(dy) if abs(float(value)) >= target_threshold}
+            extracted_spikes = {int(i) for i, value in enumerate(dx) if abs(float(value)) >= extracted_threshold}
+            if not target_spikes and not extracted_spikes:
+                spike_score = 1.0
+            elif not target_spikes:
+                spike_score = float(np.clip(1.0 - (len(extracted_spikes) / max(1, len(dx))), 0.0, 1.0))
+            else:
+                matched = 0
+                for spike in target_spikes:
+                    if any(abs(spike - candidate) <= 1 for candidate in extracted_spikes):
+                        matched += 1
+                recall = matched / max(1, len(target_spikes))
+                precision = matched / max(1, len(extracted_spikes))
+                spike_score = float(0.0 if (precision + recall) <= 0.0 else (2.0 * precision * recall) / (precision + recall))
+
+        curve_fitness = float(np.clip(
+            (0.44 * amplitude_score)
+            + (0.34 * delta_score)
+            + (0.22 * spike_score),
+            0.0,
+            1.0,
+        ))
+        return {
+            "curve_fitness": curve_fitness,
+            "amplitude_score": float(amplitude_score),
+            "delta_score": float(delta_score),
+            "spike_score": float(spike_score),
         }
 
     @staticmethod

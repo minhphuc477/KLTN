@@ -38,7 +38,7 @@ import logging
 import random
 import networkx as nx
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum, auto
 from typing import (
     Any, Dict, Hashable, List, Tuple, Optional, Set,
@@ -161,6 +161,7 @@ class CBSMetrics:
     focus_guided_steps: int = 0
     loop_escape_events: int = 0
     memory_pressure_event_rate: float = 0.0
+    spatial_memory_confusions: int = 0
     behavioral_complexity_index: float = 0.0
     visit_entropy: float = 0.0
     linearity_ratio: float = 0.0
@@ -218,6 +219,7 @@ class CBSMetrics:
             'focus_guided_steps': self.focus_guided_steps,
             'loop_escape_events': self.loop_escape_events,
             'memory_pressure_event_rate': round(self.memory_pressure_event_rate, 4),
+            'spatial_memory_confusions': int(self.spatial_memory_confusions),
             'behavioral_complexity_index': round(self.behavioral_complexity_index, 4),
             'visit_entropy': round(self.visit_entropy, 4),
             'linearity_ratio': round(self.linearity_ratio, 4),
@@ -1122,7 +1124,10 @@ class WorkingMemory:
         self,
         capacity: int = 7,
         decay_rate: float = 0.95,
-        salience_weights: Optional[Dict[MemoryItemType, float]] = None
+        salience_weights: Optional[Dict[MemoryItemType, float]] = None,
+        spatial_error_rate: float = 0.0,
+        spatial_error_radius: int = 1,
+        rng: Optional[random.Random] = None,
     ):
         """
         Initialize working memory.
@@ -1131,9 +1136,15 @@ class WorkingMemory:
             capacity: Max items to retain (7 = Miller's number, 4 = Cowan's)
             decay_rate: Salience decay per step [0, 1]
             salience_weights: Type-specific base salience values
+            spatial_error_rate: Probability that recalled positions are displaced.
+            spatial_error_radius: Manhattan radius for displaced spatial recall.
+            rng: Optional local RNG for reproducible recall noise.
         """
         self.capacity = capacity
         self.decay_rate = decay_rate
+        self.spatial_error_rate = float(max(0.0, min(1.0, spatial_error_rate)))
+        self.spatial_error_radius = max(0, int(spatial_error_radius))
+        self._rng = rng or random.Random()
         
         # Default salience weights by type (goals are most memorable)
         self.salience_weights = salience_weights or {
@@ -1154,6 +1165,7 @@ class WorkingMemory:
         self.total_remembered = 0
         self.total_forgotten = 0
         self.peak_usage = 0
+        self.spatial_confusions = 0
 
     def reset(self) -> None:
         """Clear all active memory contents and run-local statistics."""
@@ -1161,6 +1173,37 @@ class WorkingMemory:
         self.total_remembered = 0
         self.total_forgotten = 0
         self.peak_usage = 0
+        self.spatial_confusions = 0
+
+    def _maybe_distort_recall(self, item: MemoryItem) -> MemoryItem:
+        """Return a recalled memory, optionally with bounded spatial displacement."""
+        if self.spatial_error_rate <= 0.0 or self.spatial_error_radius <= 0:
+            return item
+        if item.item_type == MemoryItemType.PATH_SEGMENT:
+            return item
+        if self._rng.random() >= self.spatial_error_rate:
+            return item
+
+        offsets: List[Tuple[int, int]] = []
+        radius = int(self.spatial_error_radius)
+        for dr in range(-radius, radius + 1):
+            for dc in range(-radius, radius + 1):
+                if dr == 0 and dc == 0:
+                    continue
+                if abs(dr) + abs(dc) <= radius:
+                    offsets.append((dr, dc))
+        if not offsets:
+            return item
+
+        dr, dc = self._rng.choice(offsets)
+        distorted_pos = (int(item.position[0]) + int(dr), int(item.position[1]) + int(dc))
+        data = item.data
+        if isinstance(data, dict):
+            data = dict(data)
+            data.setdefault("true_position", tuple(item.position))
+            data["spatial_recall_distorted"] = True
+        self.spatial_confusions += 1
+        return replace(item, position=distorted_pos, data=data)
     
     def remember(
         self,
@@ -1243,7 +1286,7 @@ class WorkingMemory:
             if item_type is None or item.item_type == item_type:
                 item.last_accessed = current_step
                 item.last_decay_step = current_step
-                results.append(item)
+                results.append(self._maybe_distort_recall(item))
         return results
     
     def recall_nearest(
@@ -1669,6 +1712,8 @@ class PersonaConfig:
     name: str
     memory_capacity: int = 7
     memory_decay_rate: float = 0.95
+    spatial_memory_error_rate: float = 0.0
+    spatial_memory_error_radius: int = 1
     vision_radius: int = 5
     vision_accuracy: float = 0.9
     vision_cone: float = 360.0
@@ -1824,6 +1869,8 @@ class PersonaConfig:
                 name="Forgetful",
                 memory_capacity=4,        # Cowan's number
                 memory_decay_rate=0.80,   # Fast decay!
+                spatial_memory_error_rate=0.12,
+                spatial_memory_error_radius=2,
                 vision_radius=4,          # Poor awareness
                 vision_cone=120.0,
                 vision_accuracy=0.85,
@@ -1902,6 +1949,8 @@ class PersonaConfig:
                 name="Novice",
                 memory_capacity=5,
                 memory_decay_rate=0.86,
+                spatial_memory_error_rate=0.08,
+                spatial_memory_error_radius=1,
                 vision_radius=4,
                 vision_accuracy=0.86,
                 vision_cone=110.0,
@@ -2192,7 +2241,10 @@ class CognitiveBoundedSearch:
         )
         self.memory = WorkingMemory(
             capacity=self.config.memory_capacity,
-            decay_rate=self.config.memory_decay_rate
+            decay_rate=self.config.memory_decay_rate,
+            spatial_error_rate=self.config.spatial_memory_error_rate,
+            spatial_error_radius=self.config.spatial_memory_error_radius,
+            rng=self.rng,
         )
         self.vision = VisionSystem(
             radius=self.config.vision_radius,
@@ -3924,6 +3976,7 @@ class CognitiveBoundedSearch:
             focus_guided_steps=self._focus_guided_steps,
             loop_escape_events=self._loop_escape_events,
             memory_pressure_event_rate=memory_pressure_event_rate,
+            spatial_memory_confusions=int(getattr(self.memory, "spatial_confusions", 0)),
             behavioral_complexity_index=behavioral_complexity_index,
             visit_entropy=visit_entropy,
             linearity_ratio=linearity_ratio,

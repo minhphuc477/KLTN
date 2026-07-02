@@ -33,7 +33,9 @@ class GameStateSearchConfig:
     key_boost: bool = False
     enable_ara: bool = False
     ara_weight: float = 1.0
-    allow_diagonals: bool = True
+    # Zelda-style room traversal is 4-neighbor by default. Diagonal movement
+    # must be enabled explicitly so all validators share the same physics.
+    allow_diagonals: bool = False
     rules_profile: str = "vglc_strict"  # vglc_strict | extended | strict_original
     representation: SearchRepresentation = SearchRepresentation.HYBRID
     max_depth: int = 500

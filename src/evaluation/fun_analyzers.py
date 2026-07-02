@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 
 import networkx as nx
 import numpy as np
@@ -15,6 +15,89 @@ from src.evaluation.fun_types import (
 )
 
 SECRET_EDGE_TYPES = frozenset({"soft_locked", "hidden", "secret"})
+TRAP_EDGE_TYPES = frozenset({"softlock", "soft_locked", "trap", "dead_end_trap", "one_way_trap"})
+TRAP_NODE_TOKENS = frozenset({"softlock", "soft", "trap", "pitfall", "deadlock", "unrecoverable"})
+LOW_VALUE_DEAD_END_DEPTH = 2
+
+
+def _node_tokens(mission_graph: nx.Graph, node: Any) -> Set[str]:
+    data = mission_graph.nodes[node] if node in mission_graph.nodes else {}
+    values = [
+        data.get("type") if isinstance(data, dict) else None,
+        data.get("node_type") if isinstance(data, dict) else None,
+        data.get("label") if isinstance(data, dict) else None,
+        data.get("role") if isinstance(data, dict) else None,
+        node,
+    ]
+    tokens: Set[str] = set()
+    for value in values:
+        if value is None:
+            continue
+        name = getattr(value, "name", value)
+        for part in str(name).replace(",", " ").replace("_", " ").split():
+            key = part.strip().lower()
+            if key:
+                tokens.add(key)
+    return tokens
+
+
+def _edge_tokens(data: Dict[str, Any]) -> Set[str]:
+    values = [
+        data.get("edge_type") if isinstance(data, dict) else None,
+        data.get("type") if isinstance(data, dict) else None,
+        data.get("label") if isinstance(data, dict) else None,
+        data.get("constraint") if isinstance(data, dict) else None,
+    ]
+    tokens: Set[str] = set()
+    for value in values:
+        if value is None:
+            continue
+        name = getattr(value, "name", value)
+        for part in str(name).replace(",", " ").replace("_", " ").split():
+            key = part.strip().lower()
+            if key:
+                tokens.add(key)
+        compact = str(name).strip().lower()
+        if compact:
+            tokens.add(compact)
+    return tokens
+
+
+def _branch_trap_pressure(mission_graph: nx.Graph, room_contents: Dict[int, Dict]) -> float:
+    graph_nodes = list(mission_graph.nodes)
+    if not graph_nodes:
+        return 0.0
+
+    branch_nodes = 0
+    risky_branches = 0
+    for node in graph_nodes:
+        if mission_graph.is_directed():
+            successors = list(mission_graph.successors(node))
+            edge_payloads = [mission_graph.get_edge_data(node, succ, default={}) for succ in successors]
+            branch_degree = len(successors)
+        else:
+            successors = list(mission_graph.neighbors(node))
+            edge_payloads = [mission_graph.get_edge_data(node, succ, default={}) for succ in successors]
+            branch_degree = max(0, len(successors) - 1)
+
+        if branch_degree <= 1:
+            continue
+        branch_nodes += 1
+        for succ, edge_data in zip(successors, edge_payloads):
+            data = edge_data if isinstance(edge_data, dict) else {}
+            tokens = _edge_tokens(data)
+            succ_content = room_contents.get(succ, {})
+            succ_tokens = _node_tokens(mission_graph, succ)
+            explicit_trap = bool(tokens & TRAP_EDGE_TYPES) or bool(succ_tokens & TRAP_NODE_TOKENS)
+            content_trap = bool(
+                succ_content.get("softlock", False)
+                or succ_content.get("trap", False)
+                or succ_content.get("unrecoverable", False)
+            )
+            if explicit_trap or content_trap:
+                risky_branches += 1
+
+    return float(np.clip(risky_branches / max(1, branch_nodes * 3), 0.0, 1.0))
 
 
 class FrustrationAnalyzer:
@@ -52,37 +135,93 @@ class FrustrationAnalyzer:
             unclear_goal_score=unclear_goal_score,
             empty_room_ratio=empty_room_ratio,
             total_frustration=total_frustration,
+            depth_backtracking_score=backtracking_ratio,
         )
 
     def _compute_backtracking(self, mission_graph: nx.Graph, solution_path: List[int]) -> float:
-        del mission_graph
-        if not solution_path:
+        if len(solution_path) < 2:
             return 0.0
 
-        visited_rooms = set()
-        revisits = 0
-        for room in solution_path:
-            if room in visited_rooms:
-                revisits += 1
-            visited_rooms.add(room)
+        graph = mission_graph.to_undirected() if mission_graph is not None else nx.Graph()
+        start = solution_path[0]
+        try:
+            depths = nx.single_source_shortest_path_length(graph, start)
+        except Exception:
+            depths = {room: idx for idx, room in enumerate(solution_path)}
 
-        total_visits = len(solution_path)
-        return revisits / max(total_visits, 1)
+        max_depth_den = max(1, max((int(v) for v in depths.values()), default=1))
+        last_seen: Dict[int, int] = {}
+        max_depth_seen = 0
+        depth_reversal = 0.0
+        loop_span = 0.0
+        for idx, room in enumerate(solution_path):
+            depth = int(depths.get(room, idx))
+            max_depth_seen = max(max_depth_seen, depth)
+            if room in last_seen:
+                span = idx - int(last_seen[room])
+                # Immediate A-B-A dithering is a weak signal. Long returns to
+                # earlier rooms after reaching deeper graph layers are the
+                # Metroidvania-style backtracking signal this metric should see.
+                loop_span += max(0.0, float(span - 2))
+                depth_reversal += max(0.0, float(max_depth_seen - depth))
+            last_seen[room] = idx
+
+        span_score = loop_span / max(1.0, float(len(solution_path) - 1))
+        depth_score = depth_reversal / max(1.0, float((len(solution_path) - 1) * max_depth_den))
+        return float(np.clip((0.45 * span_score) + (0.55 * depth_score), 0.0, 1.0))
 
     def _count_dead_ends(self, mission_graph: nx.Graph, room_contents: Dict[int, Dict]) -> int:
         dead_ends = 0
+        graph = mission_graph.to_undirected()
+        start_nodes = [
+            node for node in graph.nodes()
+            if {"start", "entry", "s"}.intersection(_node_tokens(mission_graph, node))
+        ]
+        start = start_nodes[0] if start_nodes else (next(iter(graph.nodes()), None) if graph.nodes else None)
+        try:
+            depths = nx.single_source_shortest_path_length(graph, start) if start is not None else {}
+        except Exception:
+            depths = {}
         for node in mission_graph.nodes():
-            if mission_graph.degree(node) <= 1:
+            tokens = _node_tokens(mission_graph, node)
+            if {"start", "goal", "triforce", "boss"}.intersection(tokens):
+                continue
+            if graph.degree(node) <= 1:
                 content = room_contents.get(node, {})
                 has_content = any(
                     [
                         content.get("keys", 0) > 0,
                         content.get("treasures", 0) > 0,
+                        content.get("items", 0) > 0,
+                        content.get("puzzles", 0) > 0,
+                        content.get("enemies", 0) > 0,
+                        content.get("landmarks", 0) > 0,
+                        content.get("health_pickups", 0) > 0,
+                        content.get("scenic", False),
+                        content.get("rest_area", False),
+                        content.get("safe_room", False),
                         content.get("boss", False),
                         content.get("goal", False),
                     ]
                 )
-                if not has_content:
+                aesthetic_role = bool(
+                    tokens.intersection(
+                        {
+                            "scenic",
+                            "secret",
+                            "sanctuary",
+                            "rest",
+                            "safe",
+                            "courtyard",
+                            "balcony",
+                            "vista",
+                            "lore",
+                            "hub",
+                        }
+                    )
+                )
+                depth = int(depths.get(node, 0))
+                if not has_content and not aesthetic_role and depth >= LOW_VALUE_DEAD_END_DEPTH:
                     dead_ends += 1
         return dead_ends
 
@@ -112,7 +251,14 @@ class FrustrationAnalyzer:
         }
         # A single final boss must not erase the layout-level branching signal.
         goal_visibility = min(len(goal_rooms) / max(len(graph_nodes), 1), 1.0)
-        return branching_confusion * (1.0 - goal_visibility)
+        trap_pressure = _branch_trap_pressure(mission_graph, room_contents)
+        return float(
+            np.clip(
+                ((0.7 * branching_confusion) + (0.3 * trap_pressure)) * (1.0 - goal_visibility),
+                0.0,
+                1.0,
+            )
+        )
 
     def _compute_empty_room_ratio(self, room_contents: Dict[int, Dict]) -> float:
         if not room_contents:
@@ -150,11 +296,12 @@ class ExplorabilityAnalyzer:
         secret_count = self._count_secrets(mission_graph)
         reward_density = self._compute_reward_density(room_contents)
 
+        trap_pressure = _branch_trap_pressure(mission_graph, room_contents)
         discovery_potential = (
             0.4 * optional_ratio
             + 0.3 * min(secret_count / max(total_rooms, 1), 1.0)
             + 0.3 * reward_density
-        )
+        ) * (1.0 - 0.5 * trap_pressure)
 
         return ExplorabilityMetrics(
             optional_room_ratio=optional_ratio,
@@ -166,8 +313,7 @@ class ExplorabilityAnalyzer:
     def _count_secrets(self, mission_graph: nx.Graph) -> int:
         secret_count = 0
         for _, _, data in mission_graph.edges(data=True):
-            edge_type = data.get("edge_type", data.get("type", ""))
-            if edge_type in SECRET_EDGE_TYPES:
+            if _edge_tokens(data) & SECRET_EDGE_TYPES:
                 secret_count += 1
         return secret_count
 
