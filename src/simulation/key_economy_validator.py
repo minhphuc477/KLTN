@@ -135,10 +135,165 @@ def _select_start_goal_nodes(graph: nx.DiGraph) -> Tuple[Optional[int], Optional
 
 def _edge_is_reversible(edge_data: Dict) -> bool:
     edge_type = str(edge_data.get("edge_type", edge_data.get("type", ""))).strip().lower()
-    lock_type = str(edge_data.get("lock_type", "open")).strip().lower()
+    lock_type = _normalized_lock_type(edge_data)
     if edge_data.get("is_window") or edge_type in {"visual_link", "one_way"} or lock_type == "one_way":
         return False
-    return lock_type in {"open", "locked", "key_locked", "bomb", "boss", ""}
+    return lock_type in {"open", "locked", "key_locked", "bomb", "boss", "item", ""}
+
+
+def _normalized_lock_type(edge_data: Dict) -> str:
+    """Normalize lock semantics from legacy ``lock_type`` and newer edge schemas."""
+    raw_values = [
+        edge_data.get("lock_type"),
+        edge_data.get("edge_type"),
+        edge_data.get("type"),
+        edge_data.get("label"),
+    ]
+    tokens: Set[str] = set()
+    for raw in raw_values:
+        if raw is None:
+            continue
+        text = str(raw).strip().lower()
+        if not text:
+            continue
+        tokens.add(text)
+        tokens.update(part for part in text.replace(",", " ").replace("|", " ").split() if part)
+
+    if tokens & {"locked", "key_locked", "k"}:
+        return "key_locked"
+    if tokens & {"bomb", "bombable", "b"}:
+        return "bomb"
+    if tokens & {"boss", "boss_locked", "boss_lock"}:
+        return "boss"
+    if tokens & {"item_locked", "item_gate", "item"}:
+        return "item"
+    if tokens & {"one_way", "one-way", "soft_locked"}:
+        return "one_way"
+    if tokens & {"open", "path", ""}:
+        return "open"
+    return next(iter(tokens), "open")
+
+
+def _resource_key(value: object) -> object:
+    """Canonicalize resource identifiers without losing integer key IDs."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        text = value.strip()
+        return text if text else None
+    return value
+
+
+def _inventory_has(state: PlayerState, resource: object) -> bool:
+    resource = _resource_key(resource)
+    if resource is None:
+        return False
+    if state.inventory.get(resource, 0) > 0:
+        return True
+    text = str(resource)
+    return state.inventory.get(text, 0) > 0 or state.inventory.get(text.upper(), 0) > 0
+
+
+def _inventory_add(state: PlayerState, resource: object, amount: int = 1):
+    resource = _resource_key(resource)
+    if resource is None:
+        return
+    state.inventory[resource] = state.inventory.get(resource, 0) + int(amount)
+
+
+def _inventory_consume(state: PlayerState, resource: object):
+    resource = _resource_key(resource)
+    if resource is None:
+        return
+    for candidate in (resource, str(resource), str(resource).upper()):
+        if state.inventory.get(candidate, 0) > 0:
+            state.inventory[candidate] -= 1
+            if state.inventory[candidate] == 0:
+                del state.inventory[candidate]
+            return
+
+
+def _edge_key_id(edge_data: Dict, default: object = "key_generic") -> object:
+    for field_name in ("key_id", "key_required", "required_key"):
+        value = _resource_key(edge_data.get(field_name))
+        if value is not None:
+            return value
+    return default
+
+
+def _edge_required_item(edge_data: Dict) -> object:
+    for field_name in ("item_required", "required_item", "item_id"):
+        value = _resource_key(edge_data.get(field_name))
+        if value is not None:
+            return str(value)
+    return "ITEM"
+
+
+def _node_resources(node_data: Dict) -> List[object]:
+    """Return resources supplied by a node; consumer-only fields are ignored."""
+    resources: List[object] = []
+    role = _normalized_node_role(node_data)
+    consumer_role = "LOCK" in role or "DOOR" in role
+    key_id = _resource_key(node_data.get("key_id"))
+    if key_id is not None and not consumer_role:
+        resources.append(key_id)
+
+    if key_id is None and ("BIG_KEY" in role or "BOSS_KEY" in role):
+        resources.append("key_boss")
+
+    items = node_data.get("items", [])
+    if isinstance(items, (str, bytes)):
+        items = [items]
+    for item in items or []:
+        item_key = _resource_key(item)
+        if item_key is not None:
+            resources.append(str(item_key))
+
+    for field_name in ("item_type", "drops_resource", "provided_item", "resource"):
+        value = _resource_key(node_data.get(field_name))
+        if value is not None:
+            resources.append(str(value))
+
+    return resources
+
+
+def _can_traverse_resource_edge(state: PlayerState, edge_data: Dict) -> bool:
+    """Pure edge traversal check shared by all key-economy players."""
+    lock_type = _normalized_lock_type(edge_data)
+    if lock_type in {"open", "one_way"}:
+        return True
+    if lock_type in {"locked", "key_locked"}:
+        return _inventory_has(state, _edge_key_id(edge_data))
+    if lock_type == "bomb":
+        return _inventory_has(state, "item_bomb") or _inventory_has(state, "BOMB")
+    if lock_type == "boss":
+        required = _edge_key_id(edge_data, default="key_boss")
+        return _inventory_has(state, required) or _inventory_has(state, "key_boss")
+    if lock_type == "item":
+        return _inventory_has(state, _edge_required_item(edge_data))
+    return False
+
+
+def _consume_resource_for_edge(state: PlayerState, edge_data: Dict):
+    """Mutate state for consumable edge resources."""
+    lock_type = _normalized_lock_type(edge_data)
+    if lock_type in {"locked", "key_locked"}:
+        _inventory_consume(state, _edge_key_id(edge_data))
+    elif lock_type == "bomb":
+        if _inventory_has(state, "item_bomb"):
+            _inventory_consume(state, "item_bomb")
+        else:
+            _inventory_consume(state, "BOMB")
+    # Boss keys and traversal items are persistent affordances.
+
+
+def _collect_node_resources(graph: nx.DiGraph, state: PlayerState, node_id: int):
+    """Collect all resources present at a node at most once."""
+    if node_id in state.collected_item_nodes:
+        return
+    state.collected_item_nodes.add(node_id)
+    for resource in _node_resources(graph.nodes[node_id]):
+        _inventory_add(state, resource)
 
 
 def _iter_accessible_neighbor_edges(graph: nx.DiGraph, node: int):
@@ -232,8 +387,8 @@ class GreedyPlayer:
         """
         # BFS over (node, inventory) state to correctly model key acquisition.
         start_state = state.copy()
-        # path stores (node, edge_data_to_reach_it) pairs; first entry has empty edge.
-        queue = deque([(start_state, [(state.current_node, {})])])
+        start_state.path_taken = []
+        queue = deque([(start_state, None)])
         visited: Set[Tuple[int, FrozenSet, FrozenSet]] = {
             (
                 state.current_node,
@@ -243,13 +398,11 @@ class GreedyPlayer:
         }
         
         while queue:
-            curr_state, path = queue.popleft()
+            curr_state, first_move = queue.popleft()
             node = curr_state.current_node
             
             if node == goal_node:
-                if len(path) > 1:
-                    return path[1]  # (next_node, edge_data)
-                return (goal_node, {})
+                return first_move if first_move is not None else (goal_node, {})
             
             for neighbor, edge_data in _iter_accessible_neighbor_edges(self.graph, node):
                 if not self._can_traverse_edge(curr_state, edge_data):
@@ -270,58 +423,27 @@ class GreedyPlayer:
                     continue
                 
                 visited.add(sig)
-                queue.append((next_state, path + [(neighbor, edge_data)]))
+                queue.append(
+                    (
+                        next_state,
+                        first_move if first_move is not None else (neighbor, edge_data),
+                    )
+                )
         
         return None  # No path to goal
     
     def _can_traverse_edge(self, state: PlayerState, edge_data: Dict) -> bool:
         """Pure check: can the player traverse this edge?  Does NOT mutate state."""
-        lock_type = edge_data.get('lock_type', 'open')
-        if lock_type == 'open':
-            return True
-        elif lock_type in ('locked', 'key_locked'):
-            key_id = edge_data.get('key_id', 'key_generic')
-            return state.inventory.get(key_id, 0) > 0
-        elif lock_type == 'bomb':
-            return state.inventory.get('item_bomb', 0) > 0
-        elif lock_type == 'boss':
-            return state.inventory.get('key_boss', 0) > 0
-        else:
-            return True  # Unknown lock type - assume passable
+        return _can_traverse_resource_edge(state, edge_data)
 
     @staticmethod
     def _consume_key_for_edge(state: PlayerState, edge_data: Dict):
         """Mutate state: consume the required key/item for this edge."""
-        lock_type = edge_data.get('lock_type', 'open')
-        if lock_type in ('locked', 'key_locked'):
-            key_id = edge_data.get('key_id', 'key_generic')
-        elif lock_type == 'bomb':
-            key_id = 'item_bomb'
-        elif lock_type == 'boss':
-            return  # Boss keys are persistent dungeon affordances, not consumables.
-        else:
-            return  # Nothing to consume
-        if state.inventory.get(key_id, 0) > 0:
-            state.inventory[key_id] -= 1
-            if state.inventory[key_id] == 0:
-                del state.inventory[key_id]
+        _consume_resource_for_edge(state, edge_data)
     
     def _collect_items_at_node(self, state: PlayerState, node_id: int):
         """Collect all items present at a node at most once."""
-        if node_id in state.collected_item_nodes:
-            return
-        state.collected_item_nodes.add(node_id)
-        node_data = self.graph.nodes[node_id]
-        
-        # Collect keys
-        if 'key_id' in node_data:
-            key_id = node_data['key_id']
-            state.inventory[key_id] = state.inventory.get(key_id, 0) + 1
-        
-        # Collect items
-        if 'items' in node_data:
-            for item in node_data['items']:
-                state.inventory[item] = state.inventory.get(item, 0) + 1
+        _collect_node_resources(self.graph, state, node_id)
 
 
 class AdversarialPlayer:
@@ -458,7 +580,8 @@ class AdversarialPlayer:
         # Use a BFS that simulates key consumption on copies to find a
         # reachable path to goal without mutating the live state.
         start_copy = state.copy()
-        queue = deque([(start_copy, [state.current_node], [{}])])  # (state, path, edges)
+        start_copy.path_taken = []
+        queue = deque([(start_copy, None)])
         visited: Set[Tuple[int, FrozenSet, FrozenSet]] = {
             (
                 state.current_node,
@@ -467,12 +590,10 @@ class AdversarialPlayer:
             )
         }
         while queue:
-            curr, path, edges = queue.popleft()
+            curr, first_move = queue.popleft()
             node = curr.current_node
             if node == goal_node:
-                if len(path) > 1:
-                    return (path[1], edges[1])
-                return (goal_node, {})
+                return first_move if first_move is not None else (goal_node, {})
             for neighbor, edge_data in _iter_accessible_neighbor_edges(self.graph, node):
                 if not self._can_traverse_edge(curr, edge_data):
                     continue
@@ -488,55 +609,26 @@ class AdversarialPlayer:
                 if sig in visited:
                     continue
                 visited.add(sig)
-                queue.append((nxt, path + [neighbor], edges + [edge_data]))
+                queue.append(
+                    (
+                        nxt,
+                        first_move if first_move is not None else (neighbor, edge_data),
+                    )
+                )
         return None
     
     def _can_traverse_edge(self, state: PlayerState, edge_data: Dict) -> bool:
         """Pure check: can the player traverse this edge?  Does NOT mutate state."""
-        lock_type = edge_data.get('lock_type', 'open')
-        if lock_type == 'open':
-            return True
-        elif lock_type in ('locked', 'key_locked'):
-            key_id = edge_data.get('key_id', 'key_generic')
-            return state.inventory.get(key_id, 0) > 0
-        elif lock_type == 'bomb':
-            return state.inventory.get('item_bomb', 0) > 0
-        elif lock_type == 'boss':
-            return state.inventory.get('key_boss', 0) > 0
-        else:
-            return True
+        return _can_traverse_resource_edge(state, edge_data)
 
     @staticmethod
     def _consume_key_for_edge(state: PlayerState, edge_data: Dict):
         """Mutate state: consume the required key/item for this edge."""
-        lock_type = edge_data.get('lock_type', 'open')
-        if lock_type in ('locked', 'key_locked'):
-            key_id = edge_data.get('key_id', 'key_generic')
-        elif lock_type == 'bomb':
-            key_id = 'item_bomb'
-        elif lock_type == 'boss':
-            return  # Boss keys are persistent dungeon affordances, not consumables.
-        else:
-            return
-        if state.inventory.get(key_id, 0) > 0:
-            state.inventory[key_id] -= 1
-            if state.inventory[key_id] == 0:
-                del state.inventory[key_id]
+        _consume_resource_for_edge(state, edge_data)
     
     def _collect_items_at_node(self, state: PlayerState, node_id: int):
         """Collect all items at a node at most once."""
-        if node_id in state.collected_item_nodes:
-            return
-        state.collected_item_nodes.add(node_id)
-        node_data = self.graph.nodes[node_id]
-        
-        if 'key_id' in node_data:
-            key_id = node_data['key_id']
-            state.inventory[key_id] = state.inventory.get(key_id, 0) + 1
-        
-        if 'items' in node_data:
-            for item in node_data['items']:
-                state.inventory[item] = state.inventory.get(item, 0) + 1
+        _collect_node_resources(self.graph, state, node_id)
 
 
 class MissionGraphAnalyzer:
@@ -577,25 +669,22 @@ class MissionGraphAnalyzer:
     
     def _find_critical_path(self) -> Set[int]:
         """
-        Find critical path from start to goal.
-        
-        Critical path = nodes required to reach goal
+        Return nodes that lie on at least one directed start-to-goal route.
+
+        A node is on such a route exactly when it is reachable from START and
+        can reach GOAL. This avoids exponential all-simple-path enumeration.
         """
         if self.start_node is None or self.goal_node is None:
             return set(self.graph.nodes())
 
-        # All nodes on any path from start to goal
         try:
-            all_paths = list(nx.all_simple_paths(self.graph, self.start_node, self.goal_node))
-            if all_paths:
-                # Union of all paths
-                critical = set()
-                for path in all_paths:
-                    critical.update(path)
-                return critical
-            else:
-                return set(self.graph.nodes())
-        except nx.NetworkXException:
+            reachable = {self.start_node}
+            reachable.update(nx.descendants(self.graph, self.start_node))
+            goal_ancestors = {self.goal_node}
+            goal_ancestors.update(nx.ancestors(self.graph, self.goal_node))
+            on_route = reachable & goal_ancestors
+            return on_route if on_route else set(self.graph.nodes())
+        except (nx.NetworkXException, KeyError):
             return set(self.graph.nodes())
     
     def analyze_key_economy(self) -> Dict[str, int]:
@@ -609,52 +698,51 @@ class MissionGraphAnalyzer:
         lock_surplus = {}
         
         for u, v, data in self.graph.edges(data=True):
-            lock_type = data.get('lock_type', 'open')
+            lock_type = _normalized_lock_type(data)
             if lock_type in ['locked', 'key_locked']:
-                key_id = data.get('key_id', 'key_generic')
+                key_id = _edge_key_id(data)
                 
-                # Count keys available before this lock
-                keys_before = self._count_keys_before_node(v, key_id)
+                # Count only providers reachable without crossing this lock.
+                # This excludes the impossible "key behind its own door" case
+                # while still allowing a legitimate alternate route to v.
+                keys_before = self._count_keys_before_edge(u, v, key_id)
                 
                 lock_surplus[f"{u}->{v}"] = keys_before - 1  # Need 1 key to pass
         
         return lock_surplus
     
-    def _count_keys_before_node(self, node_id: int, key_id: str) -> int:
-        """Count how many of key_id are available before reaching node."""
-        # Best practice: only count keys that are both
-        # 1) reachable from a start node, and
-        # 2) on some predecessor path to the target node.
-        starts = [n for n in self.graph.nodes() if self.graph.in_degree(n) == 0]
-        if not starts:
-            starts = [node_id]
-        
-        reachable_from_start: Set[int] = set()
-        for s in starts:
-            try:
-                reachable_from_start.add(s)
-                reachable_from_start.update(nx.descendants(self.graph, s))
-            except Exception:
-                reachable_from_start.add(s)
-        
-        try:
-            predecessor_region = set(nx.ancestors(self.graph, node_id))
-        except Exception:
-            predecessor_region = set()
-        predecessor_region.add(node_id)
-        
-        valid_region = reachable_from_start & predecessor_region
-        
+    def _count_keys_before_edge(self, source: int, target: int, key_id: str) -> int:
+        """Count matching keys reachable from the canonical start with one lock closed."""
+        if self.start_node is None or self.start_node not in self.graph:
+            return 0
+
+        def is_blocked(a: int, b: int) -> bool:
+            return (a == source and b == target) or (a == target and b == source)
+
+        reachable: Set[int] = {self.start_node}
+        queue = deque([self.start_node])
+        while queue:
+            node = queue.popleft()
+
+            for neighbor in self.graph.successors(node):
+                if is_blocked(node, neighbor) or neighbor in reachable:
+                    continue
+                reachable.add(neighbor)
+                queue.append(neighbor)
+
+            for predecessor in self.graph.predecessors(node):
+                if is_blocked(predecessor, node) or predecessor in reachable:
+                    continue
+                edge_data = self.graph.get_edge_data(predecessor, node, {}) or {}
+                if not _edge_is_reversible(edge_data):
+                    continue
+                reachable.add(predecessor)
+                queue.append(predecessor)
+
         count = 0
-        for n in valid_region:
+        for n in reachable:
             node_data = self.graph.nodes[n]
-            if node_data.get('key_id') == key_id:
-                count += 1
-            
-            # Also support keys stored in an item list.
-            for item in node_data.get('items', []) or []:
-                if item == key_id:
-                    count += 1
+            count += sum(1 for resource in _node_resources(node_data) if resource == key_id or str(resource) == str(key_id))
         
         return count
 

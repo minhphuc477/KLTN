@@ -20,6 +20,7 @@ import json
 import os
 import shutil
 import logging
+import hashlib
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List, Iterable
@@ -95,6 +96,18 @@ def checkpoint_size_bytes(path: str | Path) -> int:
     if not checkpoint_path.exists():
         return 0
     return int(checkpoint_path.stat().st_size)
+
+
+def checkpoint_sha256(path: str | Path, *, chunk_size: int = 1024 * 1024) -> str:
+    """Return a stable SHA-256 digest for checkpoint provenance."""
+    checkpoint_path = Path(path)
+    if not checkpoint_path.is_file():
+        return ""
+    digest = hashlib.sha256()
+    with checkpoint_path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(int(max(1, chunk_size))), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def checkpoint_directory_size_bytes(
@@ -232,6 +245,7 @@ def write_checkpoint_metadata(
         "saved_at_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "file_size_bytes": int(checkpoint_size_bytes(path)),
         "file_size_human": format_bytes(checkpoint_size_bytes(path)),
+        "sha256": checkpoint_sha256(path),
     }
     if architecture:
         metadata["architecture"] = dict(architecture)

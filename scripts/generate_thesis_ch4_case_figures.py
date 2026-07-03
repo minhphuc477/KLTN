@@ -28,7 +28,10 @@ from src.evaluation.pcbs_validation import prepare_dungeon_grid_for_validation
 from src.evaluation.search_benchmark_utils import path_transition_count
 from src.simulation.cognitive_bounded_search import CognitiveBoundedSearch
 from src.simulation.search_base import GameStateSearchConfig, SearchRepresentation
-from src.simulation.search_factory import iter_game_state_algorithm_specs, run_game_state_solver
+from src.simulation.search_factory import (
+    recommended_game_state_algorithm_specs,
+    run_game_state_solver,
+)
 from src.simulation.validator import ZeldaLogicEnv
 
 logger = logging.getLogger(__name__)
@@ -134,7 +137,16 @@ def _run_tile_state_suite(
     else:
         env_kwargs = {"render_mode": False}
 
-    for spec in iter_game_state_algorithm_specs():
+    selection_env = ZeldaLogicEnv(grid, **env_kwargs)
+    try:
+        specs = recommended_game_state_algorithm_specs(selection_env, include_diagnostics=True)
+    finally:
+        try:
+            selection_env.close()
+        except Exception:
+            logger.debug("Failed to close solver-selection environment.", exc_info=True)
+
+    for spec in specs:
         env = ZeldaLogicEnv(grid, **env_kwargs)
         started = time.perf_counter()
         try:
@@ -345,7 +357,7 @@ def _build_solver_figure(
 
     panel_specs = [
         ("full", "graph_guided_oracle", "Graph-guided oracle"),
-        ("full", "bidirectional_astar", "Bidirectional A*"),
+        ("full", "astar", "Full-state A* oracle"),
         ("full", "pcbs_balanced", "P-CBS (balanced)"),
         ("grid_only", "astar", "A* (grid-only diagnostic)"),
         ("grid_only", "greedy", "Greedy (grid-only diagnostic)"),

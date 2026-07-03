@@ -1188,7 +1188,7 @@ def test_stack_diffusion_graph_batch_rejects_mixed_topology_map_presence():
         DiffusionTrainer._stack_diffusion_graph_batch(trainer, graph_list)
 
 
-def test_stack_diffusion_graph_batch_warns_when_topology_shapes_disable_stacking(caplog):
+def test_stack_diffusion_graph_batch_rejects_mismatched_topology_shapes():
     trainer = _make_stub_trainer(context_dim=8)
 
     graph_list = [
@@ -1208,11 +1208,8 @@ def test_stack_diffusion_graph_batch_warns_when_topology_shapes_disable_stacking
         },
     ]
 
-    with caplog.at_level("WARNING"):
-        stacked = DiffusionTrainer._stack_diffusion_graph_batch(trainer, graph_list)
-
-    assert "room_topology_map" not in stacked
-    assert "Disabling batched room_topology_map stacking due to shape mismatch" in caplog.text
+    with pytest.raises(ValueError, match="room_topology_map shapes must be identical"):
+        DiffusionTrainer._stack_diffusion_graph_batch(trainer, graph_list)
 
 
 def test_train_step_skips_nonfinite_diffusion_loss():

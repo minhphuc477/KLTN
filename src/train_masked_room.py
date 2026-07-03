@@ -104,6 +104,7 @@ class MaskedRoomTrainingConfig:
         condition_reference_tile_vocab_size: int = 44,
         condition_reference_embedding_dim: int = 32,
         condition_reference_hidden_dim: int = 64,
+        condition_strict_schema: bool = False,
         graph_conditioning_mode: str = "node_sequence",
         use_current_node_distance_features: bool = True,
         current_node_distance_max: int = 8,
@@ -201,6 +202,7 @@ class MaskedRoomTrainingConfig:
         self.condition_reference_tile_vocab_size = int(max(2, condition_reference_tile_vocab_size))
         self.condition_reference_embedding_dim = int(max(4, condition_reference_embedding_dim))
         self.condition_reference_hidden_dim = int(max(4, condition_reference_hidden_dim))
+        self.condition_strict_schema = bool(condition_strict_schema)
         self.graph_conditioning_mode = str(graph_conditioning_mode).strip().lower()
         self.use_current_node_distance_features = bool(use_current_node_distance_features)
         self.current_node_distance_max = int(max(1, current_node_distance_max))
@@ -395,6 +397,7 @@ def masked_room_training_kwargs_from_resolved_config(config: Dict[str, Any]) -> 
         "condition_reference_tile_vocab_size": stage["condition_reference_tile_vocab_size"],
         "condition_reference_embedding_dim": stage["condition_reference_embedding_dim"],
         "condition_reference_hidden_dim": stage["condition_reference_hidden_dim"],
+        "condition_strict_schema": stage.get("condition_strict_schema", False),
         "graph_conditioning_mode": stage["graph_conditioning_mode"],
         "use_current_node_distance_features": stage["use_current_node_distance_features"],
         "current_node_distance_max": stage["current_node_distance_max"],
@@ -498,6 +501,7 @@ def _legacy_masked_room_overrides_from_args(args: argparse.Namespace) -> Dict[st
     _set("condition_reference_tile_vocab_size", getattr(args, "condition_reference_tile_vocab_size", None))
     _set("condition_reference_embedding_dim", getattr(args, "condition_reference_embedding_dim", None))
     _set("condition_reference_hidden_dim", getattr(args, "condition_reference_hidden_dim", None))
+    _set("condition_strict_schema", getattr(args, "condition_strict_schema", None))
     _set("graph_conditioning_mode", getattr(args, "graph_conditioning_mode", None))
     _set("use_current_node_distance_features", getattr(args, "use_current_node_distance_features", None))
     _set("current_node_distance_max", getattr(args, "current_node_distance_max", None))
@@ -713,6 +717,7 @@ class MaskedRoomTrainer:
             reference_num_tile_types=config.condition_reference_tile_vocab_size,
             reference_embedding_dim=config.condition_reference_embedding_dim,
             reference_hidden_dim=config.condition_reference_hidden_dim,
+            strict_schema=bool(getattr(config, "condition_strict_schema", False)),
         )).to(self.device)
         self.puzzle_stage_semantics_head = PuzzleStageSemanticsHead(
             num_tile_classes=int(config.num_classes),
@@ -1654,7 +1659,22 @@ class MaskedRoomTrainer:
         if "puzzle_stage_semantics_head_state_dict" in checkpoint:
             self.puzzle_stage_semantics_head.load_state_dict(checkpoint["puzzle_stage_semantics_head_state_dict"])
         if self.logic_net is not None and "logic_net_state_dict" in checkpoint:
-            self.logic_net.load_state_dict(checkpoint["logic_net_state_dict"], strict=False)
+            incompatible = self.logic_net.load_state_dict(checkpoint["logic_net_state_dict"], strict=False)
+            missing = [str(name) for name in getattr(incompatible, "missing_keys", [])]
+            unexpected = [str(name) for name in getattr(incompatible, "unexpected_keys", [])]
+            parameter_names = {str(name) for name, _parameter in self.logic_net.named_parameters()}
+            missing_parameters = [name for name in missing if name in parameter_names]
+            if missing_parameters:
+                raise RuntimeError(
+                    "Masked-room checkpoint is missing learned LogicNet parameters; "
+                    "refusing to resume with mixed trained/random logic supervision: "
+                    f"{missing_parameters[:8]}"
+                )
+            if unexpected:
+                logger.warning(
+                    "Masked-room checkpoint LogicNet state has unexpected keys: %s",
+                    unexpected[:8],
+                )
         if "optimizer_state_dict" in checkpoint:
             self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
         if "scheduler_state_dict" in checkpoint:
@@ -1905,6 +1925,12 @@ def main() -> None:
     parser.add_argument("--condition-reference-tile-vocab-size", type=int, default=None)
     parser.add_argument("--condition-reference-embedding-dim", type=int, default=None)
     parser.add_argument("--condition-reference-hidden-dim", type=int, default=None)
+    parser.add_argument(
+        "--condition-strict-schema",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Fail on graph-conditioning schema mismatches instead of pad/truncate compatibility alignment.",
+    )
     parser.add_argument("--graph-conditioning-mode", type=str, default=None)
     parser.add_argument("--use-current-node-distance-features", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--current-node-distance-max", type=int, default=None)

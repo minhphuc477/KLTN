@@ -1476,6 +1476,15 @@ class ZeldaGUI:
             proc=proc,
             logger=logger,
         )
+        try:
+            process_stopped = not bool(proc and proc.is_alive())
+        except (AttributeError, RuntimeError, ValueError, TypeError):
+            process_stopped = False
+        if process_stopped:
+            # The process can no longer write these artifacts, so release them
+            # before recovery clears their tracked paths.
+            self.solver_running = False
+            self._delete_temp_files()
 
     def _force_solver_recovery_state(self, recovery_reason: str):
         _force_solver_recovery_state_orchestration_helper(

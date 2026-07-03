@@ -1,3 +1,4 @@
+import json
 import logging
 from pathlib import Path
 
@@ -72,9 +73,11 @@ def test_checkpoint_metadata_records_file_size(tmp_path: Path):
 
     meta_path = write_checkpoint_metadata(str(ckpt), model_type="unit_test")
     metadata = meta_path.read_text(encoding="utf-8")
+    parsed = json.loads(metadata)
 
     assert "\"file_size_bytes\"" in metadata
     assert "\"file_size_human\"" in metadata
+    assert len(parsed["sha256"]) == 64
     assert checkpoint_size_bytes(ckpt) > 0
     assert checkpoint_directory_size_bytes(tmp_path) >= checkpoint_size_bytes(ckpt)
     assert format_bytes(checkpoint_size_bytes(ckpt)).endswith(("B", "KB", "MB", "GB", "TB"))

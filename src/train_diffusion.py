@@ -193,6 +193,7 @@ class DiffusionTrainingConfig:
         condition_reference_embedding_dim: int = 32,
         condition_reference_hidden_dim: int = 64,
         condition_use_rrwp_edge_features: bool = True,
+        condition_strict_schema: bool = False,
         num_timesteps: int = 1000,
         schedule_type: str = "cosine",
         topology_refinement_mode: str = "gat2",  # none | lightweight | sparse*/gat2* | graphormer
@@ -419,6 +420,7 @@ class DiffusionTrainingConfig:
         self.condition_reference_embedding_dim = int(max(4, condition_reference_embedding_dim))
         self.condition_reference_hidden_dim = int(max(4, condition_reference_hidden_dim))
         self.condition_use_rrwp_edge_features = bool(condition_use_rrwp_edge_features)
+        self.condition_strict_schema = bool(condition_strict_schema)
         self.num_timesteps = num_timesteps
         self.schedule_type = schedule_type
         trm = str(topology_refinement_mode).strip().lower()
@@ -692,6 +694,7 @@ def diffusion_training_kwargs_from_resolved_config(
         "condition_reference_embedding_dim": stage["condition_reference_embedding_dim"],
         "condition_reference_hidden_dim": stage["condition_reference_hidden_dim"],
         "condition_use_rrwp_edge_features": stage.get("condition_use_rrwp_edge_features", True),
+        "condition_strict_schema": stage.get("condition_strict_schema", False),
         "num_timesteps": stage["num_timesteps"],
         "schedule_type": stage["schedule_type"],
         "topology_refinement_mode": stage["topology_refinement_mode"],
@@ -1022,6 +1025,10 @@ def _legacy_diffusion_overrides_from_args(args: argparse.Namespace) -> Dict[str,
     _set(
         "condition_use_rrwp_edge_features",
         getattr(args, "condition_use_rrwp_edge_features", None),
+    )
+    _set(
+        "condition_strict_schema",
+        getattr(args, "condition_strict_schema", None),
     )
     _set("vqvae_hidden_dim", getattr(args, "vqvae_hidden_dim", None))
     _set("vqvae_codebook_size", getattr(args, "vqvae_codebook_size", None))
@@ -1487,6 +1494,7 @@ class DiffusionTrainer:
             reference_embedding_dim=self.config.condition_reference_embedding_dim,
             reference_hidden_dim=self.config.condition_reference_hidden_dim,
             use_rrwp_edge_features=self.config.condition_use_rrwp_edge_features,
+            strict_schema=bool(getattr(self.config, "condition_strict_schema", False)),
         )
 
     def _stack_conditioning_vectors(self, cond_vectors: List[torch.Tensor]) -> torch.Tensor:
@@ -2578,18 +2586,12 @@ class DiffusionTrainer:
                 if topo_shape is None:
                     topo_shape = current_shape
                 if current_shape != topo_shape:
-                    if not bool(getattr(self, "_topology_shape_mismatch_warning_emitted", False)):
-                        logger.warning(
-                            "Disabling batched room_topology_map stacking due to shape mismatch: "
-                            "expected %s, got %s. Topology conditioning will be omitted for this batch.",
-                            str(topo_shape),
-                            str(current_shape),
-                        )
-                        self._topology_shape_mismatch_warning_emitted = True
-                    can_stack_topology = False
-                    topo_maps = []
-                else:
-                    topo_maps.append(topo)
+                    raise ValueError(
+                        "room_topology_map shapes must be identical within a diffusion batch; "
+                        f"expected {topo_shape}, got {current_shape}. Refusing to omit topology "
+                        "conditioning for only this batch."
+                    )
+                topo_maps.append(topo)
             if boundary_batch is not None:
                 boundary_batch[i] = sample["boundary_constraints"]
             for mask_name, mask_rows in logic_mask_maps.items():
@@ -2765,7 +2767,7 @@ class DiffusionTrainer:
             return zero, 0.0, zero
 
         with torch.no_grad():
-            probs = F.softmax(pred_tile_logits.detach(), dim=1)
+            probs = F.softmax(pred_tile_logits.detach().float(), dim=1).to(dtype=pred_tile_logits.dtype)
             confidence, pred_ids = probs.max(dim=1)
             threshold = float(getattr(self.config, "wfc_pseudo_confidence_threshold", 0.75))
             repair_targets: List[torch.Tensor] = []
@@ -3574,21 +3576,17 @@ class DiffusionTrainer:
             
             if graph_list is not None and self.condition_encoder is not None:
                 try:
-                    # Encode each graph through GNN and stack.
-                    cond_vectors = []
-                    for graph_dict in graph_list:
-                        c_i = self._encode_graph_conditioning(graph_dict)
-                        cond_vectors.append(c_i)
+                    cond_vectors = [
+                        self._encode_graph_conditioning(graph_dict)
+                        for graph_dict in graph_list
+                    ]
                     conditioning = self._stack_conditioning_vectors(cond_vectors)
-                except (AttributeError, RuntimeError, ValueError, TypeError) as e:
-                    logger.debug(f"Graph conditioning failed: {e}")
-                    conditioning = None
-
-                try:
                     diffusion_graph_data = self._stack_diffusion_graph_batch(graph_list)
-                except (AttributeError, RuntimeError, ValueError, TypeError) as e:
-                    logger.debug(f"Diffusion graph-data build failed: {e}")
-                    diffusion_graph_data = None
+                except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+                    raise RuntimeError(
+                        "Graph-conditioned diffusion training could not build its "
+                        "conditioning batch; refusing to train unconditionally."
+                    ) from exc
                 
                 if include_logic:
                     logic_graph_data = diffusion_graph_data
@@ -3690,25 +3688,18 @@ class DiffusionTrainer:
             conditioning = None
             diffusion_graph_data = None
             if graph_list is not None:
-                cond_vectors = []
-                for idx, graph_dict in enumerate(graph_list):
-                    try:
-                        c_i = self._encode_graph_conditioning(graph_dict)
-                    except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
-                        logger.debug(
-                            "Graph conditioning encode failed for sample %d; using dummy conditioning: %s",
-                            idx,
-                            exc,
-                        )
-                        c_i = self.get_dummy_conditioning(1)
-                    cond_vectors.append(c_i)
-                if cond_vectors:
-                    conditioning = self._stack_conditioning_vectors(cond_vectors)
                 try:
+                    cond_vectors = [
+                        self._encode_graph_conditioning(graph_dict)
+                        for graph_dict in graph_list
+                    ]
+                    conditioning = self._stack_conditioning_vectors(cond_vectors)
                     diffusion_graph_data = self._stack_diffusion_graph_batch(graph_list)
                 except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
-                    logger.debug("Diffusion graph-data build failed during validation: %s", exc)
-                    diffusion_graph_data = None
+                    raise RuntimeError(
+                        "Graph-conditioned diffusion validation could not build its "
+                        "conditioning batch; refusing to report dummy-conditioned metrics."
+                    ) from exc
             
             if conditioning is None:
                 conditioning = self.get_dummy_conditioning(batch_size)
@@ -4612,6 +4603,12 @@ def main():
     parser.add_argument('--condition-reference-embedding-dim', type=int, default=None)
     parser.add_argument('--condition-reference-hidden-dim', type=int, default=None)
     parser.add_argument('--condition-use-rrwp-edge-features', action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument(
+        '--condition-strict-schema',
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help='Fail on graph-conditioning schema mismatches instead of pad/truncate compatibility alignment.',
+    )
     parser.add_argument('--vqvae-hidden-dim', type=int, default=None)
     parser.add_argument('--vqvae-codebook-size', type=int, default=None)
     parser.add_argument('--vqvae-use-coordconv', action=argparse.BooleanOptionalAction, default=None)

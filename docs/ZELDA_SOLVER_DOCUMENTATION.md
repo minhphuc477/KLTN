@@ -188,8 +188,9 @@ SolverOptions.for_level("speedrun")    # allow_diagonals=True, mode="speedrunner
 |--------|------|---------|-------------|
 | `tie_break` | `bool` | `False` | Use locked-door count as tie-breaker |
 | `key_boost` | `bool` | `False` | Slight priority boost for key pickups |
-| `enable_ara` | `bool` | `False` | Enable ARA* (Anytime Repairing A*) |
-| `ara_weight` | `float` | `1.0` | Heuristic weight for ARA* |
+| `enable_weighted_astar` | `bool` | `False` | Enable fixed-weight weighted A* |
+| `heuristic_weight` | `float` | `1.0` | Heuristic inflation for weighted A* |
+| `enable_ara` / `ara_weight` | legacy aliases | - | Accepted for compatibility; not an ARA* implementation |
 | `allow_diagonals` | `bool` | `False` | Enable 8-directional movement |
 
 **Example**:
@@ -214,27 +215,27 @@ All tile types are defined in `src/core/definitions.py`:
 
 | ID | Name | Description | Walkable? |
 |----|------|-------------|-----------|
-| 0 | `VOID` | Empty space outside map | ❌ Blocking |
-| 1 | `FLOOR` | Walkable floor tile | ✅ Walkable |
-| 2 | `WALL` | Solid wall | ❌ Blocking |
-| 3 | `BLOCK` | Pushable block | 🔸 Conditional (push) |
-| 10 | `DOOR_OPEN` | Open passage | ✅ Walkable |
-| 11 | `DOOR_LOCKED` | Key-locked door | 🔑 Requires key |
-| 12 | `DOOR_BOMB` | Bombable wall | 💣 Requires bomb |
-| 13 | `DOOR_PUZZLE` | Puzzle/switch door | ✅ Auto-passable |
-| 14 | `DOOR_BOSS` | Boss key door | 🔑 Requires boss key |
-| 15 | `DOOR_SOFT` | One-way door | ✅ Walkable |
-| 20 | `ENEMY` | Monster | ✅ Walkable (with cost) |
-| 21 | `START` | Starting position | ✅ Walkable |
-| 22 | `TRIFORCE` | Goal/win condition | ✅ Walkable |
-| 23 | `BOSS` | Boss enemy | ✅ Walkable |
-| 30 | `KEY_SMALL` | Consumable key | ✅ Pickup |
-| 31 | `KEY_BOSS` | Permanent boss key | ✅ Pickup |
-| 32 | `KEY_ITEM` | Key item (ladder/raft/bomb) | ✅ Pickup |
-| 33 | `ITEM_MINOR` | Minor item (grants bombs) | ✅ Pickup |
-| 40 | `ELEMENT` | Hazard (water/lava) | 🌊 Requires ladder |
-| 41 | `ELEMENT_FLOOR` | Element with floor | ✅ Walkable |
-| 42 | `STAIR` | Stair/warp point | ✅ Transition |
+| 0 | `VOID` | Empty space outside map | Blocking |
+| 1 | `FLOOR` | Walkable floor tile | Walkable |
+| 2 | `WALL` | Solid wall | Blocking |
+| 3 | `BLOCK` | Pushable block | Conditional push |
+| 10 | `DOOR_OPEN` | Open passage | Walkable |
+| 11 | `DOOR_LOCKED` | Key-locked door | Requires key |
+| 12 | `DOOR_BOMB` | Bombable wall | Requires bomb |
+| 13 | `DOOR_PUZZLE` | Puzzle/switch door | Auto-passable |
+| 14 | `DOOR_BOSS` | Boss key door | Requires boss key |
+| 15 | `DOOR_SOFT` | One-way door | Walkable |
+| 20 | `ENEMY` | Monster | Walkable with cost |
+| 21 | `START` | Starting position | Walkable |
+| 22 | `TRIFORCE` | Goal/win condition | Walkable |
+| 23 | `BOSS` | Boss enemy | Walkable |
+| 30 | `KEY_SMALL` | Consumable key | Pickup |
+| 31 | `KEY_BOSS` | Permanent boss key | Pickup |
+| 32 | `KEY_ITEM` | Key item (ladder/raft/bomb) | Pickup |
+| 33 | `ITEM_MINOR` | Minor item (grants bombs) | Pickup |
+| 40 | `ELEMENT` | Hazard (water/lava) | Requires ladder |
+| 41 | `ELEMENT_FLOOR` | Element with floor | Walkable |
+| 42 | `STAIR` | Stair/warp point | Transition |
 
 ### Tile Categories
 
@@ -266,7 +267,7 @@ TRANSITION_IDS = {STAIR, DOOR_OPEN, DOOR_SOFT}  # Allow teleportation
 | `DOOR_BOMB` | 3.0 | Bombing time |
 | `DOOR_PUZZLE` | 2.5 | Puzzle solving |
 | `PICKUP` | 1.5 | Collection delay |
-| `BLOCKING` | ∞ | Impassable |
+| `BLOCKING` | infinity | Impassable |
 
 ---
 
@@ -455,11 +456,12 @@ results = validator.validate_batch_multi_persona(
 
 **Costs**:
 - Cardinal (N/S/E/W): 1.0
-- Diagonal: √2 ≈ 1.414
+- Diagonal: 1.0 under the Chebyshev grid model
 
 **Corner-Cutting Prevention**: Blocked if either adjacent tile is wall/door.
 
-**Performance**: 30× speedup on large maps (but changes animation behavior).
+**Performance**: Can shorten routes on open maps, but changes animation behavior
+and must be reported as a separate movement-model ablation.
 
 ### 3. Block Pushing (Zelda Mechanic)
 
@@ -492,15 +494,18 @@ is_safe, traps = validator.check_soft_locks(grid, sample_count=10)
 3. Test if GOAL is reachable from each position
 4. Report positions that cannot reach GOAL
 
-### 6. ARA* (Anytime Repairing A*)
+### 6. Weighted A*
 
-**Enable**: `priority_options={'enable_ara': True, 'ara_weight': 2.0}`
+**Enable**: `priority_options={'enable_weighted_astar': True, 'heuristic_weight': 2.0}`
 
-**What**: Weighted A* for faster suboptimal solutions.
+**What**: A single fixed-inflation weighted-A* search.
 
-**Formula**: `f = g + w × h` where `w > 1` inflates heuristic.
+**Formula**: `f = g + w * h` where `w > 1` inflates the heuristic.
 
 **Use Case**: Quick validation when optimality is not required.
+
+This implementation is not Anytime Repairing A*: it does not progressively
+decrease the inflation bound or reuse OPEN/INCONS across repair iterations.
 
 ---
 
@@ -546,8 +551,8 @@ solver = StateSpaceAStar(
         'tie_break': True,
         'key_boost': True,
         'allow_diagonals': True,
-        'enable_ara': True,
-        'ara_weight': 1.5
+        'enable_weighted_astar': True,
+        'heuristic_weight': 1.5
     }
 )
 ```
@@ -678,20 +683,21 @@ class GraphValidationResult:
 
 ## Performance Guidelines
 
-| Dungeon Size | Recommended Timeout | Expected States | Notes |
-|--------------|---------------------|-----------------|-------|
-| Small (1-4 rooms) | 10,000 | < 1,000 | Fast |
-| Medium (5-9 rooms) | 50,000 | 2,000-10,000 | Standard |
-| Large (10+ rooms) | 200,000 | 5,000-50,000 | Enable diagonals |
-| Complex (many keys) | 500,000 | 20,000-100,000 | Use ARA* |
+Search budgets must come from measured state-expansion distributions for the
+target map family. Room count alone does not predict cost because keys, blocks,
+staged puzzles, directed transitions, and consumable resources enlarge the
+state space.
 
-**Optimization Tips**:
-1. Enable `allow_diagonals` for large maps (30× speedup)
-2. Use `heuristic_mode="speedrunner"` when optimality isn't needed
-3. Enable `enable_ara` with `ara_weight=2.0` for fast suboptimal solutions
-4. Pre-validate with `SanityChecker` to catch obvious failures
+1. Keep `allow_diagonals=False` for canonical Zelda rules. Enabling diagonals
+   changes the action model and is valid only for a separately labeled ablation.
+2. Use full-state A* for hard solvability and Dijkstra as the exact comparator.
+3. The legacy `enable_ara`/`ara_weight` options implement one fixed-weight
+   weighted-A* search. They do not implement Anytime Repairing A* and must not
+   be reported as ARA*.
+4. Pre-validation can reject malformed inputs, but it cannot replace the
+   resource-aware hard oracle.
 
 ---
 
 *Generated from `src/simulation/validator.py` analysis*  
-*Last updated: February 2026*
+*Last updated: July 2026*

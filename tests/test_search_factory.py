@@ -43,6 +43,22 @@ def test_search_factory_exposes_canonical_validation_registry():
     assert specs[4].canonical_use == "incremental_replanning"
 
 
+def test_weighted_astar_uses_canonical_config_keys_with_legacy_alias_support():
+    canonical = GameStateSearchConfig(
+        enable_weighted_astar=True,
+        heuristic_weight=1.75,
+    ).to_priority_options()
+    legacy = GameStateSearchConfig(
+        enable_ara=True,
+        ara_weight=1.5,
+    ).to_priority_options()
+
+    assert canonical["enable_weighted_astar"] is True
+    assert canonical["heuristic_weight"] == 1.75
+    assert legacy["enable_weighted_astar"] is True
+    assert legacy["heuristic_weight"] == 1.5
+
+
 def test_search_factory_runs_advanced_algorithms_on_simple_grid():
     env = ZeldaLogicEnv(_simple_grid(), render_mode=False)
     config = GameStateSearchConfig(timeout=20000, allow_diagonals=False, max_depth=128, use_iddfs=True)

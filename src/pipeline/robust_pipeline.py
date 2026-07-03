@@ -1,8 +1,6 @@
 ﻿"""
 Robust Pipeline with Retry Logic
-Prevents cascade failures and provides graceful degradation during thesis defense demos.
-
-This addresses the critical concern: "What if your diffusion model fails during the live demo?"
+Provides explicit retry, timeout, validation, and failure reporting for pipeline blocks.
 """
 
 import time
@@ -138,31 +136,22 @@ class PipelineBlock:
                 execution_time = time.time() - start_time
                 error_msg = (
                     f"TimeoutError: {self.name} exceeded timeout_per_block="
-                    f"{self.config.timeout_per_block}s"
+                    f"{self.config.timeout_per_block}s. The thread backend cannot "
+                    "safely cancel running Python work, so this attempt will not be retried."
                 )
                 attempt_errors.append(error_msg)
 
                 if self.config.enable_logging:
                     logger.warning(f"[{self.name}] [FAIL] Attempt {attempt} failed: {error_msg}")
 
-                if attempt < self.config.max_retries:
-                    if self.config.enable_logging:
-                        logger.info(f"[{self.name}] Retrying in {backoff:.1f}s...")
-
-                    time.sleep(backoff)
-                    backoff = min(backoff * self.config.backoff_multiplier, self.config.max_backoff)
-                else:
-                    if self.config.enable_logging:
-                        logger.error(f"[{self.name}] Failed after {self.config.max_retries} attempts")
-
-                    return BlockResult(
-                        status=BlockStatus.FAILED,
-                        error=error_msg,
-                        execution_time=execution_time,
-                        attempts=attempt,
-                        attempt_errors=list(attempt_errors),
-                    )
-            except (AttributeError, RuntimeError, ValueError, TypeError) as e:
+                return BlockResult(
+                    status=BlockStatus.FAILED,
+                    error=error_msg,
+                    execution_time=execution_time,
+                    attempts=attempt,
+                    attempt_errors=list(attempt_errors),
+                )
+            except Exception as e:
                 execution_time = time.time() - start_time
                 error_msg = f"{type(e).__name__}: {str(e)}"
                 attempt_errors.append(error_msg)
@@ -476,9 +465,8 @@ def validate_layout(layout: Any) -> bool:
     if grid.shape[0] < 16 or grid.shape[1] < 16:
         return False
     
-    # Check for reasonable floor coverage (20-70%).
-    # Canonical floor id is SEMANTIC_PALETTE['FLOOR'] (typically 1), but we
-    # also accept legacy grids that use 0 for floor.
+    # Check for reasonable floor coverage (20-70%). Legacy zero-floor grids
+    # must declare their encoding; canonical tile 0 is VOID, not FLOOR.
     floor_id = 1
     try:
         from src.core.definitions import SEMANTIC_PALETTE
@@ -486,7 +474,7 @@ def validate_layout(layout: Any) -> bool:
     except Exception:
         floor_id = 1
     floor_count = int(np.sum(grid == floor_id))
-    if floor_id != 0:
+    if bool(layout.get("legacy_zero_is_floor", False)) and floor_id != 0:
         floor_count += int(np.sum(grid == 0))
     floor_ratio = floor_count / grid.size
     if not (0.2 <= floor_ratio <= 0.7):

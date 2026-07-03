@@ -83,6 +83,7 @@ class SoftBellmanFord(nn.Module):
     Args:
         num_iterations: Number of propagation iterations (higher = longer paths)
         connectivity: 4 for cardinal directions, 8 for including diagonals
+        diagonal_cost: Step cost for diagonal moves when connectivity=8.
         temperature: Softmax temperature for soft-max pooling (lower = sharper)
         wall_penalty: Added traversal cost for non-walkable cells
     """
@@ -91,12 +92,14 @@ class SoftBellmanFord(nn.Module):
         self,
         num_iterations: int = 20,
         connectivity: int = 4,
+        diagonal_cost: float = 1.0,
         temperature: float = 1.0,
         wall_penalty: float = 20.0,
     ):
         super().__init__()
         self.num_iterations = int(max(1, num_iterations))
         self.connectivity = int(connectivity)
+        self.diagonal_cost = float(max(1e-6, diagonal_cost))
         self.temperature = float(max(1e-4, temperature))
         self.wall_penalty = float(max(1.0, wall_penalty))
         
@@ -111,9 +114,9 @@ class SoftBellmanFord(nn.Module):
         else:
             # 8-connectivity (including diagonals)
             kernel = torch.tensor([
-                [0.707, 1.0, 0.707],
+                [1.0, 1.0, 1.0],
                 [1.0,   0.0, 1.0],
-                [0.707, 1.0, 0.707]
+                [1.0, 1.0, 1.0]
             ])
         
         # Register as buffer (not a parameter, but moves with device)
@@ -150,7 +153,7 @@ class SoftBellmanFord(nn.Module):
         right = F.pad(distances[:, :, :, 1:], (0, 1, 0, 0), value=inf)
         neighbors = [up, down, left, right]
         if self.connectivity == 8:
-            diagonal_extra = math.sqrt(2.0) - 1.0
+            diagonal_extra = self.diagonal_cost - 1.0
             neighbors.extend(
                 [
                     F.pad(distances[:, :, :-1, :-1], (1, 0, 1, 0), value=inf) + diagonal_extra,
@@ -248,6 +251,7 @@ class LegacyLogicNet(nn.Module):
     Args:
         num_iterations: Soft-Bellman-Ford iterations
         connectivity: 4 or 8 directions
+        diagonal_cost: Step cost for diagonal moves when connectivity=8
         learnable_threshold: Whether to learn walkability threshold
         
     Example:
@@ -263,6 +267,7 @@ class LegacyLogicNet(nn.Module):
         self,
         num_iterations: int = 20,
         connectivity: int = 4,
+        diagonal_cost: float = 1.0,
         learnable_threshold: bool = False,
         num_tile_types: int = 44,  # Max semantic ID + 1
     ):
@@ -273,6 +278,7 @@ class LegacyLogicNet(nn.Module):
         self.bellman_ford = SoftBellmanFord(
             num_iterations=num_iterations,
             connectivity=connectivity,
+            diagonal_cost=diagonal_cost,
         )
         
         # Optional learnable walkability mapping

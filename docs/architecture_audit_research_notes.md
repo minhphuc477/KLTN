@@ -109,6 +109,46 @@ better than the referenced methods.
 
 ### Pipeline and data
 
+- The 2026-07-03 integration audit removed several silent method changes:
+  `AdvancedNeuralSymbolicPipeline` now defaults to strict checkpoint loading,
+  delegates graph tensors to the canonical conditioning schema, and makes
+  bordered-room and WFC-failure fallbacks opt-in. Saved stats include fallback
+  counts rather than reporting fallback output as neural output.
+- Weighted Bayesian WFC priors are no longer estimated from Gaussian random
+  VQ-VAE decodes. The advanced pipeline requires explicit training-only
+  semantic grids, records the resolved source, grid count, and SHA-256 hash,
+  and leaves weighted WFC disabled when no empirical prior source is supplied.
+- Fast-sampler speedup is no longer computed from a fabricated 45-second
+  per-room baseline. It is `null` unless a paired baseline duration is supplied
+  for the same run protocol.
+- The legacy `enable_ara` path was verified against the ARA* algorithm
+  definition. It performs fixed-weight weighted A*, not Anytime Repairing A*.
+  Canonical config keys and user-facing documentation now use
+  `enable_weighted_astar`/`heuristic_weight`; legacy keys remain accepted only
+  for compatibility.
+- `PipelineBlock` catches ordinary contract exceptions, honors
+  `retryable=False`, and does not launch concurrent retries after a thread
+  timeout that Python cannot safely cancel.
+- The advanced pipeline no longer emits a private six-feature graph schema; it
+  uses the condition encoder's actual node/edge dimensions, edge semantics,
+  positional encodings, masks, and stable node mapping.
+- The key-economy diagnostic now preserves explicit cyclic START nodes, excludes
+  keys trapped behind the lock being evaluated, ignores empty `key_id` values,
+  and computes route membership using reachability intersections instead of
+  exponential all-simple-path enumeration.
+- Canonical layout validation no longer counts tile `0` (VOID) as FLOOR.
+  Legacy zero-floor grids must declare `legacy_zero_is_floor=True`.
+- Hung GUI solver recovery deletes tracked IPC artifacts after the process has
+  stopped and before recovery clears their paths.
+- A stale regression test that treated unprotected hazard edges as freely
+  traversable was corrected. The graph and tile validators consistently require
+  the permanent traversal/protection item.
+- Broad autonomous pass on 2026-07-02 rechecked the recent high-risk claims
+  against code rather than Graphify alone. The damped tension-spike regression,
+  exact-match bidirectional inventory regression, ModelContextContractError
+  swallowing regression, PhaseAligner wraparound, categorical-token
+  normalization, and node-cap bridge-to-key deletion are not present in the
+  current implementation.
 - Pure MaskGIT no longer loads unused VQ-VAE/diffusion models.
 - Categorical codebook sampling is explicitly an unconditional baseline and no
   longer loads or computes an unused condition encoder, including batched
@@ -177,6 +217,26 @@ better than the referenced methods.
 - Advanced-pipeline global water state now reaches the existing state-aware
   room transformation instead of remaining unused graph metadata. This is a
   deterministic state transformation, not learned state conditioning.
+- Generation-time room probability and entropy metrics now use fp32 softmax /
+  log-softmax before detaching for NumPy conversion, matching the AMP-safe
+  pattern used inside the model layers.
+- WFC pseudo-label confidence extraction now applies the same fp32 softmax
+  pattern, preventing mixed-precision overflow from corrupting repair targets.
+- MaskGIT iterative filling ranks stochastic token commits with
+  `log(confidence) + Gumbel` rather than adding Gumbel noise directly to raw
+  `[0, 1]` probabilities. This restores the intended Gumbel-Max scale.
+- Deterministic graph-context contract failures are no longer subclasses of
+  `ValueError`. `ModelContextContractError` and strict conditioning schema
+  errors are non-retryable, so robust generation loops cannot quietly convert
+  schema overflow into endless zero-fitness retries.
+- Graph conditioning now has a `condition_strict_schema` ablation flag wired
+  through shared config, inference runtime, checkpoint fallback construction,
+  diffusion training, and masked-room training. Compatibility pad/truncate
+  remains the default; strict mode fails closed for schema-drift audits.
+- The learned A* heuristic no longer leaks or duplicates key count in the
+  collected-item feature. Its locked-door feature uses dynamic `opened_doors`
+  state against actual normal locked-door coordinates instead of a static grid
+  count throughout the solve.
 
 ### Solvers and metrics
 
@@ -197,6 +257,10 @@ better than the referenced methods.
 - Descriptor-driven grammar repairs reject candidates that disconnect the
   mission. A failed multi-lock transaction rolls back the switches it created
   instead of leaving unowned state nodes behind.
+- `InsertLockKeyRule` rolls back the whole transaction if it cannot place both
+  the key spur and a causally reachable lock. The fallback search now starts
+  from the trunk source where the key spur attaches, not from the key spur
+  itself, which has no forward continuation.
 - Final topology connectivity handling prunes disconnected optional decoration
   and unreferenced surplus providers, but rejects providers referenced by an
   active gate and all other disconnected progression anchors. It no longer
@@ -513,6 +577,57 @@ Primary references used for this triage:
 - Earle et al., PCGRL+: https://arxiv.org/abs/2408.12525
 - Khalifa et al., PCG Benchmark:
   https://github.com/amidos2006/pcg_benchmark
+- Cooper, Sturgeon constraint-based level generation:
+  https://doi.org/10.1609/aiide.v18i1.21944
+- Summerville, expressive-range evaluation:
+  https://doi.org/10.1609/aiide.v14i1.13012
+- PyTorch scaled-dot-product attention mask contract:
+  https://docs.pytorch.org/docs/stable/generated/torch.nn.functional.scaled_dot_product_attention.html
+- Likhachev, Gordon, and Thrun, ARA*:
+  https://papers.neurips.cc/paper/2382-ara-anytime-a-with-provable-bounds-on-sub-optimality
+
+## Independent Production-Path Audit (2026-07-03)
+
+This pass traced production call paths rather than accepting the accumulated
+audit ledger as ground truth. The following reported issues were already fixed
+and were excluded as false alarms: categorical normalization in masked-room
+training, LCM zero-time anchoring, Gumbel confidence ranking, exact scheduler
+duration after dataloader construction, and cumulative LogicNet key counting.
+
+Six remaining correctness failures were confirmed and fixed:
+
+- Diffusion training and validation no longer replace failed graph
+  conditioning with dummy conditioning. A graph-schema failure now aborts the
+  run instead of producing an unconditional checkpoint or invalid validation
+  metrics under a graph-conditioned label.
+- Mixed `room_topology_map` shapes now fail the batch contract. Topology is no
+  longer silently omitted for one malformed batch.
+- MaskGIT training now derives fixed semantic entity tokens from topology
+  roles, matching runtime generation. This matters because the real VGLC room
+  corpus often stores graph keys only in DOT labels: a Dungeon 1 Quest 1 probe
+  found six key-role rooms, with five requiring floor-to-key anchor
+  materialization.
+- Structural cycle rank, branching choices, and dead ends use a simple
+  undirected physical projection. Reciprocal directed arcs no longer turn a
+  corridor tree into fake cycles or duplicate choices.
+- Checkpoint sidecars now include SHA-256. Pipeline loading validates size and
+  hash before tensor deserialization, and all model loaders reject missing
+  learned parameters even in compatibility mode.
+- The Round-5 experiment executor now rejects unchanged pre-existing outputs,
+  header-only CSVs, empty JSON, and missing required metrics. Passed runs record
+  output hashes, byte sizes, and record counts.
+
+Research boundary:
+
+- MaskGIT supports iterative masked-token prediction and confidence-based
+  scheduled decoding; the repository's fixed topology anchors are a
+  task-specific inpainting constraint and must be described as such, not as an
+  original MaskGIT mechanism.
+- MAP-Elites behavior descriptors define the archive cells. Physical loop and
+  branch descriptors therefore must not depend on whether one corridor was
+  serialized as one edge or two reciprocal arcs.
+- These are implementation-contract fixes. They do not establish model quality
+  until matched checkpoints and planned experiments are executed.
 
 ## Verification Policy
 
@@ -537,17 +652,69 @@ Test policy:
 - generated demo artifacts and long-running experiment subprocesses are not
   unit tests and must not block the default correctness suite.
 
-Latest local verification (2026-07-02):
+Latest local verification (2026-07-03):
 
-- The complete non-GUI suite is rerun after architecture changes; the exact
-  result belongs in the final session report rather than being hard-coded in
-  this long-lived document.
-- Focused evolutionary, configuration, pipeline, model, evaluation, and
-  publication-protocol checks pass on the current working tree.
-- A 50-seed spatial-profile probe emitted only compiler-supported edge and
-  protection semantics.
-- Ruff `F821`, `F811`, and `F841`: passed before this pass; rerun it for a
-  publication lock.
-- `python -m compileall -q src scripts tests experiments`: passed.
-- `python -m vulture src --min-confidence 90`: no findings.
-- `git diff --check`: passed.
+- This independent pass ran 223 focused behavior tests across checkpoint
+  retention, protocol reporting, MaskGIT, structural metrics, graph-conditioned
+  diffusion, LogicNet optimization, block integration, and pipeline reliability;
+  all passed.
+- A real-data probe loaded Dungeon 1 Quest 1 through the production
+  `ZeldaRoomDataset` and verified topology-derived key anchors.
+- Direct production probes rejected both a tampered checkpoint and a checkpoint
+  missing a learned parameter.
+- Ruff passed on every Python file changed in this pass with `E402` ignored for
+  `train_diffusion.py`, whose pre-existing path-bootstrap import layout is
+  intentional.
+- Compile checks passed on every Python file changed in this pass.
+- The complete repository suite, target-GPU finite-gradient probes, and final
+  checkpoint-backed end-to-end run were not executed in this pass and remain
+  publication-lock requirements.
+
+### Search And Key-Economy Audit Addendum (2026-07-03)
+
+Confirmed and fixed:
+
+- `KeyEconomyValidator` now normalizes lock semantics from both the legacy
+  `lock_type` field and the newer `edge_type`/`type`/`label` fields. A graph
+  edge marked only as `edge_type="key_locked"` is no longer treated as open by
+  greedy/adversarial traversal or key-surplus analysis.
+- `KeyEconomyValidator` now enforces `item_gate`/`item_locked` resources
+  instead of treating them as passable unknown lock types. It also recognizes
+  `item_type` and `drops_resource` as providers, so grammar item gates and
+  resource farms use the same schema in validation.
+- Specific boss-door key identifiers are honored via `key_required`/`key_id`;
+  persistent boss keys remain reusable, but a non-matching or missing provider
+  no longer silently passes.
+- `LOCK`, `BOSS_DOOR`, and other consumer nodes no longer become key providers
+  merely because their metadata contains `key_id`. This closes a false-positive
+  route where the required-key annotation could be collected after traversal.
+- Masked-room checkpoint resume now refuses LogicNet states that omit learned
+  parameters, preventing mixed trained/random LogicNet supervision after
+  partial checkpoints.
+- `BidirectionalAStar` now treats `DOOR_SOFT` and `PUZZLE` tiles as outside
+  its reversible-grid problem class. Those maps are delegated to canonical
+  full-state A*, matching the documented boundary that bidirectional reverse
+  search is only a diagnostic fast path for reversible position-only grids.
+
+Checked and retained:
+
+- D* Lite is already goal-rooted and disabled for irreversible Zelda state
+  mechanics. It remains a reversible-grid replanning diagnostic, not the
+  publication-facing solvability oracle.
+- Tension-curve event matching already detects spikes on the raw, unsmoothed
+  curves before normalized-progress interpolation.
+- ML heuristic inference no longer constructs a trainer per query, no longer
+  leaks the target label into features, and scales calibration in absolute cost
+  units.
+
+Focused verification:
+
+- `python -m pytest` passed the key-economy own-lock regression, the new
+  `edge_type="key_locked"` regression, the bidirectional stateful fallback
+  regression, and the new one-way soft-door fallback regression.
+- A follow-up focused run passed the item-gate softlock, specific boss-key,
+  consumer-node key metadata, own-lock, edge-type locked, and persistent
+  boss-key key-economy regressions.
+- Ruff passed on the touched search/key-economy files and their focused tests.
+- `python -m graphify update .` completed after one timeout retry; the final
+  run reported no code-graph topology changes.

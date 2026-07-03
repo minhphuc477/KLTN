@@ -72,9 +72,9 @@ def can_traverse_edge_type(
     """Check whether current state can traverse a graph edge type."""
     normalized = str(edge_type or "").strip().lower()
 
-    if normalized in ("open", "", "path", "stair", "hazard"):
+    if normalized in ("open", "", "path", "stair"):
         return True
-    if normalized == "hazard_protected":
+    if normalized in ("hazard", "hazard_protected"):
         return state.has_item
     if normalized in ("locked", "key_locked"):
         return state.keys > 0

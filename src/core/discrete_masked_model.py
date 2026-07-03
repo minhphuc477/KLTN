@@ -22,13 +22,14 @@ from src.core.definitions import (
     ROOM_TOPOLOGY_CHANNEL_COUNT,
     ROOM_TOPOLOGY_CHANNELS,
     ROOM_WIDTH,
+    SEMANTIC_PALETTE,
     TileID,
 )
 
 logger = logging.getLogger(__name__)
 
 
-class ModelContextContractError(ValueError):
+class ModelContextContractError(Exception):
     """Deterministic graph-context contract failure that retries cannot repair."""
 
     retryable = False
@@ -681,7 +682,7 @@ class DiscreteMaskedRoomModel(nn.Module):
             )
             ranking_scores = confidence
             if bool(stochastic):
-                ranking_scores = ranking_scores + (
+                ranking_scores = torch.log(ranking_scores.clamp_min(1e-9)) + (
                     current_temperature
                     * anneal
                     * self._sample_gumbel(
@@ -791,11 +792,14 @@ class DiscreteMaskedRoomModel(nn.Module):
         num_classes: int = 44,
         semantic_anchor_threshold: float = 0.5,
     ) -> Tuple[Tensor, Tensor]:
-        """
-        Extract hard-known tokens from a topology map.
+        """Build the same hard semantic anchors used by runtime generation.
 
-        For training we keep doors and explicit start/goal hints fixed so the
-        model learns to paint the rest of the room around those facts.
+        VGLC room grids do not necessarily materialize mission-graph entities
+        such as keys. Copying the observed tile at a ``role_key`` anchor can
+        therefore freeze FLOOR during training while runtime freezes
+        KEY_SMALL. Fixed token identities are derived from topology channels;
+        observed targets are retained only for door cells represented in the
+        room corpus.
         """
         tokens = target_tokens.long()
         if tokens.dim() == 2:
@@ -818,29 +822,50 @@ class DiscreteMaskedRoomModel(nn.Module):
         if int(topo.shape[0]) != B:
             raise ValueError(f"room_topology_map batch size {int(topo.shape[0])} does not match tokens batch {B}")
 
-        semantic_anchor_channels = (
-            ROOM_TOPOLOGY_CHANNELS["start"],
-            ROOM_TOPOLOGY_CHANNELS["goal"],
-            ROOM_TOPOLOGY_CHANNELS["door_n"],
-            ROOM_TOPOLOGY_CHANNELS["door_s"],
-            ROOM_TOPOLOGY_CHANNELS["door_e"],
-            ROOM_TOPOLOGY_CHANNELS["door_w"],
-            ROOM_TOPOLOGY_CHANNELS["role_start"],
-            ROOM_TOPOLOGY_CHANNELS["role_goal"],
-            ROOM_TOPOLOGY_CHANNELS["role_enemy"],
-            ROOM_TOPOLOGY_CHANNELS["role_key"],
-            ROOM_TOPOLOGY_CHANNELS["role_item"],
-            ROOM_TOPOLOGY_CHANNELS["role_boss"],
-            ROOM_TOPOLOGY_CHANNELS["role_puzzle"],
-        )
-        keep = torch.zeros(B, H, W, device=tokens.device, dtype=torch.bool)
         threshold = float(semantic_anchor_threshold)
-        for channel in semantic_anchor_channels:
-            if int(channel) >= int(topo.shape[1]):
-                continue
-            keep |= topo[:, int(channel)] > threshold
-        fixed_mask |= keep
-        fixed_tokens[fixed_mask] = tokens[fixed_mask].clamp(0, num_classes - 1)
+
+        def channel_mask(name: str) -> Tensor:
+            channel = int(ROOM_TOPOLOGY_CHANNELS[name])
+            if channel >= int(topo.shape[1]):
+                return torch.zeros(B, H, W, device=tokens.device, dtype=torch.bool)
+            return topo[:, channel] > threshold
+
+        # Every room has local traversal start/goal anchors. Runtime fixes
+        # these as floor unless a semantic START/GOAL role overrides them.
+        local_anchors = channel_mask("start") | channel_mask("goal")
+        fixed_mask |= local_anchors
+        fixed_tokens[local_anchors] = int(SEMANTIC_PALETTE["FLOOR"])
+
+        role_tokens = (
+            ("role_start", "START", ("START",)),
+            ("role_goal", "TRIFORCE", ("TRIFORCE",)),
+            ("role_key", "KEY_SMALL", ("KEY_SMALL", "KEY_BOSS")),
+            ("role_item", "KEY_ITEM", ("KEY_ITEM", "ITEM_MINOR", "STAIR")),
+            ("role_boss", "BOSS", ("BOSS",)),
+            ("role_puzzle", "PUZZLE", ("PUZZLE",)),
+        )
+        for channel_name, default_tile_name, compatible_tile_names in role_tokens:
+            mask = channel_mask(channel_name)
+            fixed_mask |= mask
+            default_tile = int(SEMANTIC_PALETTE[default_tile_name])
+            compatible_ids = torch.tensor(
+                [int(SEMANTIC_PALETTE[name]) for name in compatible_tile_names],
+                device=tokens.device,
+                dtype=tokens.dtype,
+            )
+            observed_is_compatible = (tokens.unsqueeze(-1) == compatible_ids).any(dim=-1)
+            assigned = torch.where(
+                observed_is_compatible,
+                tokens.clamp(0, num_classes - 1),
+                torch.full_like(tokens, default_tile),
+            )
+            fixed_tokens[mask] = assigned[mask]
+
+        door_mask = torch.zeros(B, H, W, device=tokens.device, dtype=torch.bool)
+        for direction in ("n", "s", "e", "w"):
+            door_mask |= channel_mask(f"door_{direction}")
+        fixed_mask |= door_mask
+        fixed_tokens[door_mask] = tokens[door_mask].clamp(0, num_classes - 1)
         return fixed_tokens, fixed_mask
 
     def _extract_context_topology(

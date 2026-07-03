@@ -42,7 +42,7 @@ def _checkbox_labels(advanced_gui: bool) -> list[tuple[str, str]]:
             ("auto_prune_on_precheck", "Auto-Prune Dead-Ends on Precheck"),
             ("priority_tie_break", "Priority: Tie-Break by Locks"),
             ("priority_key_boost", "Priority: Key-Pickup Boost"),
-            ("enable_ara", "Enable ARA* (weighted A*)"),
+            ("enable_ara", "Enable weighted A*"),
             ("allow_replay_teleports", "Allow Loaded Route Teleports"),
             ("persist_dropdown_on_select", "Keep dropdown open after select"),
         ]
@@ -229,7 +229,7 @@ def update_control_panel_positions(
             ara_selected = 0
         ara_dropdown = dropdown_widget_cls(
             (x_offset, y_offset),
-            "ARA* weight",
+            "Weighted A* weight",
             ara_options,
             selected=ara_selected,
             keep_open_on_select=gui.feature_flags.get("persist_dropdown_on_select", False),

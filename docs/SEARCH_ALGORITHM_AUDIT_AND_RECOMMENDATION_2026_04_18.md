@@ -13,9 +13,9 @@ Zelda state model implemented in `src/simulation/validator.py`.
 - Use `Dijkstra` as an exact cost fallback/baseline when heuristic behavior is
   under scrutiny.
 - Use `Bidirectional A*` only for reversible, stateless grid comparisons.
-- Use backward D* Lite only for reversible position-only grids and incremental
-  edge-cost changes. Stateful Zelda maps automatically delegate to full-state
-  A*.
+- Do not use D* Lite as a Zelda validation oracle. Keep backward D* Lite only
+  for reversible position-only grid replanning diagnostics. Stateful Zelda maps
+  require full-state A* instead of a reverse incremental search.
 - Use `P-CBS` as a bounded-agent behavioral probe, not as a hard solvability
   oracle.
 - Use `JPS`, `HPA*`, or `Theta*` only in separate ablations whose assumptions
@@ -36,6 +36,9 @@ The current selector lives in
 - `environment_requires_full_state_oracle(...)` returns true when the map
   includes inventory, pickups, doors, water/item traversal, push blocks,
   enemies, puzzles, graph transitions, or staged puzzle lookup.
+- For those full-state Zelda maps, the recommendation set intentionally
+  excludes `dstar_lite` even when diagnostics are requested, because its useful
+  speed advantage requires reversible predecessor semantics.
 
 This means the code no longer exposes all solvers as equivalent validators.
 
@@ -46,7 +49,8 @@ Primary references checked:
 - Hart, Nilsson, and Raphael, "A Formal Basis for the Heuristic Determination
   of Minimum Cost Paths" (1968): basis for admissible A* path search.
 - Koenig and Likhachev, "D* Lite" (AAAI 2002): incremental heuristic search
-  for repeated similar replanning tasks.
+  for repeated similar robot-navigation replanning tasks where the changing
+  state is essentially position plus edge costs.
 - Harabor and Grastien, "Online Graph Pruning for Pathfinding on Grid Maps"
   (AAAI 2011): Jump Point Search for uniform-cost grid maps.
 - Botea, Mueller, and Schaeffer, "Near Optimal Hierarchical Path-Finding"
@@ -73,8 +77,8 @@ The important mismatch is state representation. H-MOLQD validation states are
 not only `(row, col)`: they include keys, bombs, opened doors, collected items,
 pushed blocks, defeated enemies, puzzle stages, floors, and opened graph edges.
 Two visits to the same tile can have different legal futures. Plain-grid
-symmetry pruning and one-shot backward search are therefore diagnostics unless
-the environment is proven stateless and reversible.
+symmetry pruning and backward incremental search are therefore diagnostics
+unless the environment is proven stateless and reversible.
 
 ## Algorithm Roles
 
@@ -84,7 +88,7 @@ the environment is proven stateless and reversible.
 | Dijkstra | Exact no-heuristic baseline/fallback | Fast default |
 | BFS | Small uniform-cost sanity baseline | Scalable validator |
 | Greedy | Inadmissible heuristic baseline | Correctness oracle |
-| Backward D* Lite | Reversible-grid incremental replanning | Inventory/puzzle oracle |
+| Backward D* Lite | Reversible-grid incremental replanning diagnostic | Inventory/puzzle oracle |
 | DFS/IDDFS | Bounded exhaustive probe | Optimal default |
 | Bidirectional A* | Reversible stateless-grid comparison | Valid on inventory maps |
 | P-CBS | Bounded-agent behavioral/readability probe | Mechanical oracle |
@@ -108,13 +112,14 @@ Current fixes applied:
 - Reversible-grid bidirectional search initializes backward inventory from the
   start state, avoiding false collision rejection on stateless maps.
 - The historical `dstar_lite` key now runs a goal-rooted backward D* Lite core
-  with `rhs(goal)=0` on reversible position graphs. Inventory, consumables,
-  blocks, directed graph transitions, and staged puzzles explicitly select
-  full-state A* and report `fallback_used=True`.
-- Diagonal movement is opt-in and uses the canonical `sqrt(2)` cost
-  consistently with octile distance across validator, D* Lite, and
-  Bidirectional A*. Changing only the cost to `1.0` would require changing all
-  heuristics to Chebyshev distance and would define a different movement model.
+  with `rhs(goal)=0` only on reversible position graphs. Inventory,
+  consumables, blocks, directed graph transitions, and staged puzzles are not
+  assigned to D* Lite by the recommendation layer; explicit manual D* Lite runs
+  still report `fallback_used=True` when they delegate to full-state A*.
+- Diagonal movement is opt-in and uses unit Chebyshev cost consistently across
+  the validator, D* Lite, and Bidirectional A*. Any experiment that wants
+  Euclidean/octile diagonal movement must change both step costs and heuristics
+  as a separate ablation.
 - Unprotected hazard graph edges remain risk-bearing open edges. Hazards with
   `protection_item_id` become `hazard_protected` at the tile-state boundary and
   require the generic permanent traversal item; the abstract graph oracle
@@ -298,6 +303,20 @@ For final tables:
 
 ## Remaining Search Work
 
+- Completed after the key-economy audit: explicit START/GOAL markers remain
+  authoritative even in cyclic graphs; a lock's surplus diagnostic excludes
+  providers reachable only by crossing that lock; and critical-route node
+  discovery uses forward/backward reachability rather than enumerating every
+  simple path.
+- Completed after the orchestration audit: deterministic model-contract errors
+  terminate one block attempt without retry, and a timed-out thread-backed
+  block is not retried concurrently because running Python threads cannot be
+  force-cancelled safely. Hard timeout isolation still requires a process-safe
+  executor and remains separate from model correctness.
+- Completed after the anytime-search naming audit: the fixed-inflation
+  `f=g+w*h` path is labeled weighted A*. It does not claim ARA* because it does
+  not decrease epsilon or reuse OPEN/INCONS across repair iterations. Legacy
+  `enable_ara` route/config keys remain compatibility aliases.
 - Completed after the grammar/compiler contract audit: Block I now has an
   explicit `spatial` rule profile, and runtime, YAML, and full-pipeline
   evaluation defaults use it. Candidate-repair rules are profile-aware, so a

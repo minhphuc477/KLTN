@@ -119,9 +119,10 @@ def recommended_game_state_algorithm_specs(
     - Full-state A* is the only canonical oracle for Zelda mechanics.
     - Dijkstra is an exact cost baseline/fallback, not the primary oracle.
     - Bidirectional A* is useful on reversible stateless grids only.
-    - D* Lite is a replanning diagnostic and should not be reported as a
-      one-shot validation oracle unless the experiment is explicitly about
-      incremental replanning.
+    - D* Lite is a reversible-grid replanning diagnostic. It is deliberately
+      not selected for Zelda maps with inventory, push blocks, graph gates, or
+      staged puzzles because those mechanics require predecessor-state
+      inverses that the tile validator does not define soundly.
     """
     specs = {spec.key: spec for spec in GAME_STATE_ALGORITHM_SPECS}
     selected: List[GameStateAlgorithmSpec] = [specs["astar"]]
@@ -130,7 +131,7 @@ def recommended_game_state_algorithm_specs(
 
     if environment_requires_full_state_oracle(env):
         if include_diagnostics:
-            selected.extend([specs["greedy"], specs["dfs_iddfs"], specs["dstar_lite"]])
+            selected.extend([specs["greedy"], specs["dfs_iddfs"]])
         return selected
 
     selected.append(specs["bidirectional_astar"])

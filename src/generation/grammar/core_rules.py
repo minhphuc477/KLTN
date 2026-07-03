@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import copy
 import random
 from collections import deque
 from enum import Enum
@@ -275,6 +276,7 @@ class InsertLockKeyRule(ProductionRule):
         
         rng = context.get('rng') or random
         graph.sanitize()
+        original_graph = copy.deepcopy(graph)
 
         # Prefer splitting edges on the current critical path (START -> GOAL).
         start = graph.get_start_node()
@@ -340,16 +342,19 @@ class InsertLockKeyRule(ProductionRule):
                         if edge.edge_type == EdgeType.PATH and key_id not in {edge.source, edge.target}:
                             lock_candidates.append((edge_idx, edge))
 
-        # Fallback to forward descendants of the key only. Using an arbitrary
-        # PATH edge here can place a lock before its provider and violate the
-        # rule's causal contract.
+        # Fallback to forward descendants of the trunk source where the key was
+        # attached.  The key itself is a spur with no forward continuation, so
+        # searching descendants of key_id creates an impossible candidate
+        # predicate and leaves a key without a lock.
         if not lock_candidates:
             forward = graph.get_forward_adjacency_map()
-            reachable_after_key = {key_id}
-            queue = deque([key_id])
+            reachable_after_key = {key_edge.source}
+            queue = deque([key_edge.source])
             while queue:
                 current = queue.popleft()
                 for neighbor in forward.get(current, []):
+                    if neighbor == key_id:
+                        continue
                     if neighbor not in reachable_after_key:
                         reachable_after_key.add(neighbor)
                         queue.append(neighbor)
@@ -362,28 +367,30 @@ class InsertLockKeyRule(ProductionRule):
                     and e.target != key_id
                 )
             ]
-        
-        if lock_candidates:
-            lock_edge_idx, lock_edge = rng.choice(lock_candidates)
-            
-            # Create LOCK node
-            lock_id = max(graph.nodes.keys()) + 1
-            lock_node = MissionNode(
-                id=lock_id,
-                node_type=NodeType.LOCK,
-                position=self._interpolate_pos(graph, lock_edge.source, lock_edge.target, 0.7, context),
-                difficulty=context.get('difficulty', 0.5),
-                key_id=key_id,  # Reference to required key
-            )
-            graph.add_node(lock_node)
-            
-            # Insert LOCK with locked edge type
-            graph.edges = [e for i, e in enumerate(graph.edges) if i != lock_edge_idx]
-            graph.add_edge(lock_edge.source, lock_id, EdgeType.PATH)
-            graph.add_edge(lock_id, lock_edge.target, EdgeType.LOCKED, key_required=key_id)
-            
-            # Track key-lock relationship
-            graph._key_to_lock[key_id] = lock_id
+
+        if not lock_candidates:
+            return original_graph
+
+        lock_edge_idx, lock_edge = rng.choice(lock_candidates)
+
+        # Create LOCK node
+        lock_id = max(graph.nodes.keys()) + 1
+        lock_node = MissionNode(
+            id=lock_id,
+            node_type=NodeType.LOCK,
+            position=self._interpolate_pos(graph, lock_edge.source, lock_edge.target, 0.7, context),
+            difficulty=context.get('difficulty', 0.5),
+            key_id=key_id,  # Reference to required key
+        )
+        graph.add_node(lock_node)
+
+        # Insert LOCK with locked edge type
+        graph.edges = [e for i, e in enumerate(graph.edges) if i != lock_edge_idx]
+        graph.add_edge(lock_edge.source, lock_id, EdgeType.PATH)
+        graph.add_edge(lock_id, lock_edge.target, EdgeType.LOCKED, key_required=key_id)
+
+        # Track key-lock relationship
+        graph._key_to_lock[key_id] = lock_id
 
         graph.sanitize()
         return graph

@@ -14,7 +14,6 @@ This module provides:
 
 import os
 import heapq
-import math
 import logging
 import numpy as np
 import networkx as nx
@@ -180,15 +179,16 @@ ACTION_DELTAS = {
     Action.DOWN: (1, 0),
     Action.LEFT: (0, -1),
     Action.RIGHT: (0, 1),
-    Action.UP_LEFT: (-1, -1),     # Cost: sqrt(2) ~= 1.414
-    Action.UP_RIGHT: (-1, 1),     # Cost: sqrt(2) ~= 1.414
-    Action.DOWN_LEFT: (1, -1),    # Cost: sqrt(2) ~= 1.414
-    Action.DOWN_RIGHT: (1, 1),    # Cost: sqrt(2) ~= 1.414
+    Action.UP_LEFT: (-1, -1),
+    Action.UP_RIGHT: (-1, 1),
+    Action.DOWN_LEFT: (1, -1),
+    Action.DOWN_RIGHT: (1, 1),
 }
 
-# Movement costs (Euclidean distance)
+# Movement costs. Diagonals use unit Chebyshev cost so every solver and
+# heuristic agrees when diagonal movement is enabled.
 CARDINAL_COST = 1.0      # UP/DOWN/LEFT/RIGHT
-DIAGONAL_COST = math.sqrt(2.0)
+DIAGONAL_COST = 1.0
 
 
 # ==========================================
@@ -1675,8 +1675,11 @@ class StateSpaceAStar:
             env: ZeldaLogicEnv instance to solve
             timeout: Maximum states to explore (default 10M for complex dungeons)
                     Large Zelda dungeons (96x66) solve in ~7K states with diagonals
-            priority_options: dict with keys 'tie_break', 'key_boost', 'enable_ara', 'ara_weight', 'allow_diagonals'
-                             allow_diagonals defaults to True (CRITICAL for large maps)
+            priority_options: dict with keys 'tie_break', 'key_boost',
+                'enable_weighted_astar', 'heuristic_weight', and
+                'allow_diagonals'. Legacy 'enable_ara'/'ara_weight' aliases are
+                accepted for compatibility; this is fixed-weight weighted A*,
+                not Anytime Repairing A*.
             search_mode: Search strategy - 'astar', 'bfs', 'dijkstra', or 'greedy'
         """
         self.env = env
@@ -1721,7 +1724,12 @@ class StateSpaceAStar:
         self.representation = rep_raw
         self.tie_break = bool(self.priority_options.get('tie_break', False))
         self.key_boost = bool(self.priority_options.get('key_boost', False))
-        self.enable_ara = bool(self.priority_options.get('enable_ara', False))
+        self.enable_ara = bool(
+            self.priority_options.get(
+                'enable_weighted_astar',
+                self.priority_options.get('enable_ara', False),
+            )
+        )
         # Hierarchical front-end can be toggled explicitly, otherwise inferred
         # from representation mode.
         if 'enable_hierarchical' in self.priority_options:
@@ -1732,9 +1740,7 @@ class StateSpaceAStar:
         if self.graph_only and not self.enable_hierarchical:
             # Graph-only representation requires graph/hierarchical front-end.
             self.enable_hierarchical = True
-        # Diagonal movement disabled by default for standard 4-directional gameplay
-        # Can be enabled via priority_options={'allow_diagonals': True} if needed
-        # Note: Enabling diagonals gives 30x speedup but changes animation behavior
+        # Diagonal movement is a rules change, not a generic search optimization.
         self.allow_diagonals = bool(self.priority_options.get('allow_diagonals', False))
         if self.strict_original_mode:
             self.allow_diagonals = False
@@ -1742,7 +1748,12 @@ class StateSpaceAStar:
             self.enable_hierarchical = False
             self.graph_only = False
         try:
-            self.ara_weight = float(self.priority_options.get('ara_weight', 1.0))
+            self.ara_weight = float(
+                self.priority_options.get(
+                    'heuristic_weight',
+                    self.priority_options.get('ara_weight', 1.0),
+                )
+            )
         except (TypeError, ValueError):
             self.ara_weight = 1.0
 
@@ -2370,13 +2381,17 @@ class StateSpaceAStar:
         t = grid[start_pos[0], start_pos[1]]
         coll_set: Set[Tuple[int, int]] = set()
         if t == SEMANTIC_PALETTE['KEY_SMALL']:
-            init_keys += 1; coll_set.add(start_pos)
+            init_keys += 1
+            coll_set.add(start_pos)
         elif t == SEMANTIC_PALETTE['KEY_BOSS']:
-            init_bk = True; coll_set.add(start_pos)
+            init_bk = True
+            coll_set.add(start_pos)
         elif t == SEMANTIC_PALETTE['KEY_ITEM']:
-            init_item = True; coll_set.add(start_pos)
+            init_item = True
+            coll_set.add(start_pos)
         elif t == SEMANTIC_PALETTE['ITEM_MINOR']:
-            init_bombs += 4; coll_set.add(start_pos)
+            init_bombs += 4
+            coll_set.add(start_pos)
         init_collected = frozenset(coll_set)
 
         init_state = (start_pos, init_keys, init_bombs, init_bk, init_item,
@@ -2457,13 +2472,17 @@ class StateSpaceAStar:
                 # Collect items at destination
                 if dst not in collected:
                     if dt == SEMANTIC_PALETTE['KEY_SMALL']:
-                        nk += 1; nc.add(dst)
+                        nk += 1
+                        nc.add(dst)
                     elif dt == SEMANTIC_PALETTE['KEY_BOSS']:
-                        nbk = True; nc.add(dst)
+                        nbk = True
+                        nc.add(dst)
                     elif dt == SEMANTIC_PALETTE['KEY_ITEM']:
-                        ni = True; nc.add(dst)
+                        ni = True
+                        nc.add(dst)
                     elif dt == SEMANTIC_PALETTE['ITEM_MINOR']:
-                        nb += 4; nc.add(dst)
+                        nb += 4
+                        nc.add(dst)
 
                 new_st = (dst, nk, nb, nbk, ni, frozenset(nc), frozenset(no))
                 ng = g + dist
@@ -2526,13 +2545,17 @@ class StateSpaceAStar:
                 dt = grid[dst[0], dst[1]]
                 if dst not in collected:
                     if dt == SEMANTIC_PALETTE['KEY_SMALL']:
-                        nk += 1; nc.add(dst)
+                        nk += 1
+                        nc.add(dst)
                     elif dt == SEMANTIC_PALETTE['KEY_BOSS']:
-                        nbk = True; nc.add(dst)
+                        nbk = True
+                        nc.add(dst)
                     elif dt == SEMANTIC_PALETTE['KEY_ITEM']:
-                        ni = True; nc.add(dst)
+                        ni = True
+                        nc.add(dst)
                     elif dt == SEMANTIC_PALETTE['ITEM_MINOR']:
-                        nb += 4; nc.add(dst)
+                        nb += 4
+                        nc.add(dst)
 
                 new_st = (dst, nk, nb, nbk, ni, frozenset(nc), frozenset(no))
                 ng = g + cost
@@ -2814,16 +2837,21 @@ class StateSpaceAStar:
                             tk, tb, tbk, ti = vk, vb, vbk, vi
                             can = True
                             if vet in ('key_locked', 'locked'):
-                                if tk <= 0: can = False
-                                else: tk -= 1
+                                if tk <= 0:
+                                    can = False
+                                else:
+                                    tk -= 1
                             elif vet == 'bombable':
-                                if tb <= 0: can = False
-                                else: tb -= 1
+                                if tb <= 0:
+                                    can = False
+                                else:
+                                    tb -= 1
                             elif vet == 'boss_locked':
                                 if not tbk:
                                     can = False
                             elif vet == 'item_locked':
-                                if not ti: can = False
+                                if not ti:
+                                    can = False
                             elif vet == 'switch':
                                 if self.strict_original_mode:
                                     current_room = n2r.get(vn)
@@ -3099,7 +3127,8 @@ class StateSpaceAStar:
         counter = 1  # Tie-breaker for heap
         dominated_states_pruned = 0  # Track pruning statistics
         
-        # Movement deltas: Cardinal (cost=1.0) + Diagonal (cost=√2)
+        # Movement deltas: cardinal and diagonal both cost 1.0 under the
+        # Chebyshev grid model used by all search implementations.
         cardinal_deltas = [(-1, 0), (1, 0), (0, -1), (0, 1)]
         diagonal_deltas = [(-1, -1), (-1, 1), (1, -1), (1, 1)]
         
@@ -3210,7 +3239,7 @@ class StateSpaceAStar:
                 neighbors.append((target_pos, target_tile, CARDINAL_COST, False, None))
             
             # PERFORMANCE: Diagonal movement only if enabled (disabled by default for 2x speedup)
-            # Diagonal movement (cost = sqrt(2))
+            # Diagonal movement uses unit Chebyshev cost.
             # CRITICAL: Prevent corner-cutting through walls
             if self.allow_diagonals:
                 for dr, dc in diagonal_deltas:
@@ -3764,9 +3793,9 @@ class StateSpaceAStar:
             )
         )
         normalized = str(edge_type or "open").strip().lower()
-        if normalized in {"open", "path", "stair", "hazard", "soft_locked", "one_way", "switch", "puzzle"}:
+        if normalized in {"open", "path", "stair", "soft_locked", "one_way", "switch", "puzzle"}:
             return True, state.copy()
-        if normalized == "hazard_protected":
+        if normalized in {"hazard", "hazard_protected"}:
             if not state.has_item:
                 return False, state
             return True, state.copy()
@@ -4079,22 +4108,25 @@ class StateSpaceAStar:
             if not neighbor_room or neighbor_room not in self.env.room_positions:
                 continue
             
-            # Check if this is a non-adjacent room connection
+            # Check if this is a non-adjacent room connection. Direct adjacent
+            # open/path edges are handled by normal grid movement; direct
+            # constrained edges still need this graph transition path because
+            # the physical room boundary may not encode the abstract gate.
             dr = abs(current_room[0] - neighbor_room[0])
             dc = abs(current_room[1] - neighbor_room[1])
             manhattan_dist = dr + dc
-            
-            if manhattan_dist <= 1:
-                # Adjacent rooms - handled by normal grid movement
-                continue
-            
-            # This is a non-adjacent graph connection.
             edge_data = self.env.graph.get_edge_data(current_node, neighbor, {}) or {}
             edge_type = self._edge_type_from_data(edge_data)
+            normalized_edge_type = str(edge_type or "open").strip().lower()
+            direct_open_edge = normalized_edge_type in {"", "open", "path"}
+
+            if manhattan_dist <= 1 and direct_open_edge:
+                continue
 
             # Dataset-faithful mode: only explicit stair/warp edges may teleport
-            # across non-adjacent rooms.
-            if self.vglc_strict_mode and edge_type != 'stair':
+            # across non-adjacent rooms. Adjacent constrained graph edges are
+            # still real gates and must be checked.
+            if self.vglc_strict_mode and manhattan_dist > 1 and edge_type != 'stair':
                 continue
             
             # Check if we can traverse this edge
@@ -4399,10 +4431,10 @@ class StateSpaceAStar:
         pos = state.position
         goal = self.env.goal_pos
         if self.allow_diagonals:
-            # Octile distance: admissible when diagonal moves cost sqrt(2)
+            # Chebyshev distance: admissible when diagonal moves cost 1.0.
             dx = abs(pos[0] - goal[0])
             dy = abs(pos[1] - goal[1])
-            manhattan_h = max(dx, dy) + (math.sqrt(2) - 1) * min(dx, dy)
+            manhattan_h = max(dx, dy)
         else:
             manhattan_h = abs(pos[0] - goal[0]) + abs(pos[1] - goal[1])
 

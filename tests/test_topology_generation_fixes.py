@@ -5,7 +5,7 @@ Test Suite for Topology Generation Bug Fixes
 Tests all bug fixes implemented:
 1. dungeon_pipeline.py: Fixed max_rooms parameter passing
 2. EvolutionaryTopologyGenerator: Added max_nodes parameter
-3. D* Lite: Fixed predecessor state computation
+3. D* Lite: Stateful Zelda maps use full-state A* fallback
 4. Bidirectional A*: Fixed collision detection with state sets
 
 This test suite validates that all fixes work correctly and maintain
@@ -183,8 +183,8 @@ class TestTopologyGeneratorMaxNodes:
         logger.info(f"Small genome: {small_rooms} rooms, Large genome: {large_rooms} rooms")
 
 
-class TestDStarLitePredecessorFix:
-    """Test D* Lite bug fix for proper predecessor state computation."""
+class TestDStarLiteFallbackBoundary:
+    """Test that D* Lite delegates stateful Zelda mechanics to full-state A*."""
     
     def create_simple_dungeon(self) -> np.ndarray:
         """Create a simple test dungeon with key and door."""
@@ -208,7 +208,7 @@ class TestDStarLitePredecessorFix:
         return grid
     
     def test_dstar_lite_finds_path(self):
-        """Test that D* Lite can find a path with proper state handling."""
+        """Stateful fixtures should solve through the full-state fallback."""
         grid = self.create_simple_dungeon()
         env = ZeldaLogicEnv(grid)
         solver = DStarLiteSolver(env, heuristic_mode='balanced')
@@ -220,11 +220,12 @@ class TestDStarLitePredecessorFix:
         assert len(path) > 0, "Path should not be empty"
         assert path[0] == start_state.position, "Path should start at start position"
         assert path[-1] == env.goal_pos, "Path should end at goal position"
+        assert solver.used_fallback is True
         
         logger.info(f"D* Lite success: path_len={len(path)}, nodes_explored={nodes}")
     
     def test_dstar_lite_handles_state_transitions(self):
-        """Test that D* Lite properly handles key collection and door opening."""
+        """The fallback path must still respect key-before-door ordering."""
         grid = self.create_simple_dungeon()
         env = ZeldaLogicEnv(grid)
         solver = DStarLiteSolver(env, heuristic_mode='balanced')
@@ -233,6 +234,7 @@ class TestDStarLitePredecessorFix:
         success, path, _nodes = solver.solve(start_state)
         
         assert success, "Should find path requiring key collection"
+        assert solver.used_fallback is True
         
         # Verify path visits key location
         key_pos = (1, 5)

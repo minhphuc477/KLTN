@@ -1,5 +1,4 @@
 import logging
-from types import SimpleNamespace
 import networkx as nx
 import numpy as np
 import pytest
@@ -657,6 +656,32 @@ def test_topology_fixed_mask_keeps_semantic_role_anchors_during_training():
     assert bool(fixed_mask[0, boss_anchor[0], boss_anchor[1]])
     assert int(fixed_tokens[0, key_anchor[0], key_anchor[1]]) == int(SEMANTIC_PALETTE["KEY_BOSS"])
     assert int(fixed_tokens[0, boss_anchor[0], boss_anchor[1]]) == int(SEMANTIC_PALETTE["BOSS"])
+
+
+def test_topology_fixed_mask_materializes_missing_key_role_like_runtime():
+    tokens = torch.full(
+        (1, ROOM_HEIGHT, ROOM_WIDTH),
+        fill_value=int(SEMANTIC_PALETTE["FLOOR"]),
+        dtype=torch.long,
+    )
+    topo = torch.zeros(
+        1,
+        max(ROOM_TOPOLOGY_CHANNELS.values()) + 1,
+        ROOM_HEIGHT,
+        ROOM_WIDTH,
+        dtype=torch.float32,
+    )
+    anchor = (5, 3)
+    topo[0, ROOM_TOPOLOGY_CHANNELS["role_key"], anchor[0], anchor[1]] = 1.0
+
+    fixed_tokens, fixed_mask = DiscreteMaskedRoomModel.build_fixed_mask_from_topology_map(
+        tokens,
+        topo,
+        num_classes=44,
+    )
+
+    assert bool(fixed_mask[0, anchor[0], anchor[1]])
+    assert int(fixed_tokens[0, anchor[0], anchor[1]]) == int(SEMANTIC_PALETTE["KEY_SMALL"])
 
 
 def test_overlay_room_graph_markers_maps_generated_graph_types_to_semantic_tiles():

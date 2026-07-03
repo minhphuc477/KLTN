@@ -19,8 +19,10 @@ class BlockShapeContract:
     spatial_hw: Optional[Tuple[int, int]] = None
 
 
-class BlockContractError(ValueError):
+class BlockContractError(Exception):
     """Raised when a pipeline tensor violates a declared stage contract."""
+
+    retryable = False
 
 
 def validate_tensor_contract(tensor: torch.Tensor, contract: BlockShapeContract) -> None:

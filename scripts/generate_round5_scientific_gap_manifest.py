@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import subprocess
 import sys
@@ -636,6 +637,38 @@ def _collect_metric_names(path: Path) -> set[str]:
     return set()
 
 
+def _artifact_record_count(path: Path) -> int:
+    """Return the number of evidence records, rejecting header-only artifacts."""
+    if path.suffix.lower() == ".csv":
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            reader = csv.reader(handle)
+            next(reader, None)
+            return sum(1 for row in reader if any(str(cell).strip() for cell in row))
+    if path.suffix.lower() == ".json":
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(payload, list):
+            return len(payload)
+        if isinstance(payload, Mapping):
+            return 1 if payload else 0
+        return 0
+    return 1 if path.stat().st_size > 0 else 0
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _artifact_signature(path: Path) -> tuple[int, int, int] | None:
+    if not path.is_file():
+        return None
+    stat = path.stat()
+    return int(stat.st_size), int(stat.st_mtime_ns), int(getattr(stat, "st_ino", 0))
+
+
 def execute_manifest(payload: Dict[str, Any]) -> None:
     for run in payload["runs"]:
         command = list(run["command"])
@@ -662,6 +695,11 @@ def execute_manifest(payload: Dict[str, Any]) -> None:
                 run["status"] = "blocked_invalid_fast_sampler_checkpoint"
                 run["input_error"] = f"{type(exc).__name__}: {exc}"
                 continue
+        output_paths = [_resolve_artifact_path(path) for path in run.get("output_paths", [])]
+        output_signatures_before = {
+            str(path): _artifact_signature(path)
+            for path in output_paths
+        }
         start = time.perf_counter()
         completed = subprocess.run(command, cwd=str(ROOT), check=False)
         run["elapsed_sec"] = float(time.perf_counter() - start)
@@ -669,7 +707,6 @@ def execute_manifest(payload: Dict[str, Any]) -> None:
         if completed.returncode != 0:
             run["status"] = "failed_process"
             continue
-        output_paths = [_resolve_artifact_path(path) for path in run.get("output_paths", [])]
         missing_outputs = [str(path) for path in output_paths if not path.exists()]
         if missing_outputs:
             run["status"] = "failed_missing_outputs"
@@ -677,6 +714,25 @@ def execute_manifest(payload: Dict[str, Any]) -> None:
             continue
         if not output_paths:
             run["status"] = "completed_needs_metric_artifact"
+            continue
+        stale_outputs = [
+            str(path)
+            for path in output_paths
+            if output_signatures_before.get(str(path)) is not None
+            and _artifact_signature(path) == output_signatures_before[str(path)]
+        ]
+        if stale_outputs:
+            run["status"] = "failed_stale_outputs"
+            run["stale_outputs"] = stale_outputs
+            continue
+        empty_outputs = [
+            str(path)
+            for path in output_paths
+            if _artifact_record_count(path) <= 0
+        ]
+        if empty_outputs:
+            run["status"] = "failed_empty_outputs"
+            run["empty_outputs"] = empty_outputs
             continue
         metric_names: set[str] = set()
         for output_path in output_paths:
@@ -686,6 +742,15 @@ def execute_manifest(payload: Dict[str, Any]) -> None:
             run["status"] = "failed_missing_metrics"
             run["missing_metrics"] = missing_metrics
             continue
+        run["output_artifacts"] = [
+            {
+                "path": str(path),
+                "size_bytes": int(path.stat().st_size),
+                "sha256": _sha256_file(path),
+                "record_count": int(_artifact_record_count(path)),
+            }
+            for path in output_paths
+        ]
         run["status"] = "passed"
 
 

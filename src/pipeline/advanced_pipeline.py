@@ -1,7 +1,8 @@
 ﻿"""
-Advanced Neural-Symbolic Pipeline
-==================================
-Unified integration of advanced features for thesis defense and industry validation.
+Experimental Neural-Symbolic Integration Pipeline
+=================================================
+End-to-end integration of graph generation, neural room generation, symbolic
+repair, stitching, validation, and evaluation.
 
 This pipeline combines:
 - Core 6 features: Graph enforcer, robust pipeline, entity spawner, ablation, controllability, diversity
@@ -38,6 +39,7 @@ import logging
 import time
 import json
 import copy
+import hashlib
 from collections import deque
 from datetime import datetime
 
@@ -63,7 +65,6 @@ from src.generation.weighted_bayesian_wfc import (
 from src.pipeline.dungeon_pipeline import NeuralSymbolicDungeonPipeline
 from src.pipeline.room_stitching import StitchedRoomLayout, compute_graph_aware_room_slots
 from src.core.definitions import ROOM_HEIGHT, ROOM_WIDTH, parse_node_label_tokens
-from src.core.vqvae import canonical_latent_shape
 from src.optimization.lcm_lora import load_fast_sampler_checkpoint
 
 # Validation
@@ -99,11 +100,19 @@ class AdvancedPipelineConfig:
     # Performance
     use_lcm_lora: bool = False
     lcm_steps: int = 4  # Only used when a real fast-sampling path is available.
+    paired_baseline_generation_time_sec: Optional[float] = None
     lcm_lora_checkpoint: Optional[Path] = None
     vqvae_checkpoint: Optional[Path] = None
     diffusion_checkpoint: Optional[Path] = None
     logic_net_checkpoint: Optional[Path] = None
     condition_encoder_checkpoint: Optional[Path] = None
+    strict_checkpoint_mode: bool = True
+    enable_weighted_wfc_refinement: bool = False
+    wfc_prior_grids_path: Optional[Path] = None
+    wfc_min_prior_grids: int = 3
+    wfc_kl_divergence_threshold: float = 2.5
+    wfc_max_iterations: int = 10_000
+    allow_wfc_refinement_failure: bool = False
     
     # Visual quality
     enable_seam_smoothing: bool = True
@@ -127,6 +136,7 @@ class AdvancedPipelineConfig:
     require_graph_solvability: bool = True
     require_final_solvability: bool = True
     allow_linear_graph_fallback: bool = False
+    allow_room_generation_fallback: bool = False
     graph_oracle_max_states: int = 1_000_000
     tile_oracle_max_states: int = 1_000_000
     
@@ -150,7 +160,7 @@ class PipelineStats:
     evaluation_time: float
     
     # Performance metrics
-    lcm_speedup: float  # >1.0 only when a real fast-sampling backend is active
+    lcm_speedup: Optional[float]  # Requires an explicitly paired baseline duration.
     rooms_per_second: float
     
     # Quality metrics
@@ -168,6 +178,11 @@ class PipelineStats:
     topology_qd_infeasible_rejections: int
     final_map_archive_elites: int
     final_map_archive_coverage: float
+    room_generation_fallbacks: int
+    wfc_refinement_failures: int
+    wfc_prior_source: Optional[str]
+    wfc_prior_grid_count: int
+    wfc_prior_sha256: Optional[str]
     
     # Explainability
     decision_count: int
@@ -176,7 +191,7 @@ class PipelineStats:
 
 class AdvancedNeuralSymbolicPipeline:
     """
-    Complete pipeline with all 15 features integrated.
+    End-to-end experimental pipeline with explicit validation and provenance.
     
     Usage:
         >>> config = AdvancedPipelineConfig(enable_big_rooms=True)
@@ -193,11 +208,16 @@ class AdvancedNeuralSymbolicPipeline:
         self.config = config
         
         # Initialize all components
-        logger.info("Initializing advanced pipeline with all 15 features...")
+        logger.info("Initializing experimental neural-symbolic pipeline...")
         
         # Core
         self.fast_sampling_active = False
         self.fast_sampling_reason = "LCM-LoRA disabled by config."
+        self._room_generation_fallbacks = 0
+        self._wfc_refinement_failures = 0
+        self._wfc_prior_source: Optional[str] = None
+        self._wfc_prior_grid_count = 0
+        self._wfc_prior_sha256: Optional[str] = None
         pipeline_model_kwargs = self._resolve_neural_pipeline_model_kwargs()
         
         # Base neural-symbolic pipeline for room generation
@@ -208,7 +228,7 @@ class AdvancedNeuralSymbolicPipeline:
             **pipeline_model_kwargs,
         )
         
-        # WFC tile priors (will be extracted from VQ-VAE during first generation)
+        # Empirical WFC priors are loaded lazily from the configured training-grid source.
         self.wfc_tile_priors = None
         
         # Generation
@@ -279,6 +299,7 @@ class AdvancedNeuralSymbolicPipeline:
             "diffusion_checkpoint": self._path_or_none(self.config.diffusion_checkpoint),
             "logic_net_checkpoint": self._path_or_none(self.config.logic_net_checkpoint),
             "condition_encoder_checkpoint": self._path_or_none(self.config.condition_encoder_checkpoint),
+            "strict_checkpoint_mode": bool(self.config.strict_checkpoint_mode),
         }
 
         if not self.config.use_lcm_lora:
@@ -353,12 +374,22 @@ class AdvancedNeuralSymbolicPipeline:
             return max(1, int(self.config.lcm_steps))
         return 50
 
-    def _compute_reported_lcm_speedup(self, room_count: int, gen_time: float) -> float:
-        """Only report LCM speedup when a real fast-sampling backend is active."""
-        if not self.fast_sampling_active:
-            return 1.0
-        baseline_time = float(max(1, int(room_count))) * 45.0
-        return baseline_time / gen_time if gen_time > 0 else 1.0
+    def _compute_reported_lcm_speedup(
+        self,
+        room_count: int,
+        gen_time: float,
+    ) -> Optional[float]:
+        """Return paired speedup only when the baseline duration is explicit."""
+        _ = room_count
+        baseline_time = self.config.paired_baseline_generation_time_sec
+        if (
+            not self.fast_sampling_active
+            or baseline_time is None
+            or float(baseline_time) <= 0.0
+            or float(gen_time) <= 0.0
+        ):
+            return None
+        return float(baseline_time) / float(gen_time)
 
     def _estimate_boundary_discontinuity(
         self,
@@ -610,6 +641,23 @@ class AdvancedNeuralSymbolicPipeline:
         start_time = time.time()
         constraints = dict(user_constraints or {})
         base_seed = int(constraints.get("seed", self.config.seed))
+        self._room_generation_fallbacks = 0
+        self._wfc_refinement_failures = 0
+        configured_prior_source = self.config.wfc_prior_grids_path
+        resolved_prior_source = (
+            str(Path(configured_prior_source).resolve())
+            if configured_prior_source is not None
+            else None
+        )
+        if not self.config.enable_weighted_wfc_refinement:
+            self._wfc_prior_source = None
+            self._wfc_prior_grid_count = 0
+            self._wfc_prior_sha256 = None
+        elif self._wfc_prior_source != resolved_prior_source:
+            self.wfc_tile_priors = None
+            self._wfc_prior_source = None
+            self._wfc_prior_grid_count = 0
+            self._wfc_prior_sha256 = None
         
         # Create output directory
         self.config.output_dir.mkdir(parents=True, exist_ok=True)
@@ -949,15 +997,20 @@ class AdvancedNeuralSymbolicPipeline:
             ),
             final_map_archive_elites=final_map_archive_elites,
             final_map_archive_coverage=final_map_archive_coverage,
+            room_generation_fallbacks=int(self._room_generation_fallbacks),
+            wfc_refinement_failures=int(self._wfc_refinement_failures),
+            wfc_prior_source=self._wfc_prior_source,
+            wfc_prior_grid_count=int(self._wfc_prior_grid_count),
+            wfc_prior_sha256=self._wfc_prior_sha256,
             decision_count=decision_count,
             fully_traceable=fully_traceable
         )
         
         logger.info(
-            "Pipeline complete in %.2fs (generation: %.2fs, reported_lcm_speedup=%.1fx)",
+            "Pipeline complete in %.2fs (generation: %.2fs, paired_lcm_speedup=%s)",
             total_time,
             gen_time,
-            lcm_speedup,
+            f"{lcm_speedup:.3f}x" if lcm_speedup is not None else "not_measured",
         )
         
         return DungeonGenerationResult(
@@ -1457,18 +1510,21 @@ class AdvancedNeuralSymbolicPipeline:
             
             neural_room = result.room_grid
             
-            # STEP 2: Weighted Bayesian WFC refinement (distribution preservation)
-            if self.wfc_tile_priors is None:
-                # Extract priors from VQ-VAE codebook on first run
-                logger.info("Extracting tile priors from VQ-VAE for WFC...")
-                self.wfc_tile_priors = self._extract_wfc_priors_from_vqvae()
-            
-            if self.wfc_tile_priors is not None:
+            # STEP 2: Optional WFC refinement using empirical training-grid priors.
+            if self.config.enable_weighted_wfc_refinement:
+                if self.wfc_tile_priors is None:
+                    self.wfc_tile_priors = self._load_wfc_tile_priors()
+                if not self.wfc_tile_priors:
+                    raise RuntimeError(
+                        "Weighted Bayesian WFC is enabled but no empirical tile priors were loaded."
+                    )
                 try:
                     wfc_config = WeightedBayesianWFCConfig(
                         use_vqvae_priors=True,
-                        kl_divergence_threshold=2.5,
-                        max_iterations=10000
+                        kl_divergence_threshold=float(
+                            self.config.wfc_kl_divergence_threshold
+                        ),
+                        max_iterations=int(max(1, self.config.wfc_max_iterations)),
                     )
                     
                     wfc = WeightedBayesianWFC(
@@ -1516,14 +1572,29 @@ class AdvancedNeuralSymbolicPipeline:
                     return refined_room
                     
                 except (AttributeError, RuntimeError, ValueError, TypeError) as e:
+                    self._wfc_refinement_failures += 1
+                    if not self.config.allow_wfc_refinement_failure:
+                        raise RuntimeError(
+                            f"Weighted Bayesian WFC failed for room {node_id}; "
+                            "WFC fallback is disabled"
+                        ) from e
                     logger.warning(f"WFC refinement failed for room {node_id}: {e}, using neural output")
                     return neural_room
-            else:
-                return neural_room
+
+            return neural_room
                 
         except (AttributeError, RuntimeError, ValueError, TypeError) as e:
+            if not self.config.allow_room_generation_fallback:
+                raise RuntimeError(
+                    f"Neural room generation failed for room {node_id}; "
+                    "room fallback is disabled"
+                ) from e
+            self._room_generation_fallbacks += 1
             logger.error(f"Failed to generate room {node_id} with ML pipeline: {e}")
-            # Fallback to simple pattern
+            logger.warning(
+                "Using explicitly enabled bordered-room fallback for room %s",
+                node_id,
+            )
             room = np.zeros((ROOM_HEIGHT, ROOM_WIDTH), dtype=int)
             from src.core.definitions import SEMANTIC_PALETTE
             # Create simple bordered room
@@ -1535,83 +1606,95 @@ class AdvancedNeuralSymbolicPipeline:
             return room
     
     def _prepare_graph_context(self, mission_graph: nx.DiGraph) -> Dict[str, Any]:
-        """Prepare graph context for neural pipeline."""
-        # Convert mission graph to tensor format
-        node_order = list(mission_graph.nodes())
-        node_to_idx = {node_id: idx for idx, node_id in enumerate(node_order)}
-        
-        # Node features: [tension, is_boss, is_treasure, connectivity, depth, width]
-        node_features = []
-        for node_id in node_order:
-            node_data = mission_graph.nodes[node_id]
-            features = [
-                node_data.get('tension', 0.5),
-                float(node_data.get('is_boss', False)),
-                float(node_data.get('is_treasure', False)),
-                mission_graph.degree(node_id) / 4.0,  # Normalized connectivity
-                0.0,  # Depth (could compute from graph)
-                0.0   # Width (could compute from graph)
-            ]
-            node_features.append(features)
-        
-        node_features_tensor = torch.tensor(
-            node_features,
-            dtype=torch.float32,
-            device=self.neural_pipeline.device,
+        """Prepare graph context through the canonical conditioning schema."""
+        return self.neural_pipeline._prepare_graph_context(
+            mission_graph,
+            use_tpe=True,
         )
-        
-        # Edge index
-        edge_list = [
-            (node_to_idx[u], node_to_idx[v])
-            for u, v in mission_graph.edges()
-            if u in node_to_idx and v in node_to_idx
-        ]
-        if edge_list:
-            edge_index = torch.tensor(edge_list, dtype=torch.long, device=self.neural_pipeline.device).t().contiguous()
-        else:
-            edge_index = torch.zeros((2, 0), dtype=torch.long, device=self.neural_pipeline.device)
-        
-        return {
-            'node_features': node_features_tensor,
-            'edge_index': edge_index,
-            'tpe': None,  # Topological positional encoding (optional)
-            'current_node_idx': 0,  # Will be updated per room
-            'node_to_idx': node_to_idx,
-        }
     
-    def _extract_wfc_priors_from_vqvae(self) -> Optional[Dict[int, Any]]:
-        """Extract tile priors from VQ-VAE for Weighted Bayesian WFC."""
-        try:
-            # Generate sample rooms to extract statistics
-            logger.info("Generating sample rooms to extract tile priors...")
-            sample_grids = []
-            
-            # Generate a few rooms to get tile statistics
-            for i in range(10):
-                try:
-                    # Simple generation without WFC
-                    latent_dim = int(getattr(self.neural_pipeline.vqvae, "latent_dim", 64))
-                    latent_hw = canonical_latent_shape((ROOM_HEIGHT, ROOM_WIDTH))
-                    z_noise = torch.randn(1, latent_dim, latent_hw[0], latent_hw[1], device=self.neural_pipeline.device)
-                    with torch.no_grad():
-                        logits = self.neural_pipeline.vqvae.decode(z_noise)
-                        grid = logits.argmax(dim=1).cpu().numpy()[0]
-                        sample_grids.append(grid)
-                except (AttributeError, RuntimeError, ValueError, TypeError) as e:
-                    logger.warning(f"Sample generation {i} failed: {e}")
-                    continue
-            
-            if len(sample_grids) >= 3:
-                tile_priors = extract_tile_priors_from_grids(sample_grids)
-                logger.info(f"Extracted priors for {len(tile_priors)} tile types")
-                return tile_priors
+    def _load_wfc_tile_priors(self) -> Dict[int, Any]:
+        """Load empirical semantic grids and derive WFC priors from them."""
+        configured = self.config.wfc_prior_grids_path
+        if configured is None:
+            raise FileNotFoundError(
+                "Set wfc_prior_grids_path to a training-only .npy/.npz file or directory "
+                "when enable_weighted_wfc_refinement=True."
+            )
+
+        source = Path(configured)
+        if not source.exists():
+            raise FileNotFoundError(f"WFC prior grid source does not exist: {source}")
+
+        arrays: List[np.ndarray] = []
+        paths = (
+            sorted(
+                [*source.glob("*.npy"), *source.glob("*.npz")],
+                key=lambda path: path.name,
+            )
+            if source.is_dir()
+            else [source]
+        )
+        if not paths:
+            raise ValueError(f"No .npy or .npz prior grids found in {source}")
+
+        def append_grids(raw: Any, *, origin: Path) -> None:
+            array = np.asarray(raw)
+            if array.ndim == 2:
+                arrays.append(array.astype(np.int64, copy=False))
+                return
+            if array.ndim == 3:
+                arrays.extend(
+                    array[index].astype(np.int64, copy=False)
+                    for index in range(int(array.shape[0]))
+                )
+                return
+            raise ValueError(
+                f"WFC prior grids from {origin} must have shape [H,W] or [N,H,W], "
+                f"got {tuple(array.shape)}."
+            )
+
+        for path in paths:
+            if path.suffix.lower() == ".npz":
+                with np.load(path, allow_pickle=False) as archive:
+                    preferred = next(
+                        (key for key in ("rooms", "grids", "semantic_grids") if key in archive),
+                        None,
+                    )
+                    keys = [preferred] if preferred is not None else sorted(archive.files)
+                    for key in keys:
+                        append_grids(archive[key], origin=path)
+            elif path.suffix.lower() == ".npy":
+                append_grids(np.load(path, allow_pickle=False), origin=path)
             else:
-                logger.warning("Not enough samples to extract tile priors")
-                return None
-                
-        except (AttributeError, RuntimeError, ValueError, TypeError) as e:
-            logger.error(f"Failed to extract WFC priors: {e}")
-            return None
+                raise ValueError(
+                    f"Unsupported WFC prior source {path}; expected .npy or .npz."
+                )
+
+        minimum = int(max(1, self.config.wfc_min_prior_grids))
+        if len(arrays) < minimum:
+            raise ValueError(
+                f"WFC prior source contains {len(arrays)} grids; at least {minimum} are required."
+            )
+
+        priors = extract_tile_priors_from_grids(arrays)
+        if not priors:
+            raise ValueError(f"WFC prior extraction produced no tile statistics from {source}")
+        digest = hashlib.sha256()
+        for path in paths:
+            digest.update(path.name.encode("utf-8"))
+            with path.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(chunk)
+        self._wfc_prior_source = str(source.resolve())
+        self._wfc_prior_grid_count = len(arrays)
+        self._wfc_prior_sha256 = digest.hexdigest()
+        logger.info(
+            "Loaded WFC priors for %d tile types from %d empirical grids at %s",
+            len(priors),
+            len(arrays),
+            source,
+        )
+        return priors
     
     def _compute_room_slot_positions(
         self,
@@ -1686,7 +1769,7 @@ class DungeonGenerationResult:
     explainability_mgr: Optional[ExplainabilityManager] = None
     
     def save_artifacts(self, output_dir: Path):
-        """Save all artifacts for thesis defense."""
+        """Save generated artifacts and measured run metadata."""
         import pickle
 
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -1720,6 +1803,11 @@ class DungeonGenerationResult:
                 "topology_qd_infeasible_rejections": self.stats.topology_qd_infeasible_rejections,
                 "final_map_archive_elites": self.stats.final_map_archive_elites,
                 "final_map_archive_coverage": self.stats.final_map_archive_coverage,
+                "room_generation_fallbacks": self.stats.room_generation_fallbacks,
+                "wfc_refinement_failures": self.stats.wfc_refinement_failures,
+                "wfc_prior_source": self.stats.wfc_prior_source,
+                "wfc_prior_grid_count": self.stats.wfc_prior_grid_count,
+                "wfc_prior_sha256": self.stats.wfc_prior_sha256,
                 "decision_count": self.stats.decision_count,
                 "fully_traceable": self.stats.fully_traceable
             }, f, indent=2)
@@ -1732,16 +1820,17 @@ class DungeonGenerationResult:
 # ============================================================================
 
 def quick_start_demo():
-    """2-minute demonstration for thesis defense."""
+    """Run a small local integration demonstration."""
     print("=" * 60)
-    print("ADVANCED PIPELINE DEMO: All 15 Features")
+    print("EXPERIMENTAL NEURAL-SYMBOLIC PIPELINE DEMO")
     print("=" * 60)
     
     # Configure with all features enabled
     config = AdvancedPipelineConfig(
         use_lcm_lora=False,  # Enable only with a real distilled consistency sampler.
-        enable_seam_smoothing=True,  # 87% discontinuity reduction
-        enable_collision_validation=True,  # 98.3% alignment
+        strict_checkpoint_mode=False,  # Demo-only random initialization; never use for evidence.
+        enable_seam_smoothing=True,
+        enable_collision_validation=True,
         theme=ThemeType.CASTLE,  # Style transfer
         enable_big_rooms=True,  # Boss arenas
         enable_global_state=True,  # Water Temple mechanics
@@ -1768,7 +1857,12 @@ def quick_start_demo():
     # Print results
     print("\n[OK] Generation complete!")
     print(f"   Total time: {result.stats.total_time:.2f}s")
-    print(f"   Reported fast-sampling speedup: {result.stats.lcm_speedup:.1f}x")
+    speedup_text = (
+        f"{result.stats.lcm_speedup:.3f}x"
+        if result.stats.lcm_speedup is not None
+        else "not measured (paired baseline required)"
+    )
+    print(f"   Reported fast-sampling speedup: {speedup_text}")
     print(f"   Fun score: {result.stats.fun_score:.2f}/1.0")
     print(f"   Diversity score: {result.stats.diversity_score:.2f}/1.0")
     print(f"   Collision alignment: {result.stats.collision_alignment_score:.1%}")
@@ -1794,7 +1888,7 @@ if __name__ == "__main__":
     
     parser = argparse.ArgumentParser(description="Advanced Neural-Symbolic Pipeline")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for determinism")
-    parser.add_argument("--demo", action="store_true", help="Run thesis defense demo")
+    parser.add_argument("--demo", action="store_true", help="Run the local integration demo")
     args = parser.parse_args()
     
     # Set seed for reproducibility
@@ -1806,4 +1900,4 @@ if __name__ == "__main__":
     if args.demo:
         quick_start_demo()
     else:
-        print("Use --demo to run thesis defense demonstration")
+        print("Use --demo to run the local integration demonstration")

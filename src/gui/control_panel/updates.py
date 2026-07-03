@@ -98,7 +98,7 @@ def apply_dropdown_widget_update(gui: Any, widget: Any, logger: Any) -> None:
             old_weight = float(getattr(gui, "ara_weight", 1.0))
             gui.ara_weight = float(selected_val)
             if old_weight != gui.ara_weight:
-                gui._set_message(f"ARA* weight: {gui.ara_weight:g}", 1.2)
+                gui._set_message(f"Weighted A* weight: {gui.ara_weight:g}", 1.2)
         except (AttributeError, RuntimeError, ValueError, TypeError):
             gui.ara_weight = 1.0
     elif widget.control_name == "presets":

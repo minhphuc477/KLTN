@@ -27,8 +27,8 @@ import os
 import logging
 import math
 import numpy as np
-from typing import List, Tuple, Optional
-from dataclasses import dataclass
+from typing import List, Tuple, Optional, Set, Any
+from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +52,31 @@ class TrainingExample:
     has_boss_key: bool
     has_item: bool
     remaining_cost: float  # Ground truth label
+    opened_doors: Set[Any] = field(default_factory=set)
+    collected_items: Set[Any] = field(default_factory=set)
+
+
+def _as_position_set(values: Set[Any]) -> Set[Tuple[int, int]]:
+    """Best-effort normalization for GameState position sets."""
+    positions: Set[Tuple[int, int]] = set()
+    for value in values or set():
+        try:
+            row, col = value
+            positions.add((int(row), int(col)))
+        except (TypeError, ValueError):
+            continue
+    return positions
+
+
+def _remaining_normal_locked_doors(env, opened_doors: Set[Any]) -> int:
+    """Count unopened normal key doors from the static grid plus dynamic state."""
+    from src.core.definitions import SEMANTIC_PALETTE
+
+    locked_positions = {
+        (int(row), int(col))
+        for row, col in zip(*np.where(env.grid == SEMANTIC_PALETTE['DOOR_LOCKED']))
+    }
+    return max(0, len(locked_positions - _as_position_set(opened_doors)))
 
 
 if TORCH_AVAILABLE:
@@ -177,7 +202,9 @@ class HeuristicTrainer:
                 has_bomb=state.has_bomb,
                 has_boss_key=state.has_boss_key,
                 has_item=state.has_item,
-                remaining_cost=remaining_cost
+                remaining_cost=remaining_cost,
+                opened_doors=set(getattr(state, "opened_doors", set())),
+                collected_items=set(getattr(state, "collected_items", set())),
             )
             
             examples.append(example)
@@ -217,13 +244,16 @@ class HeuristicTrainer:
             dist = abs(example.position[0] - env.goal_pos[0]) + abs(example.position[1] - env.goal_pos[1])
             features[6] = dist / (self.map_height + self.map_width)
         
-        # Door count (simplified - count from grid)
-        from src.core.definitions import SEMANTIC_PALETTE
-        locked_doors = np.sum(env.grid == SEMANTIC_PALETTE['DOOR_LOCKED'])
-        features[7] = locked_doors / 10.0  # Normalize
+        # Remaining unopened locked doors. The physical grid is static during
+        # search; progression lives in GameState.opened_doors.
+        remaining_locked_doors = _remaining_normal_locked_doors(
+            env,
+            getattr(example, "opened_doors", set()),
+        )
+        features[7] = min(float(remaining_locked_doors) / 10.0, 1.0)
         
-        # Items collected (simplified - assume max 10 items)
-        features[8] = example.keys / 10.0
+        # Items collected (stateful; do not duplicate key count).
+        features[8] = min(float(len(getattr(example, "collected_items", set()))) / 10.0, 1.0)
         
         # Observable geometric progress. The ground-truth remaining cost is a
         # training label and must never enter the feature vector.
@@ -450,11 +480,12 @@ class MLHeuristicAStar:
             dist = abs(position[0] - self.env.goal_pos[0]) + abs(position[1] - self.env.goal_pos[1])
             features[6] = float(dist) / float(max(1, self.map_height + self.map_width))
 
-        from src.core.definitions import SEMANTIC_PALETTE
-
-        locked_doors = np.sum(self.env.grid == SEMANTIC_PALETTE['DOOR_LOCKED'])
-        features[7] = float(locked_doors) / 10.0
-        features[8] = float(keys) / 10.0
+        remaining_locked_doors = _remaining_normal_locked_doors(
+            self.env,
+            getattr(state, "opened_doors", set()),
+        )
+        features[7] = min(float(remaining_locked_doors) / 10.0, 1.0)
+        features[8] = min(float(len(getattr(state, "collected_items", set()))) / 10.0, 1.0)
 
         start_pos = getattr(self.env, "start_pos", None)
         if start_pos is not None:

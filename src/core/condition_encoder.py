@@ -47,6 +47,12 @@ logger = logging.getLogger(__name__)
 CARDINAL_DIRECTIONS = ("N", "S", "E", "W")
 HAS_SDPA = hasattr(F, "scaled_dot_product_attention")
 
+
+class ConditioningSchemaError(Exception):
+    """Non-retryable graph-conditioning schema mismatch."""
+
+    retryable = False
+
 # Try to import torch_geometric for GNN
 try:
     from torch_geometric.nn import GATv2Conv, GCNConv, SAGEConv
@@ -490,6 +496,7 @@ class GlobalStreamEncoder(nn.Module):
         use_current_node_distance_features: bool = True,
         current_node_distance_dim: int = 4,
         use_rrwp_edge_features: bool = False,
+        strict_schema: bool = False,
     ):
         super().__init__()
 
@@ -499,6 +506,7 @@ class GlobalStreamEncoder(nn.Module):
         self.output_dim = output_dim
         self.use_current_node_distance_features = bool(use_current_node_distance_features)
         self.use_rrwp_edge_features = bool(use_rrwp_edge_features)
+        self.strict_schema = bool(strict_schema)
         self.current_node_distance_dim = int(max(1, current_node_distance_dim))
         self.gnn_type = str(gnn_type).strip().lower()
         if self.gnn_type not in {"gcn", "gat", "sage", "gps"}:
@@ -648,6 +656,11 @@ class GlobalStreamEncoder(nn.Module):
         if current_dim == expected_dim:
             return features
 
+        if self.strict_schema:
+            raise ConditioningSchemaError(
+                f"{feature_name} feature dim mismatch: got {current_dim}, expected {expected_dim}."
+            )
+
         self._warn_once(
             f"{feature_name}:{current_dim}->{expected_dim}",
             (
@@ -727,6 +740,10 @@ class GlobalStreamEncoder(nn.Module):
         if edge_index.dim() == 2 and edge_index.shape[0] == 2:
             num_edges = int(edge_index.shape[1])
             if edge_features.shape[0] != num_edges:
+                if self.strict_schema:
+                    raise ConditioningSchemaError(
+                        f"edge_features edge count mismatch: got {edge_features.shape[0]}, expected {num_edges}."
+                    )
                 self._warn_once(
                     f"edge_rows:{edge_features.shape[0]}->{num_edges}",
                     (
@@ -759,6 +776,10 @@ class GlobalStreamEncoder(nn.Module):
         current_dim = int(edge_attr.shape[1])
         if current_dim == expected_dim:
             return edge_attr
+        if self.strict_schema:
+            raise ConditioningSchemaError(
+                f"{feature_name} projected width {current_dim} does not match hidden_dim={expected_dim}."
+            )
         self._warn_once(
             f"{feature_name}_projected_width:{current_dim}->{expected_dim}",
             (
@@ -791,6 +812,10 @@ class GlobalStreamEncoder(nn.Module):
 
         expected_tpe_dim = int(GRAPH_TPE_DIM)
         if int(tensor.shape[0]) != int(num_nodes) or int(tensor.shape[1]) != expected_tpe_dim:
+            if self.strict_schema:
+                raise ConditioningSchemaError(
+                    f"tpe shape mismatch: got {tuple(tensor.shape)}, expected {(int(num_nodes), expected_tpe_dim)}."
+                )
             self._warn_once(
                 f"tpe:{tuple(tensor.shape)}->{(int(num_nodes), expected_tpe_dim)}",
                 (
@@ -826,6 +851,10 @@ class GlobalStreamEncoder(nn.Module):
         num_edges = int(edge_index.shape[1]) if edge_index.dim() == 2 and edge_index.shape[0] == 2 else 0
         expected_dim = int(GRAPH_TPE_DIM)
         if int(tensor.shape[0]) != num_edges or int(tensor.shape[1]) != expected_dim:
+            if self.strict_schema:
+                raise ConditioningSchemaError(
+                    f"edge_rrwp shape mismatch: got {tuple(tensor.shape)}, expected {(num_edges, expected_dim)}."
+                )
             self._warn_once(
                 f"edge_rrwp:{tuple(tensor.shape)}->{(num_edges, expected_dim)}",
                 (
@@ -863,6 +892,10 @@ class GlobalStreamEncoder(nn.Module):
 
         expected_shape = (int(num_nodes), int(self.current_node_distance_dim))
         if tuple(tensor.shape) != expected_shape:
+            if self.strict_schema:
+                raise ConditioningSchemaError(
+                    f"current_node_distance shape mismatch: got {tuple(tensor.shape)}, expected {expected_shape}."
+                )
             self._warn_once(
                 f"current_node_distance:{tuple(tensor.shape)}->{expected_shape}",
                 (
@@ -896,6 +929,10 @@ class GlobalStreamEncoder(nn.Module):
             raise ValueError(f"node_mask must be 1D [N] or [1,N], got {tuple(tensor.shape)}.")
         expected_shape = (int(num_nodes),)
         if tuple(tensor.shape) != expected_shape:
+            if self.strict_schema:
+                raise ConditioningSchemaError(
+                    f"node_mask shape mismatch: got {tuple(tensor.shape)}, expected {expected_shape}."
+                )
             self._warn_once(
                 f"node_mask:{tuple(tensor.shape)}->{expected_shape}",
                 (
@@ -1562,6 +1599,7 @@ class DualStreamConditionEncoder(nn.Module):
         reference_embedding_dim: int = 32,
         reference_hidden_dim: int = 64,
         use_rrwp_edge_features: bool = False,
+        strict_schema: bool = False,
     ):
         super().__init__()
         
@@ -1589,6 +1627,7 @@ class DualStreamConditionEncoder(nn.Module):
             dropout=dropout,
             use_current_node_distance_features=use_current_node_distance_features,
             use_rrwp_edge_features=use_rrwp_edge_features,
+            strict_schema=strict_schema,
         )
         
         # GLOBAL STYLE TOKEN (Theme Consistency)

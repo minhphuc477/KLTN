@@ -51,3 +51,32 @@ def test_gui_runner_manual_step_wrapper_forwards_dependencies(monkeypatch):
     assert calls["manual_step"]["pop_effect_cls"] is gui_runner.PopEffect
     assert calls["manual_step"]["flash_effect_cls"] is gui_runner.FlashEffect
     assert calls["manual_step"]["time_module"] is gui_runner.time
+
+
+def test_hung_solver_cleanup_runs_after_process_stops(monkeypatch):
+    gui = gui_runner.ZeldaGUI.__new__(gui_runner.ZeldaGUI)
+    gui.solver_running = True
+    calls = {"terminated": 0, "cleaned": 0}
+
+    class _StoppedProcess:
+        @staticmethod
+        def is_alive():
+            return False
+
+    def fake_terminate(**_kwargs):
+        calls["terminated"] += 1
+
+    def fake_cleanup():
+        calls["cleaned"] += 1
+
+    monkeypatch.setattr(
+        gui_runner,
+        "_terminate_hung_solver_process_orchestration_helper",
+        fake_terminate,
+    )
+    gui._delete_temp_files = fake_cleanup
+
+    gui._terminate_hung_solver_process(_StoppedProcess())
+
+    assert calls == {"terminated": 1, "cleaned": 1}
+    assert gui.solver_running is False

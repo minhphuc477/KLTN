@@ -31,6 +31,9 @@ class GameStateSearchConfig:
     timeout: int = 100000
     tie_break: bool = False
     key_boost: bool = False
+    enable_weighted_astar: bool = False
+    heuristic_weight: float = 1.0
+    # Deprecated aliases retained for old configs and GUI route files.
     enable_ara: bool = False
     ara_weight: float = 1.0
     # Zelda-style room traversal is 4-neighbor by default. Diagonal movement
@@ -42,11 +45,17 @@ class GameStateSearchConfig:
     use_iddfs: bool = True
 
     def to_priority_options(self) -> Dict[str, Any]:
+        weighted_enabled = bool(self.enable_weighted_astar or self.enable_ara)
+        weight = (
+            float(self.heuristic_weight)
+            if self.enable_weighted_astar
+            else float(self.ara_weight)
+        )
         return {
             "tie_break": self.tie_break,
             "key_boost": self.key_boost,
-            "enable_ara": self.enable_ara,
-            "ara_weight": self.ara_weight,
+            "enable_weighted_astar": weighted_enabled,
+            "heuristic_weight": weight,
             "allow_diagonals": self.allow_diagonals,
             "rules_profile": str(self.rules_profile or "vglc_strict"),
             # Representation is consumed by StateSpaceAStar.

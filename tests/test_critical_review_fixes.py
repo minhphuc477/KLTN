@@ -184,12 +184,20 @@ def test_graph_linearity_uses_path_directness_not_optional_branch_coverage():
     assert descriptor.linearity == pytest.approx(1.0)
 
 
-def test_hazard_edges_are_traversable_risk_edges():
+def test_hazard_edges_require_the_permanent_protection_item():
     from src.simulation.edge_logic import can_traverse_edge_type, edge_type_from_data
 
     state = SimpleNamespace(position=(0, 0), keys=0, bomb_count=0, has_boss_key=False, has_item=False)
 
     assert edge_type_from_data({"edge_type": "hazard"}) == "hazard"
+    assert not can_traverse_edge_type(
+        "hazard",
+        state,
+        strict_original_mode=True,
+        get_room_for_position=lambda _pos: None,
+        is_room_cleared=lambda _room, _state: False,
+    )
+    state.has_item = True
     assert can_traverse_edge_type(
         "hazard",
         state,
@@ -197,6 +205,94 @@ def test_hazard_edges_are_traversable_risk_edges():
         get_room_for_position=lambda _pos: None,
         is_room_cleared=lambda _room, _state: False,
     )
+
+
+def test_key_economy_rejects_key_trapped_behind_its_own_lock_with_cyclic_start():
+    from src.simulation.key_economy_validator import KeyEconomyValidator
+
+    graph = nx.DiGraph()
+    graph.add_node("start", type="START")
+    graph.add_node("cycle")
+    graph.add_node("locked_room", key_id="small")
+    graph.add_node("goal", type="GOAL")
+    graph.add_edge("start", "cycle", lock_type="open")
+    graph.add_edge("cycle", "start", lock_type="open")
+    graph.add_edge("start", "locked_room", lock_type="locked", key_id="small")
+    graph.add_edge("locked_room", "goal", lock_type="open")
+
+    result = KeyEconomyValidator(graph).validate()
+
+    assert result.is_valid is False
+    assert result.key_surplus["start->locked_room"] == -1
+
+
+def test_key_economy_respects_edge_type_locked_schema():
+    from src.simulation.key_economy_validator import KeyEconomyValidator
+
+    graph = nx.DiGraph()
+    graph.add_node("start", type="START")
+    graph.add_node("locked_room", key_id="small")
+    graph.add_node("goal", type="GOAL")
+    graph.add_edge("start", "locked_room", edge_type="key_locked", key_id="small")
+    graph.add_edge("locked_room", "goal", edge_type="open")
+
+    result = KeyEconomyValidator(graph).validate()
+
+    assert result.is_valid is False
+    assert result.key_surplus["start->locked_room"] == -1
+
+
+def test_key_economy_rejects_item_gate_with_item_locked_behind_gate():
+    from src.simulation.key_economy_validator import KeyEconomyValidator
+
+    graph = nx.DiGraph()
+    graph.add_node("start", type="START")
+    graph.add_node("item_room", type="ITEM", item_type="HOOKSHOT")
+    graph.add_node("goal", type="GOAL")
+    graph.add_edge("start", "item_room", edge_type="item_gate", item_required="HOOKSHOT")
+    graph.add_edge("item_room", "goal", edge_type="open")
+
+    result = KeyEconomyValidator(graph).validate()
+
+    assert result.greedy_solvable is False
+    assert result.is_valid is False
+
+
+def test_key_economy_accepts_specific_boss_key_identifier():
+    from src.simulation.key_economy_validator import KeyEconomyValidator
+
+    graph = nx.DiGraph()
+    graph.add_node("start", type="START")
+    graph.add_node("big_key", type="BIG_KEY", key_id=7)
+    graph.add_node("boss_door", type="BOSS_DOOR")
+    graph.add_node("goal", type="GOAL")
+    graph.add_edge("start", "big_key", edge_type="open")
+    graph.add_edge("big_key", "boss_door", edge_type="boss_locked", key_required=7)
+    graph.add_edge("boss_door", "goal", edge_type="open")
+
+    result = KeyEconomyValidator(graph).validate()
+
+    assert result.greedy_solvable
+    assert result.adversarial_solvable
+    assert result.is_valid
+
+
+def test_key_economy_does_not_collect_required_key_from_lock_nodes():
+    from src.simulation.key_economy_validator import KeyEconomyValidator
+
+    graph = nx.DiGraph()
+    graph.add_node("start", type="START", items=["small_1"])
+    graph.add_node("lock_1", type="LOCK", key_id="small_2")
+    graph.add_node("lock_2", type="LOCK")
+    graph.add_node("goal", type="GOAL")
+    graph.add_edge("start", "lock_1", edge_type="key_locked", key_id="small_1")
+    graph.add_edge("lock_1", "lock_2", edge_type="key_locked", key_id="small_2")
+    graph.add_edge("lock_2", "goal", edge_type="open")
+
+    result = KeyEconomyValidator(graph).validate()
+
+    assert result.greedy_solvable is False
+    assert result.is_valid is False
 
 
 def test_src_ml_logicnet_exports_canonical_block_v_logicnet():
@@ -431,6 +527,24 @@ def test_structural_branching_factor_averages_all_non_terminal_nodes():
     branching = compute_branching_factor(graph)
 
     assert 0.0 < branching < 2.0
+
+
+def test_structural_metrics_collapse_reciprocal_corridor_arcs():
+    from src.evaluation.structural_metrics import (
+        analyze_structural_topology,
+        compute_branching_factor,
+        compute_cyclomatic_complexity,
+    )
+
+    graph = nx.DiGraph()
+    graph.add_node(0, label="start")
+    graph.add_node(1, label="middle")
+    graph.add_node(2, label="goal")
+    graph.add_edges_from([(0, 1), (1, 0), (1, 2), (2, 1)])
+
+    assert compute_cyclomatic_complexity(graph) == 0.0
+    assert compute_branching_factor(graph) == pytest.approx(1.0)
+    assert analyze_structural_topology(graph).dead_end_ratio == 0.0
 
 
 def test_perturb_and_map_astar_uses_min_cost_admissible_heuristic():

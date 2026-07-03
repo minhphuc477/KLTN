@@ -17,6 +17,7 @@ from src.pipeline.advanced_pipeline import (
 def _make_test_config() -> AdvancedPipelineConfig:
     return AdvancedPipelineConfig(
         use_lcm_lora=True,
+        strict_checkpoint_mode=False,
         enable_seam_smoothing=False,
         enable_collision_validation=False,
         enable_big_rooms=False,
@@ -243,10 +244,70 @@ def test_advanced_pipeline_activates_compatible_consistency_lora_backend(monkeyp
 
 
 def test_advanced_pipeline_reports_no_lcm_speedup_without_real_backend():
-    """Reported LCM speedup must remain neutral when no real fast backend is active."""
+    """Speedup is undefined without both a real fast backend and paired baseline."""
     pipeline = AdvancedNeuralSymbolicPipeline(_make_test_config())
 
-    assert pipeline._compute_reported_lcm_speedup(room_count=8, gen_time=12.0) == 1.0
+    assert pipeline._compute_reported_lcm_speedup(room_count=8, gen_time=12.0) is None
+
+
+def test_advanced_pipeline_reports_only_explicit_paired_speedup():
+    config = _make_test_config()
+    config.paired_baseline_generation_time_sec = 24.0
+    pipeline = AdvancedNeuralSymbolicPipeline(config)
+    pipeline.fast_sampling_active = True
+
+    assert pipeline._compute_reported_lcm_speedup(room_count=8, gen_time=12.0) == 2.0
+
+
+def test_advanced_pipeline_uses_canonical_graph_conditioning_schema():
+    pipeline = AdvancedNeuralSymbolicPipeline(_make_test_config())
+    graph = nx.DiGraph()
+    graph.add_node(0, type="START", position=(0, 0))
+    graph.add_node(1, type="GOAL", position=(1, 0))
+    graph.add_edge(0, 1, edge_type="key_locked")
+
+    context = pipeline._prepare_graph_context(graph)
+    expected_node_dim = pipeline.neural_pipeline.condition_encoder.global_encoder.node_feature_dim
+    expected_edge_dim = pipeline.neural_pipeline.condition_encoder.global_encoder.edge_feature_dim
+
+    assert tuple(context["node_features"].shape) == (2, expected_node_dim)
+    assert tuple(context["edge_features"].shape) == (1, expected_edge_dim)
+    assert tuple(context["tpe"].shape) == (2, 8)
+    assert context["node_to_idx"] == {0: 0, 1: 1}
+
+
+def test_weighted_wfc_priors_are_loaded_from_empirical_grids(tmp_path):
+    source = tmp_path / "prior_grids.npz"
+    np.savez(
+        source,
+        rooms=np.stack(
+            [
+                np.full((4, 4), SEMANTIC_PALETTE["FLOOR"], dtype=np.int64),
+                np.full((4, 4), SEMANTIC_PALETTE["WALL"], dtype=np.int64),
+                np.tile(
+                    np.array(
+                        [SEMANTIC_PALETTE["WALL"], SEMANTIC_PALETTE["FLOOR"]],
+                        dtype=np.int64,
+                    ),
+                    (4, 2),
+                ),
+            ]
+        ),
+    )
+
+    pipeline = object.__new__(AdvancedNeuralSymbolicPipeline)
+    pipeline.config = AdvancedPipelineConfig(
+        wfc_prior_grids_path=source,
+        wfc_min_prior_grids=3,
+    )
+
+    priors = pipeline._load_wfc_tile_priors()
+
+    assert SEMANTIC_PALETTE["FLOOR"] in priors
+    assert SEMANTIC_PALETTE["WALL"] in priors
+    assert pipeline._wfc_prior_source == str(source.resolve())
+    assert pipeline._wfc_prior_grid_count == 3
+    assert len(pipeline._wfc_prior_sha256) == 64
 
 
 def test_advanced_pipeline_fun_evaluation_resolves_graph_route_not_insertion_order():

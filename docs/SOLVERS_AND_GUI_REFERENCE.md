@@ -77,7 +77,8 @@ Inside `StateSpaceAStar`:
 - BFS mode: `f = depth` (full game-state BFS)
 - Dijkstra mode: `f = g`
 - Greedy mode: `f = h`
-- ARA* option: `f = g + w*h` (when `enable_ara=True`, `w=ara_weight`)
+- Weighted-A* option: `f = g + w*h` using a fixed heuristic weight.
+  Legacy route/config keys remain `enable_ara` and `ara_weight`.
 
 Priority options:
 - `priority_tie_break`: adds locked-door-based tie-break term
@@ -205,8 +206,9 @@ Oracle outcomes are tri-state for reporting:
 
 The budget is a state-expansion budget. Bidirectional A* and its canonical A*
 fallback share that one budget, and reported expansions include both phases.
-Diagonal movement uses cardinal cost `1` and diagonal cost `sqrt(2)` across the
-validator, Bidirectional A*, and the D* Lite diagnostic.
+Diagonal movement uses cardinal cost `1` and diagonal cost `1` across the
+validator, Bidirectional A*, and the D* Lite diagnostic; heuristics use
+Chebyshev distance when diagonals are enabled.
 
 For MAP-Elites / Quality-Diversity reporting, the archive may use graph
 topology as behavior descriptors, but the quality score must come from a
@@ -262,7 +264,7 @@ result must not be labeled shortest-path optimal or used as the exact baseline.
 | `auto_prune_on_precheck` | Auto-Prune Dead-Ends on Precheck | Optional dead-end prune pass with undo snapshot capture | Implemented |
 | `priority_tie_break` | Priority: Tie-Break by Locks | Alters open-set priority tuple | Implemented |
 | `priority_key_boost` | Priority: Key-Pickup Boost | Alters open-set priority tuple | Implemented |
-| `enable_ara` | Enable ARA* (weighted A*) | Enables weighted `f = g + w*h` | Implemented |
+| `enable_ara` | Enable weighted A* | Enables one fixed-weight `f = g + w*h` search | Implemented (legacy key name) |
 | `persist_dropdown_on_select` | Keep dropdown open after select | Passed to dropdown widgets when built | Partial (applies on widget build/rebuild) |
 
 ### 5.2 Dropdowns
@@ -271,7 +273,7 @@ result must not be labeled shortest-path optimal or used as the exact baseline.
 |---|---|---|---|
 | Level | Generated level list | Loads the selected map into the play/solve view | Implemented |
 | Zoom | 25%-200% | Applies map zoom and redraw | Implemented |
-| ARA* weight | 1.0/1.25/1.5/2.0 | Used when `enable_ara` is enabled | Implemented |
+| Weighted A* weight | 1.0/1.25/1.5/2.0 | Used when `enable_ara` is enabled | Implemented |
 | Difficulty | Easy/Medium/Hard/Expert | UI message only | Partial |
 | Presets | Debugging/Fast Approx/Optimal/Speedrun/... | Batch-updates selected flags | Implemented |
 | Solver | 15 algorithms | Controls subprocess dispatch algorithm index, including P-CBS personas | Implemented |
@@ -337,7 +339,7 @@ Route export includes:
 
 1. Use `Solver=A*` + `Search Space=Hybrid` as baseline for solvability validation.
 2. Enable `priority_tie_break` and `priority_key_boost` for lock-heavy dungeons.
-3. Enable `enable_ara` and tune `ARA* weight` only when speed is more important than strict optimality.
+3. Enable the legacy `enable_ara` flag and tune `Weighted A* weight` only when bounded suboptimality is acceptable. Do not report this mode as ARA*.
 4. Use CBS personas when you want bounded-agent proxy metrics, not shortest-path optimality.
 5. Treat `parallel_search`, `multi_goal`, and `dynamic_difficulty` as experimental/scaffolded until fully wired.
 

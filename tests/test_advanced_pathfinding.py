@@ -11,7 +11,6 @@ Usage:
 
 import numpy as np
 import logging
-import math
 from typing import Tuple
 
 import pytest
@@ -265,12 +264,12 @@ class TestDStarLite:
         assert path[-1] == env.goal_pos
         assert 0 < nodes <= solver.timeout
 
-    def test_diagonal_heuristic_uses_octile_lower_bound(self):
+    def test_diagonal_heuristic_uses_chebyshev_lower_bound(self):
         grid = create_simple_dungeon()
         env = ZeldaLogicEnv(grid)
         solver = DStarLiteSolver(env, allow_diagonals=True)
 
-        assert solver._heuristic(GameState(position=(1, 1))) == pytest.approx(math.sqrt(2.0) * 7, rel=1e-3)
+        assert solver._heuristic(GameState(position=(1, 1))) == pytest.approx(7.0, rel=1e-3)
 
     def test_locked_door_predecessor_restores_consumed_key(self):
         grid = create_simple_dungeon()
@@ -454,7 +453,7 @@ class TestBidirectionalAStar:
         env = ZeldaLogicEnv(grid)
         solver = BidirectionalAStar(env, timeout=100000, allow_diagonals=True)
 
-        assert solver._heuristic_forward(GameState(position=(1, 1))) == pytest.approx(math.sqrt(2.0) * 7, rel=1e-3)
+        assert solver._heuristic_forward(GameState(position=(1, 1))) == pytest.approx(7.0, rel=1e-3)
 
     def test_stateful_map_uses_canonical_fallback(self):
         grid = np.full((5, 7), SEMANTIC_PALETTE['WALL'], dtype=np.int64)
@@ -463,6 +462,20 @@ class TestBidirectionalAStar:
         grid[2, 3] = SEMANTIC_PALETTE['DOOR_LOCKED']
         grid[2, 4] = SEMANTIC_PALETTE['FLOOR']
         grid[2, 5] = SEMANTIC_PALETTE['TRIFORCE']
+        env = ZeldaLogicEnv(grid)
+        solver = BidirectionalAStar(env, timeout=100000)
+
+        success, path, nodes = solver.solve()
+
+        assert success
+        assert path[0] == env.start_pos
+        assert path[-1] == env.goal_pos
+        assert solver.used_fallback is True
+        assert nodes <= solver.timeout
+
+    def test_one_way_soft_door_uses_canonical_fallback(self):
+        grid = create_long_corridor()
+        grid[14, 5] = SEMANTIC_PALETTE['DOOR_SOFT']
         env = ZeldaLogicEnv(grid)
         solver = BidirectionalAStar(env, timeout=100000)
 

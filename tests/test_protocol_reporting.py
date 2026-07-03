@@ -291,6 +291,60 @@ def test_gap_manifest_execution_rejects_missing_required_metrics(tmp_path):
     assert payload["runs"][0]["missing_metrics"] == ["score"]
 
 
+def test_gap_manifest_execution_rejects_stale_output(tmp_path):
+    from scripts.generate_round5_scientific_gap_manifest import execute_manifest
+
+    output_path = tmp_path / "metrics.json"
+    output_path.write_text('{"score": 1.0}', encoding="utf-8")
+    payload = {
+        "runs": [
+            {
+                "name": "stale",
+                "family": "test",
+                "command": [sys.executable, "-c", "pass"],
+                "required_inputs": [],
+                "output_paths": [str(output_path)],
+                "required_metrics": ["score"],
+                "status": "planned",
+            }
+        ]
+    }
+
+    execute_manifest(payload)
+
+    assert payload["runs"][0]["status"] == "failed_stale_outputs"
+
+
+def test_gap_manifest_execution_rejects_header_only_csv(tmp_path):
+    from scripts.generate_round5_scientific_gap_manifest import execute_manifest
+
+    output_path = tmp_path / "metrics.csv"
+    payload = {
+        "runs": [
+            {
+                "name": "empty",
+                "family": "test",
+                "command": [
+                    sys.executable,
+                    "-c",
+                    (
+                        "from pathlib import Path; "
+                        f"Path(r'{output_path}').write_text('score\\n', encoding='utf-8')"
+                    ),
+                ],
+                "required_inputs": [],
+                "output_paths": [str(output_path)],
+                "required_metrics": ["score"],
+                "status": "planned",
+            }
+        ]
+    }
+
+    execute_manifest(payload)
+
+    assert payload["runs"][0]["status"] == "failed_empty_outputs"
+
+
 def test_scaffolded_symbolic_wfc_generator_has_no_neural_pipeline_dependency():
     from src.core.definitions import TileID
 

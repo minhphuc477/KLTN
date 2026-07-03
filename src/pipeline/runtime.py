@@ -27,7 +27,7 @@ from src.pipeline.types import (
     PipelineComponentFactory,
     PipelineComponents,
 )
-from src.utils.checkpoint import safe_torch_load
+from src.utils.checkpoint import checkpoint_sha256, checkpoint_size_bytes, safe_torch_load
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +79,7 @@ def _initialize_pipeline_from_flat_kwargs(
     condition_reference_embedding_dim: int = 32,
     condition_reference_hidden_dim: int = 64,
     condition_use_rrwp_edge_features: bool = True,
+    condition_strict_schema: bool = False,
     topology_refinement_mode: str = "gat2",
     diffusion_attention_mode: str = "softmax",
     diffusion_hedgehog_feature_dim: int = 32,
@@ -416,6 +417,7 @@ def _initialize_pipeline_from_flat_kwargs(
     pipeline.condition_reference_embedding_dim = int(max(4, int(condition_reference_embedding_dim)))
     pipeline.condition_reference_hidden_dim = int(max(4, int(condition_reference_hidden_dim)))
     pipeline.condition_use_rrwp_edge_features = bool(condition_use_rrwp_edge_features)
+    pipeline.condition_strict_schema = bool(condition_strict_schema)
 
     # Runtime fallback diagnostics for auditability of best-effort paths.
     pipeline.runtime_diagnostics: Dict[str, int] = {}
@@ -483,7 +485,6 @@ def _load_checkpoint_and_metadata(
     accepted_model_types: Optional[Tuple[str, ...]] = None,
 ) -> Tuple[dict, dict]:
     """Load checkpoint and optional sidecar metadata for strict validation."""
-    checkpoint = safe_torch_load(checkpoint_path, map_location=pipeline.device)
     metadata_path = Path(f"{checkpoint_path}.meta.json")
     metadata: dict = {}
     if metadata_path.exists():
@@ -494,10 +495,24 @@ def _load_checkpoint_and_metadata(
             model_name=model_name,
             accepted_model_types=accepted_model_types,
         )
+        expected_size = metadata.get("file_size_bytes")
+        if expected_size is not None and int(expected_size) != checkpoint_size_bytes(checkpoint_path):
+            raise ValueError(
+                f"{model_name}: checkpoint size does not match metadata sidecar "
+                f"({checkpoint_size_bytes(checkpoint_path)} != {int(expected_size)})."
+            )
+        expected_digest = str(metadata.get("sha256", "") or "").strip().lower()
+        if expected_digest:
+            actual_digest = checkpoint_sha256(checkpoint_path)
+            if actual_digest != expected_digest:
+                raise ValueError(
+                    f"{model_name}: checkpoint SHA-256 does not match metadata sidecar."
+                )
     elif pipeline.strict_checkpoint_mode:
         raise FileNotFoundError(
             f"Strict checkpoint mode enabled: metadata sidecar missing for {model_name} at {metadata_path}"
         )
+    checkpoint = safe_torch_load(checkpoint_path, map_location=pipeline.device)
     return checkpoint, metadata
 
 

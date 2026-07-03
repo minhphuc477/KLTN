@@ -299,8 +299,10 @@ class BidirectionalAStar:
             | set(PUSHABLE_IDS)
             | set(WATER_IDS)
             | {
+                SEMANTIC_PALETTE['DOOR_SOFT'],
                 SEMANTIC_PALETTE['ENEMY'],
                 SEMANTIC_PALETTE['BOSS'],
+                SEMANTIC_PALETTE['PUZZLE'],
             }
         )
         present_ids = {int(value) for value in self.grid.reshape(-1)}
@@ -587,51 +589,49 @@ class BidirectionalAStar:
         Returns:
             Matching node from opposite frontier, or None
         """
+        def _inventory_can_execute_suffix(forward_state: GameState, backward_state: GameState) -> bool:
+            """Return whether the forward prefix state can execute the backward suffix."""
+            return bool(
+                int(forward_state.keys) >= int(backward_state.keys)
+                and int(forward_state.bomb_count) >= int(backward_state.bomb_count)
+                and (not bool(backward_state.has_boss_key) or bool(forward_state.has_boss_key))
+                and (not bool(backward_state.has_item) or bool(forward_state.has_item))
+            )
+
         for other_node in other_at_position:
             
             # Check inventory compatibility
             if is_forward:
-                # Approximate frontier splicing is only sound when both sides
-                # agree on consumed inventory and persistent world-state sets.
-                # A backward frontier initialized with surplus keys must not
-                # certify that the forward path can cross a locked door.
-                inventory_compatible = (
-                    node.state.keys == other_node.state.keys and
-                    node.state.bomb_count == other_node.state.bomb_count and
-                    node.state.has_boss_key == other_node.state.has_boss_key and
-                    node.state.has_item == other_node.state.has_item
-                )
+                # Approximate frontier splicing is only sound when the forward
+                # prefix state is contained in the backward suffix state. Exact
+                # set equality almost never occurs in puzzle dungeons because
+                # the backward side carries suffix doors/items/enemies.
+                inventory_compatible = _inventory_can_execute_suffix(node.state, other_node.state)
                 
-                # CRITICAL: Check state sets compatibility
-                # Forward opened_doors must be a subset of backward opened_doors
-                # Forward collected_items must be a subset of backward collected_items
+                # Forward persistent effects must be a subset of the backward
+                # suffix state at the same physical position.
                 state_sets_compatible = (
-                    node.state.opened_doors == other_node.state.opened_doors and
-                    node.state.collected_items == other_node.state.collected_items and
-                    node.state.defeated_enemies == other_node.state.defeated_enemies and
-                    node.state.completed_puzzle_stages == other_node.state.completed_puzzle_stages and
-                    node.state.pushed_blocks == other_node.state.pushed_blocks
+                    set(node.state.opened_doors).issubset(other_node.state.opened_doors) and
+                    set(node.state.collected_items).issubset(other_node.state.collected_items) and
+                    set(node.state.defeated_enemies).issubset(other_node.state.defeated_enemies) and
+                    set(node.state.completed_puzzle_stages).issubset(other_node.state.completed_puzzle_stages) and
+                    set(node.state.pushed_blocks).issubset(other_node.state.pushed_blocks)
                 )
                 
                 if inventory_compatible and state_sets_compatible:
                     return other_node
             else:
-                inventory_compatible = (
-                    node.state.keys == other_node.state.keys and
-                    node.state.bomb_count == other_node.state.bomb_count and
-                    node.state.has_boss_key == other_node.state.has_boss_key and
-                    node.state.has_item == other_node.state.has_item
-                )
+                inventory_compatible = _inventory_can_execute_suffix(other_node.state, node.state)
                 
-                # CRITICAL: Check state sets compatibility (reversed)
-                # Backward opened_doors must be a superset of forward opened_doors
-                # Backward collected_items must be a superset of forward collected_items
+                # Reversed call: other_node is the forward prefix, node is the
+                # backward suffix. The forward effects must be contained in the
+                # backward suffix state.
                 state_sets_compatible = (
-                    node.state.opened_doors == other_node.state.opened_doors and
-                    node.state.collected_items == other_node.state.collected_items and
-                    node.state.defeated_enemies == other_node.state.defeated_enemies and
-                    node.state.completed_puzzle_stages == other_node.state.completed_puzzle_stages and
-                    node.state.pushed_blocks == other_node.state.pushed_blocks
+                    set(other_node.state.opened_doors).issubset(node.state.opened_doors) and
+                    set(other_node.state.collected_items).issubset(node.state.collected_items) and
+                    set(other_node.state.defeated_enemies).issubset(node.state.defeated_enemies) and
+                    set(other_node.state.completed_puzzle_stages).issubset(node.state.completed_puzzle_stages) and
+                    set(other_node.state.pushed_blocks).issubset(node.state.pushed_blocks)
                 )
                 
                 if inventory_compatible and state_sets_compatible:

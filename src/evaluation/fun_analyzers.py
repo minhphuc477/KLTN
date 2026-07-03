@@ -220,8 +220,15 @@ class FrustrationAnalyzer:
                         }
                     )
                 )
-                depth = int(depths.get(node, 0))
-                if not has_content and not aesthetic_role and depth >= LOW_VALUE_DEAD_END_DEPTH:
+                # Unreachable side rooms are worse than shallow optional rooms:
+                # treating missing depths as 0 hid disconnected topology from
+                # the frustration metric.
+                depth = int(depths[node]) if node in depths else LOW_VALUE_DEAD_END_DEPTH
+                if node not in depths or (
+                    not has_content
+                    and not aesthetic_role
+                    and depth >= LOW_VALUE_DEAD_END_DEPTH
+                ):
                     dead_ends += 1
         return dead_ends
 

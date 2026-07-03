@@ -1506,6 +1506,8 @@ class TensionCurveEvaluator:
     @staticmethod
     def _curve_event_alignment_scores(extracted: np.ndarray, target: np.ndarray) -> Dict[str, float]:
         """Score discrete tension beats without smoothing away intended spikes."""
+        raw_x = np.asarray(extracted, dtype=np.float32).reshape(-1)
+        raw_y = np.asarray(target, dtype=np.float32).reshape(-1)
         x, y = TensionCurveEvaluator._align_curves_on_normalized_progress(extracted, target)
         if x.size == 0 or y.size == 0:
             return {
@@ -1526,18 +1528,35 @@ class TensionCurveEvaluator:
             # preserving sharp beats instead of punishing their magnitude twice.
             delta_score = float(np.clip(1.0 - float(np.mean(np.abs(dx - dy))), 0.0, 1.0))
 
-            target_threshold = max(0.12, float(np.quantile(np.abs(dy), 0.75)))
-            extracted_threshold = max(0.12, float(np.quantile(np.abs(dx), 0.75)))
-            target_spikes = {int(i) for i, value in enumerate(dy) if abs(float(value)) >= target_threshold}
-            extracted_spikes = {int(i) for i, value in enumerate(dx) if abs(float(value)) >= extracted_threshold}
+            raw_dx = np.diff(raw_x) if raw_x.size > 1 else np.asarray([], dtype=np.float32)
+            raw_dy = np.diff(raw_y) if raw_y.size > 1 else np.asarray([], dtype=np.float32)
+            target_threshold = max(0.12, float(np.quantile(np.abs(raw_dy), 0.75))) if raw_dy.size else 0.12
+            extracted_threshold = max(0.12, float(np.quantile(np.abs(raw_dx), 0.75))) if raw_dx.size else 0.12
+
+            def _spike_positions(deltas: np.ndarray, threshold: float) -> List[float]:
+                if deltas.size == 0:
+                    return []
+                denom = float(max(1, deltas.size))
+                return [
+                    (float(idx) + 0.5) / denom
+                    for idx, value in enumerate(deltas)
+                    if abs(float(value)) >= threshold
+                ]
+
+            target_spikes = _spike_positions(raw_dy, target_threshold)
+            extracted_spikes = _spike_positions(raw_dx, extracted_threshold)
             if not target_spikes and not extracted_spikes:
                 spike_score = 1.0
             elif not target_spikes:
-                spike_score = float(np.clip(1.0 - (len(extracted_spikes) / max(1, len(dx))), 0.0, 1.0))
+                spike_score = float(np.clip(1.0 - (len(extracted_spikes) / max(1, raw_dx.size)), 0.0, 1.0))
             else:
+                tolerance = max(
+                    0.08,
+                    1.0 / float(max(1, max(raw_dx.size, raw_dy.size))),
+                )
                 matched = 0
                 for spike in target_spikes:
-                    if any(abs(spike - candidate) <= 1 for candidate in extracted_spikes):
+                    if any(abs(spike - candidate) <= tolerance for candidate in extracted_spikes):
                         matched += 1
                 recall = matched / max(1, len(target_spikes))
                 precision = matched / max(1, len(extracted_spikes))

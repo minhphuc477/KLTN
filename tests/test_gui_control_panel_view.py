@@ -191,7 +191,7 @@ def test_advanced_control_panel_keeps_research_tools_available():
         "Auto-Prune Dead-Ends on Precheck",
         "Priority: Tie-Break by Locks",
         "Priority: Key-Pickup Boost",
-        "Enable ARA* (weighted A*)",
+        "Enable weighted A*",
         "Allow Loaded Route Teleports",
         "Keep dropdown open after select",
     ]

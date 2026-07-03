@@ -27,6 +27,27 @@ from src.pipeline.room_topology_conditioning import ROOM_TOPOLOGY_CHANNEL_COUNT
 logger = logging.getLogger(__name__)
 
 
+def _require_all_learned_parameters(
+    model: torch.nn.Module,
+    missing_keys: Iterable[str],
+    *,
+    component_name: str,
+) -> None:
+    """Reject checkpoints that leave any learned parameter randomly initialized."""
+    parameter_names = {str(name) for name, _parameter in model.named_parameters()}
+    missing_parameters = [
+        str(name)
+        for name in missing_keys
+        if str(name) in parameter_names
+    ]
+    if missing_parameters:
+        raise RuntimeError(
+            f"{component_name} checkpoint is missing learned parameters; "
+            "partial loading would mix trained and random weights: "
+            f"{summarize_missing_keys(missing_parameters)}"
+        )
+
+
 def load_vqvae(pipeline, checkpoint_path: Optional[str]) -> torch.nn.Module:
     """Load or create VQ-VAE model."""
     use_coordconv = True
@@ -135,6 +156,11 @@ def load_vqvae(pipeline, checkpoint_path: Optional[str]) -> torch.nn.Module:
             incompatible = model.load_state_dict(state_dict, strict=False)
             missing = [str(k) for k in getattr(incompatible, 'missing_keys', [])]
             unexpected = [str(k) for k in getattr(incompatible, 'unexpected_keys', [])]
+            _require_all_learned_parameters(
+                model,
+                missing,
+                component_name="VQ-VAE",
+            )
 
             # Legacy checkpoints created before explicit legality buffer registration.
             allowed_missing = {"illegal_adjacency_matrix"}
@@ -262,6 +288,15 @@ def load_condition_encoder(
             )
         ),
         use_rrwp_edge_features=use_rrwp_edge_features,
+        strict_schema=bool(
+            checkpoint_config.get(
+                "condition_strict_schema",
+                fallback_config.get(
+                    "condition_strict_schema",
+                    bool(getattr(pipeline, "condition_strict_schema", pipeline.strict_checkpoint_mode)),
+                ),
+            )
+        ),
     ).to(pipeline.device)
 
     if checkpoint_state is not None:
@@ -281,6 +316,11 @@ def load_condition_encoder(
         incompatible = model.load_state_dict(checkpoint_state, strict=False)
         missing = list(getattr(incompatible, 'missing_keys', []))
         unexpected = list(getattr(incompatible, 'unexpected_keys', []))
+        _require_all_learned_parameters(
+            model,
+            missing,
+            component_name="Condition encoder",
+        )
         logger.info(
             "Loaded condition encoder from %s (node_dim=%d edge_dim=%d, missing=%d unexpected=%d)",
             checkpoint_path,
@@ -456,6 +496,11 @@ def load_diffusion(pipeline, checkpoint_path: Optional[str]) -> LatentDiffusionM
         incompatible = model.load_state_dict(checkpoint_state, strict=False)
         missing = list(getattr(incompatible, 'missing_keys', []))
         unexpected = list(getattr(incompatible, 'unexpected_keys', []))
+        _require_all_learned_parameters(
+            model,
+            missing,
+            component_name="Diffusion model",
+        )
         logger.info(
             "Loaded diffusion model from %s using %s (missing=%d unexpected=%d)",
             checkpoint_path,
@@ -725,6 +770,11 @@ def load_masked_room_model(
         incompatible = model.load_state_dict(state_dict, strict=False)
         missing = list(getattr(incompatible, "missing_keys", []))
         unexpected = list(getattr(incompatible, "unexpected_keys", []))
+        _require_all_learned_parameters(
+            model,
+            missing,
+            component_name="Masked-room model",
+        )
         if missing or unexpected:
             msg = (
                 "Masked-room checkpoint/schema mismatch: "
@@ -739,6 +789,11 @@ def load_masked_room_model(
             incompatible_cond = pipeline.condition_encoder.load_state_dict(cond_state, strict=False)
             cond_missing = list(getattr(incompatible_cond, "missing_keys", []))
             cond_unexpected = list(getattr(incompatible_cond, "unexpected_keys", []))
+            _require_all_learned_parameters(
+                pipeline.condition_encoder,
+                cond_missing,
+                component_name="Masked-room bundled condition encoder",
+            )
             if cond_missing or cond_unexpected:
                 msg = (
                     "Masked-room checkpoint bundled condition encoder mismatch: "

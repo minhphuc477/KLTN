@@ -132,6 +132,20 @@ def test_pipeline_block_timeout_path():
     assert elapsed < 0.04
 
 
+def test_layout_validation_does_not_count_canonical_void_as_floor():
+    from src.core.definitions import SEMANTIC_PALETTE
+    from src.pipeline.robust_pipeline import validate_layout
+
+    grid = np.full((20, 20), SEMANTIC_PALETTE["WALL"], dtype=np.int64)
+    grid.reshape(-1)[:240] = SEMANTIC_PALETTE["VOID"]
+    grid.reshape(-1)[240:280] = SEMANTIC_PALETTE["FLOOR"]
+
+    assert validate_layout({"visual_grid": grid}) is False
+    assert validate_layout(
+        {"visual_grid": grid, "legacy_zero_is_floor": True}
+    ) is True
+
+
 def test_human_playability_policy_is_separate_from_exact_solvability(monkeypatch):
     def fake_metrics(_grid, **_kwargs):
         return {

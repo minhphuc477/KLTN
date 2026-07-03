@@ -1134,7 +1134,8 @@ def generate_room(
                 room_id,
                 neural_structural_cleanup,
             )
-    neural_probs = logits.softmax(dim=1).detach().cpu().numpy()[0]  # (44, 16, 11)
+    neural_probs_t = logits.float().softmax(dim=1).to(dtype=logits.dtype).detach()
+    neural_probs = neural_probs_t.cpu().numpy()[0]  # (44, 16, 11)
 
     # BLOCK III: Removed (Migrated to Block II.a Constrained Decoding)
 
@@ -1593,8 +1594,8 @@ def generate_room(
     entropy_val = float(
         np.mean(
             -(
-                logits.softmax(dim=1).detach()
-                * logits.log_softmax(dim=1).detach()
+                logits.float().softmax(dim=1).detach()
+                * logits.float().log_softmax(dim=1).detach()
             ).sum(dim=1).cpu().numpy()
         )
     )

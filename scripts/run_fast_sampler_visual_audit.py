@@ -66,6 +66,7 @@ from src.evaluation.search_benchmark_utils import confusion_ratio_vs_oracle, pat
 from src.simulation.search_factory import (
     VALIDATION_EXCLUDED_ALGORITHMS,
     iter_game_state_algorithm_specs,
+    recommended_game_state_algorithm_specs,
 )
 
 
@@ -673,6 +674,17 @@ def _compute_generation_validation(
         comparison_timeout = _env_int("KLTN_VALIDATION_COMPARISON_TIMEOUT", comparison_timeout_default)
         advanced_timeout = _env_int("KLTN_VALIDATION_ADVANCED_TIMEOUT", advanced_timeout_default)
         all_specs = list(iter_game_state_algorithm_specs())
+        selection_env = ZeldaLogicEnv(semantic_grid=grid, render_mode=False, **env_kwargs)
+        try:
+            recommended_specs = recommended_game_state_algorithm_specs(
+                selection_env,
+                include_diagnostics=True,
+            )
+        finally:
+            try:
+                selection_env.close()
+            except Exception:
+                logger.debug("Failed to close solver-selection environment.", exc_info=True)
         if validation_mode == "oracle_only":
             specs = [spec for spec in all_specs if str(spec.key) == "astar"]
         elif validation_mode == "core":
@@ -682,7 +694,7 @@ def _compute_generation_validation(
                 if str(spec.key) in {"astar", "bfs", "dijkstra", "greedy"}
             ]
         else:
-            specs = all_specs
+            specs = recommended_specs
         suite: Dict[str, Any] = {
             "search_suite_version": VALIDATION_SEARCH_SUITE_VERSION,
             "mode": str(validation_mode),
