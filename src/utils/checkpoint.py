@@ -18,7 +18,6 @@ Usage:
 
 import json
 import os
-import shutil
 import logging
 import hashlib
 from pathlib import Path
@@ -425,8 +424,9 @@ class CheckpointManager:
         
         filepath = self.save_dir / filename
         
-        # Save checkpoint
-        torch.save(checkpoint, filepath)
+        # Save checkpoint atomically so interrupted writes do not corrupt the
+        # target path that future resume/evaluation jobs expect to load.
+        atomic_torch_save(checkpoint, str(filepath))
         logger.info(f"Saved checkpoint to {filepath}")
         
         # Update history and rotate old checkpoints
@@ -442,13 +442,13 @@ class CheckpointManager:
             )
             if is_best:
                 best_path = self.save_dir / "best_model.pth"
-                shutil.copy(filepath, best_path)
+                atomic_torch_save(checkpoint, str(best_path))
                 logger.info(f"Updated best model (epoch {epoch}, "
                           f"{self.metric_name}={current_metric:.4f})")
         
         # Always save latest
         latest_path = self.save_dir / "checkpoint_latest.pth"
-        shutil.copy(filepath, latest_path)
+        atomic_torch_save(checkpoint, str(latest_path))
         
         return filepath
     

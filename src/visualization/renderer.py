@@ -807,11 +807,28 @@ class ZeldaRenderer:
         if not self.show_heatmap or not self.search_heatmap:
             return
         
-        max_visits = max(self.search_heatmap.values()) if self.search_heatmap else 1
+        finite_visits = []
+        for value in self.search_heatmap.values():
+            try:
+                visits_value = float(value)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(visits_value) and visits_value > 0.0:
+                finite_visits.append(visits_value)
+        if not finite_visits:
+            return
+
+        max_visits = max(finite_visits)
         cam_x, cam_y = camera_offset
         
         for (row, col), visits in self.search_heatmap.items():
-            t = visits / max_visits  # 0 to 1
+            try:
+                visits_value = float(visits)
+            except (TypeError, ValueError):
+                continue
+            if not math.isfinite(visits_value) or visits_value <= 0.0:
+                continue
+            t = visits_value / max_visits  # 0 to 1
             color = self._heatmap_color(t)
             
             # Create semi-transparent overlay
@@ -824,6 +841,14 @@ class ZeldaRenderer:
     
     def _heatmap_color(self, t: float) -> Tuple[int, int, int]:
         """Interpolate heatmap color from cold (blue) to hot (red)."""
+        try:
+            t = float(t)
+        except (TypeError, ValueError):
+            t = 0.0
+        if not math.isfinite(t):
+            t = 0.0
+        t = max(0.0, min(1.0, t))
+
         cold = self.theme.get_color('heatmap_cold')
         mid = self.theme.get_color('heatmap_mid')
         hot = self.theme.get_color('heatmap_hot')

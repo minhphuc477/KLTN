@@ -67,13 +67,15 @@ def save_attention_map_images(
             )
             safe_label = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in label)[:80]
             png_path = out_dir / f"{prefix}_{safe_label}.png"
-            plt.figure(figsize=(4, 4))
-            plt.imshow(array[batch, :, :, node_idx], cmap="viridis", interpolation="nearest")
-            plt.colorbar(fraction=0.046, pad=0.04)
-            plt.title(label)
-            plt.tight_layout()
-            plt.savefig(png_path, dpi=160)
-            plt.close()
+            fig = plt.figure(figsize=(4, 4))
+            try:
+                plt.imshow(array[batch, :, :, node_idx], cmap="viridis", interpolation="nearest")
+                plt.colorbar(fraction=0.046, pad=0.04)
+                plt.title(label)
+                plt.tight_layout()
+                plt.savefig(png_path, dpi=160)
+            finally:
+                plt.close(fig)
             saved_pngs.append(str(png_path))
     except ImportError:
         saved_pngs = []

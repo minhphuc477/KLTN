@@ -814,3 +814,36 @@ Focused verification:
   binary semantic grid now normalizes max tile value to `1 / 43` instead of
   leaking a raw `1.0`.
 - `python -m graphify update .` completed after this pass.
+
+### Reliability Guard Addendum (2026-07-03)
+
+Confirmed and fixed:
+
+- MAP-Elites archives now reject non-finite fitness values before inserting a
+  new elite. If an older saved archive already contains a non-finite elite, a
+  future finite candidate for that cell can replace it, and aggregate archive
+  statistics ignore non-finite legacy scores.
+- Distributed gradient averaging no longer skips local `None` gradients before
+  collectives. Each parameter first reduces a per-rank gradient-presence flag;
+  if any rank has a gradient, all ranks participate in the gradient all-reduce
+  with zeros for inactive local parameters. Parameters unused on every rank
+  remain `grad=None`.
+- `CheckpointManager.save()` now uses `atomic_torch_save()` for the epoch
+  checkpoint and for the `best_model.pth` / `checkpoint_latest.pth` aliases,
+  avoiding half-written target files after interruption.
+- Pygame heatmap rendering now ignores invalid visit counts and clamps
+  non-finite interpolation values before converting colors to integers.
+- Attention-map PNG export now closes each matplotlib figure in a `finally`
+  block, so failed `savefig()` calls do not leak figures into global state.
+- Evolutionary genealogy lineage traversal now detects cyclic parent links and
+  missing parent records instead of looping forever.
+
+Focused verification:
+
+- Compile and Ruff checks passed on the touched archive, distributed,
+  checkpoint, renderer, attention visualization, and explainability modules.
+- Direct probes confirmed MAP-Elites NaN rejection/replacement, heatmap
+  non-finite color handling, and genealogy cycle detection.
+- The distributed fix was not exercised with a real multi-rank GPU job in this
+  pass; it was patched at the collective ordering level and still needs a
+  torchrun MoE/dynamic-graph smoke run before publication claims.

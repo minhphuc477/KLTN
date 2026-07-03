@@ -278,8 +278,15 @@ class EvolutionaryGenealogy:
         """Get full lineage from root to this genome."""
         lineage = [self.genome_id]
         current_id = self.parent_id
+        seen = {self.genome_id}
         
         while current_id is not None:
+            if current_id in seen:
+                cycle = " -> ".join([*lineage, current_id])
+                raise ValueError(f"Cycle detected in evolutionary genealogy lineage: {cycle}")
+            if current_id not in genealogy_db:
+                raise KeyError(f"Missing genealogy parent '{current_id}' for genome '{lineage[-1]}'")
+            seen.add(current_id)
             lineage.append(current_id)
             current_id = genealogy_db[current_id].parent_id
         

@@ -19,7 +19,6 @@ import os
 import subprocess
 import sys
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence
 
 import torch
@@ -211,14 +210,28 @@ def average_gradients(
     seen = set()
     for module in modules:
         for param in module.parameters():
-            if param.grad is None:
-                continue
             key = int(param.data_ptr())
             if key in seen:
                 continue
             seen.add(key)
-            dist.all_reduce(param.grad.data, op=dist.ReduceOp.SUM)
-            param.grad.data.div_(float(context.world_size))
+
+            has_grad = torch.tensor(
+                1.0 if param.grad is not None else 0.0,
+                device=param.device,
+                dtype=torch.float32,
+            )
+            dist.all_reduce(has_grad, op=dist.ReduceOp.SUM)
+            if float(has_grad.item()) <= 0.0:
+                continue
+
+            if param.grad is None:
+                reduced_grad = torch.zeros_like(param.data)
+                dist.all_reduce(reduced_grad, op=dist.ReduceOp.SUM)
+                reduced_grad.div_(float(context.world_size))
+                param.grad = reduced_grad
+            else:
+                dist.all_reduce(param.grad.data, op=dist.ReduceOp.SUM)
+                param.grad.data.div_(float(context.world_size))
 
 
 def average_module_parameters(

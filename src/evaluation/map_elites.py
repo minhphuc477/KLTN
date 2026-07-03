@@ -439,6 +439,10 @@ class EliteArchive:
             True if solution was added/replaced, False otherwise
         """
         self.total_evaluations += 1
+        fitness_value = float(fitness)
+        if not np.isfinite(fitness_value):
+            self.total_rejections += 1
+            return False
         if not feasible:
             self.total_rejections += 1
             return False
@@ -447,7 +451,7 @@ class EliteArchive:
         
         elite = Elite(
             solution=solution,
-            fitness=fitness,
+            fitness=fitness_value,
             features=features,
             cell=cell,
             metadata=metadata or {},
@@ -458,7 +462,7 @@ class EliteArchive:
             self.archive[cell] = elite
             self.total_additions += 1
             return True
-        elif fitness > self.archive[cell].fitness:
+        elif (not np.isfinite(float(self.archive[cell].fitness))) or fitness_value > float(self.archive[cell].fitness):
             self.archive[cell] = elite
             self.total_replacements += 1
             return True
@@ -492,17 +496,19 @@ class EliteArchive:
                 feature_diversity=0.0,
             )
         
-        fitnesses = [e.fitness for e in self.archive.values()]
+        fitnesses = [float(e.fitness) for e in self.archive.values() if np.isfinite(float(e.fitness))]
+        if not fitnesses:
+            fitnesses = [0.0]
         features = np.array([e.features for e in self.archive.values()])
         
         total_cells = self.cells_per_dim ** self.feature_dims
         
         return ArchiveStats(
             coverage=len(self.archive) / total_cells,
-            total_fitness=sum(fitnesses),
-            mean_fitness=np.mean(fitnesses),
-            max_fitness=max(fitnesses),
-            min_fitness=min(fitnesses),
+            total_fitness=float(sum(fitnesses)),
+            mean_fitness=float(np.mean(fitnesses)),
+            max_fitness=float(max(fitnesses)),
+            min_fitness=float(min(fitnesses)),
             num_elites=len(self.archive),
             feature_diversity=np.var(features).mean() if len(features) > 1 else 0.0,
         )
@@ -922,6 +928,10 @@ class CVTEliteArchive:
     ) -> bool:
         """Attempt to add a solution to the CVT archive."""
         self.total_evaluations += 1
+        fitness_value = float(fitness)
+        if not np.isfinite(fitness_value):
+            self.total_rejections += 1
+            return False
         if not feasible:
             self.total_rejections += 1
             return False
@@ -929,7 +939,7 @@ class CVTEliteArchive:
         
         elite = Elite(
             solution=solution,
-            fitness=fitness,
+            fitness=fitness_value,
             features=features,
             cell=(cell,),
             metadata=metadata or {},
@@ -939,7 +949,7 @@ class CVTEliteArchive:
             self.archive[cell] = elite
             self.total_additions += 1
             return True
-        elif fitness > self.archive[cell].fitness:
+        elif (not np.isfinite(float(self.archive[cell].fitness))) or fitness_value > float(self.archive[cell].fitness):
             self.archive[cell] = elite
             self.total_replacements += 1
             return True
@@ -963,15 +973,17 @@ class CVTEliteArchive:
         if not self.archive:
             return ArchiveStats(0.0, 0.0, 0.0, 0.0, 0.0, 0, 0.0)
         
-        fitnesses = [e.fitness for e in self.archive.values()]
+        fitnesses = [float(e.fitness) for e in self.archive.values() if np.isfinite(float(e.fitness))]
+        if not fitnesses:
+            fitnesses = [0.0]
         features = np.array([e.features for e in self.archive.values()])
         
         return ArchiveStats(
             coverage=len(self.archive) / self.num_cells,
-            total_fitness=sum(fitnesses),
+            total_fitness=float(sum(fitnesses)),
             mean_fitness=float(np.mean(fitnesses)),
-            max_fitness=max(fitnesses),
-            min_fitness=min(fitnesses),
+            max_fitness=float(max(fitnesses)),
+            min_fitness=float(min(fitnesses)),
             num_elites=len(self.archive),
             feature_diversity=float(np.var(features).mean()) if len(features) > 1 else 0.0,
         )
