@@ -1,4 +1,4 @@
-﻿"""MAP-Elites evaluator for Zelda dungeons.
+"""MAP-Elites evaluator for Zelda dungeons.
 
 Provides a minimal MAP-Elites evaluator that can operate on a list of
 stitched dungeons (or dungeon-like objects exposing a 2D semantic grid).
@@ -585,6 +585,9 @@ class MAPElitesEvaluator:
         )
         lin = descriptor_metrics['linearity']
         len_score = descriptor_metrics['leniency']
+        if not all(math.isfinite(float(value)) for value in (*features, lin, len_score)):
+            descriptor_metrics["archive_rejected_nonfinite_descriptor"] = 1.0
+            return descriptor_metrics
 
         key = self._discretize(lin, len_score)
         score = float(
@@ -593,6 +596,7 @@ class MAPElitesEvaluator:
                 solver_result.get('quality_score', path_len)
             )
         )
+        score_is_finite = math.isfinite(score)
 
         entry = BinEntry(
             dungeon=dungeon,
@@ -601,11 +605,13 @@ class MAPElitesEvaluator:
         )
         # Keep the better-scoring entry per tie-breaker
         existing = self.grid.get(key)
-        if existing is None or score > existing.score:
-            self.grid[key] = entry
+        if score_is_finite:
+            existing_score = float(existing.score) if existing is not None else float("-inf")
+            if existing is None or not math.isfinite(existing_score) or score > existing_score:
+                self.grid[key] = entry
 
         # Mirror into advanced CVT archive when available.
-        if self._advanced_archive is not None:
+        if score_is_finite and self._advanced_archive is not None:
             try:
                 self._advanced_archive.add(
                     solution=dungeon,
@@ -654,8 +660,10 @@ class MAPElitesEvaluator:
         if path is None:
             raise ValueError("save_archive requires filepath or evaluator.archive_path.")
         path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open('wb') as f:
+        tmp_path = path.with_name(f"{path.name}.tmp")
+        with tmp_path.open('wb') as f:
             pickle.dump(self._archive_payload(), f, protocol=pickle.HIGHEST_PROTOCOL)
+        tmp_path.replace(path)
         return path
 
     def export_archive_json(self, filepath: Union[str, Path]) -> Path:
@@ -724,17 +732,26 @@ class MAPElitesEvaluator:
         grid = payload.get('grid', {})
         if not isinstance(grid, dict):
             raise ValueError(f"Invalid MAP-Elites grid payload in {path}")
-        self.grid = {
+        loaded_grid = {
             (int(key[0]), int(key[1])): value
             for key, value in grid.items()
-            if isinstance(key, tuple) and len(key) == 2 and isinstance(value, BinEntry)
+            if (
+                isinstance(key, tuple)
+                and len(key) == 2
+                and isinstance(value, BinEntry)
+                and math.isfinite(float(value.score))
+            )
         }
+        discarded = len(grid) - len(loaded_grid)
+        self.grid = loaded_grid
         self.tie_breaker = str(payload.get('tie_breaker', self.tie_breaker))
         self.descriptor_mode = str(payload.get('descriptor_mode', self.descriptor_mode)).strip().lower()
 
         advanced_archive = payload.get('advanced_archive')
         if advanced_archive is not None:
             self._advanced_archive = advanced_archive
+        if discarded:
+            logger.warning("Discarded %d invalid legacy MAP-Elites bin(s) from %s", discarded, path)
 
     def advanced_archive_stats(self) -> Optional[Dict[str, float]]:
         """Return auxiliary CVT archive stats if enabled."""

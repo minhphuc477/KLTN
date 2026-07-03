@@ -2911,6 +2911,8 @@ class LatentDiffusionModel(nn.Module):
         dit_patch_size: int = 1,
         dit_mlp_ratio: float = 4.0,
         graph_auto_linear_attention_nodes: int = 128,
+        graphormer_max_distance: int = 16,
+        graphormer_max_degree: int = 64,
         graph_to_grid_edge_semantics: bool = False,
         spatial_graph_gate_init: float = -2.0,
         spatial_topology_gate_init: float = -2.0,
@@ -2932,6 +2934,8 @@ class LatentDiffusionModel(nn.Module):
         self.hedgehog_feature_dim = int(max(4, int(hedgehog_feature_dim)))
         self.room_topology_channels = int(max(1, int(room_topology_channels)))
         self.graph_to_grid_edge_semantics = bool(graph_to_grid_edge_semantics)
+        self.graphormer_max_distance = int(max(1, graphormer_max_distance))
+        self.graphormer_max_degree = int(max(1, graphormer_max_degree))
         self.topology_conditioning_mode = str(topology_conditioning_mode).strip().lower()
         self.denoiser_backbone = str(denoiser_backbone).strip().lower()
         self.training_objective = str(training_objective).strip().lower()
@@ -2991,6 +2995,10 @@ class LatentDiffusionModel(nn.Module):
                 graph_gate_init=float(spatial_graph_gate_init),
                 topology_gate_init=float(spatial_topology_gate_init),
             )
+        for module in self.denoiser.modules():
+            if isinstance(module, CrossAttention):
+                module.graphormer_max_distance = self.graphormer_max_distance
+                module.graphormer_max_degree = self.graphormer_max_degree
         self.set_topology_refinement_mode(topology_refinement_mode)
         self.set_attention_mode(self.attention_mode)
         self.set_cfg_schedule(

@@ -132,9 +132,11 @@ diffusion:
   schedule_type: cosine  # type=str, default=cosine, valid={linear,cosine}
   topology_refinement_mode: gat2  # type=str, default=gat2, valid={none,lightweight,sparse_edge,sparse_directed,sparse_semantic,sparse_directed_semantic,gat2,gat2_directed,gat2_semantic,gat2_directed_semantic,graphormer,graphormer_learned,graphormer_learned_directed,graphormer_learned_semantic,graphormer_learned_directed_semantic}
   attention_mode: softmax  # type=str, default=softmax, valid={softmax,linear_hedgehog}
-  topology_conditioning_mode: spade  # type=str, default=additive, valid={additive,spade}; SPADE-style affine modulation is recommended for room topology maps
+  topology_conditioning_mode: spade  # type=str, default=spade, valid={additive,spade}; SPADE-style affine modulation is recommended for room topology maps
   hedgehog_feature_dim: 32  # type=int, default=32, valid>=4
   graph_auto_linear_attention_nodes: 128  # type=int, default=128, valid>=0; 0 disables auto-switch to linear graph attention
+  graphormer_max_distance: 16  # type=int, default=16, valid>=1; clipped shortest-path bucket
+  graphormer_max_degree: 64  # type=int, default=64, valid>=1; clipped in/out-degree bucket
   graph_to_grid_edge_semantics: false  # type=bool, default=false, valid={true,false}; ablation for edge-label bias in spatial graph-to-grid attention
   spatial_graph_gate_init: -2.0  # type=float, default=-2.0
   spatial_topology_gate_init: -2.0  # type=float, default=-2.0

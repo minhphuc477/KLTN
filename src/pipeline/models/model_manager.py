@@ -444,6 +444,18 @@ def load_diffusion(pipeline, checkpoint_path: Optional[str]) -> LatentDiffusionM
                 fallback_config.get("graph_auto_linear_attention_nodes", 128),
             )
         ),
+        graphormer_max_distance=int(
+            checkpoint_config.get(
+                "graphormer_max_distance",
+                fallback_config.get("graphormer_max_distance", 16),
+            )
+        ),
+        graphormer_max_degree=int(
+            checkpoint_config.get(
+                "graphormer_max_degree",
+                fallback_config.get("graphormer_max_degree", 64),
+            )
+        ),
         spatial_graph_gate_init=float(
             checkpoint_config.get("spatial_graph_gate_init", fallback_config.get("spatial_graph_gate_init", -2.0))
         ),

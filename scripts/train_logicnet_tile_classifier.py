@@ -19,7 +19,7 @@ if str(ROOT) not in sys.path:
 from src.core.logic_net import LogicNet
 from src.core.vqvae import create_vqvae
 from src.train_diffusion import _resolve_vqvae_architecture, _validate_vqvae_checkpoint_state
-from src.utils.checkpoint import safe_torch_load
+from src.utils.checkpoint import atomic_torch_save, safe_torch_load
 from src.zelda_data.zelda_loader import create_dataloader
 
 
@@ -186,7 +186,7 @@ def train(args: argparse.Namespace) -> Dict[str, Any]:
     args.metrics_out.parent.mkdir(parents=True, exist_ok=True)
     args.metrics_out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     args.checkpoint_out.parent.mkdir(parents=True, exist_ok=True)
-    torch.save(
+    atomic_torch_save(
         {
             "logic_net_state_dict": logic_net.state_dict(),
             "metrics": metrics,

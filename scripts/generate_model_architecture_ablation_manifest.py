@@ -4,6 +4,9 @@ This script closes the experiment-planning gap for:
 
 - U-Net vs. DiT backbone comparison.
 - DiT LayerNorm/GELU vs RMSNorm/GELU vs LayerNorm/SwiGLU vs RMSNorm/SwiGLU.
+- Softmax vs. Hedgehog linear attention.
+- GATv2 vs. directed semantic sparse attention vs. learned Graphormer bias.
+- SPADE vs. additive topology conditioning.
 
 Default mode is plan-only. Use ``--execute`` only when checkpoints, data, and
 compute budget are ready. The script writes a machine-readable manifest so
@@ -27,6 +30,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.config_system import merge_config  # noqa: E402
+from src.utils.checkpoint import safe_torch_load  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -35,6 +39,9 @@ class ArchitectureVariant:
     denoiser_backbone: str
     dit_activation_type: str
     dit_norm_type: str
+    attention_mode: str
+    topology_refinement_mode: str
+    topology_conditioning_mode: str
     comparison_family: str
     hypothesis: str
 
@@ -46,6 +53,9 @@ def build_variants() -> List[ArchitectureVariant]:
             denoiser_backbone="unet",
             dit_activation_type="gelu",
             dit_norm_type="layer",
+            attention_mode="softmax",
+            topology_refinement_mode="gat2",
+            topology_conditioning_mode="spade",
             comparison_family="backbone",
             hypothesis="Canonical U-Net denoiser baseline.",
         ),
@@ -54,6 +64,9 @@ def build_variants() -> List[ArchitectureVariant]:
             denoiser_backbone="dit",
             dit_activation_type="gelu",
             dit_norm_type="layer",
+            attention_mode="softmax",
+            topology_refinement_mode="gat2",
+            topology_conditioning_mode="spade",
             comparison_family="backbone+dit_norm_activation",
             hypothesis="DiT baseline with LayerNorm and GELU.",
         ),
@@ -62,6 +75,9 @@ def build_variants() -> List[ArchitectureVariant]:
             denoiser_backbone="dit",
             dit_activation_type="gelu",
             dit_norm_type="rms",
+            attention_mode="softmax",
+            topology_refinement_mode="gat2",
+            topology_conditioning_mode="spade",
             comparison_family="dit_norm_activation",
             hypothesis="RMSNorm may reduce normalization cost and improve stability.",
         ),
@@ -70,6 +86,9 @@ def build_variants() -> List[ArchitectureVariant]:
             denoiser_backbone="dit",
             dit_activation_type="swiglu",
             dit_norm_type="layer",
+            attention_mode="softmax",
+            topology_refinement_mode="gat2",
+            topology_conditioning_mode="spade",
             comparison_family="dit_norm_activation",
             hypothesis="SwiGLU may improve parameter efficiency versus GELU.",
         ),
@@ -78,8 +97,55 @@ def build_variants() -> List[ArchitectureVariant]:
             denoiser_backbone="dit",
             dit_activation_type="swiglu",
             dit_norm_type="rms",
+            attention_mode="softmax",
+            topology_refinement_mode="gat2",
+            topology_conditioning_mode="spade",
             comparison_family="dit_norm_activation",
             hypothesis="Combined RMSNorm/SwiGLU modern DiT ablation.",
+        ),
+        ArchitectureVariant(
+            name="unet_linear_hedgehog",
+            denoiser_backbone="unet",
+            dit_activation_type="gelu",
+            dit_norm_type="layer",
+            attention_mode="linear_hedgehog",
+            topology_refinement_mode="gat2",
+            topology_conditioning_mode="spade",
+            comparison_family="attention_kernel",
+            hypothesis="Linear attention trades exact softmax interactions for graph-scaling efficiency.",
+        ),
+        ArchitectureVariant(
+            name="unet_sparse_directed_semantic",
+            denoiser_backbone="unet",
+            dit_activation_type="gelu",
+            dit_norm_type="layer",
+            attention_mode="softmax",
+            topology_refinement_mode="sparse_directed_semantic",
+            topology_conditioning_mode="spade",
+            comparison_family="topology_refinement",
+            hypothesis="Directed edge-semantic sparse attention preserves topology without all-pairs preprocessing.",
+        ),
+        ArchitectureVariant(
+            name="unet_graphormer_learned_directed_semantic",
+            denoiser_backbone="unet",
+            dit_activation_type="gelu",
+            dit_norm_type="layer",
+            attention_mode="softmax",
+            topology_refinement_mode="graphormer_learned_directed_semantic",
+            topology_conditioning_mode="spade",
+            comparison_family="topology_refinement",
+            hypothesis="Learned distance and edge bias may improve structural fidelity on small graphs.",
+        ),
+        ArchitectureVariant(
+            name="unet_additive_topology",
+            denoiser_backbone="unet",
+            dit_activation_type="gelu",
+            dit_norm_type="layer",
+            attention_mode="softmax",
+            topology_refinement_mode="gat2",
+            topology_conditioning_mode="additive",
+            comparison_family="topology_conditioning",
+            hypothesis="Additive topology injection is the parameter-matched baseline for SPADE conditioning.",
         ),
     ]
 
@@ -116,6 +182,13 @@ def _command_for(
         str(int(seed)),
         "--vqvae-checkpoint",
         str(vqvae_checkpoint),
+        "--attention-mode",
+        variant.attention_mode,
+        "--topology-refinement-mode",
+        variant.topology_refinement_mode,
+        "--topology-conditioning-mode",
+        variant.topology_conditioning_mode,
+        "--no-auto-resume",
     ]
     if variant.denoiser_backbone == "dit":
         command.extend(
@@ -179,6 +252,11 @@ def _collect_metric_names(path: Path) -> set[str]:
             return set(next(csv.reader(handle), []))
     if suffix == ".json":
         payload = json.loads(path.read_text(encoding="utf-8"))
+    elif suffix in {".pt", ".pth"}:
+        payload = safe_torch_load(path, map_location="cpu")
+    else:
+        return set()
+    if isinstance(payload, (list, Mapping)):
         names: set[str] = set()
 
         def visit(value: Any) -> None:
@@ -233,6 +311,9 @@ def build_plan(args: argparse.Namespace) -> Dict[str, Any]:
                     "command": command,
                     "status": "planned",
                     "elapsed_sec": 0.0,
+                    "output_paths": [
+                        str(output_dir / variant.name / f"seed_{seed}" / "checkpoints" / "final_model.pth"),
+                    ],
                 }
             )
     return {
@@ -243,8 +324,15 @@ def build_plan(args: argparse.Namespace) -> Dict[str, Any]:
         "resolved_output_dir": str(resolved["runtime"]["output_dir"]),
         "output_dir": str(output_dir),
         "required_metrics": [
+            "epoch",
+            "loss",
+            "diffusion_loss",
+            "val_diffusion_loss",
+            "val_total_loss",
+            "lr",
+        ],
+        "evaluation_metrics_required_for_paper": [
             "wall_clock_time_per_step",
-            "loss_mean",
             "loss_variance",
             "parameter_count",
             "validation_tile_kl",

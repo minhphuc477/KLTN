@@ -847,3 +847,135 @@ Focused verification:
 - The distributed fix was not exercised with a real multi-rank GPU job in this
   pass; it was patched at the collective ordering level and still needs a
   torchrun MoE/dynamic-graph smoke run before publication claims.
+
+### Repository-Wide Audit Pass (2026-07-03)
+
+Components checked in this pass:
+
+- Training loops: diffusion, masked-room, LCM-LoRA, VQ-VAE, Gaussian VAE, and
+  LogicNet tile-classifier scripts.
+- Pipeline artifacts: advanced pipeline result export, generation sampler
+  entry points, robust orchestration, and room stitching surfaces.
+- Quality-diversity archives: simulation MAP-Elites, evaluation MAP-Elites,
+  CVT emitter archives, archive JSON/export paths, and QD metric aggregation.
+- Validation/search surface: full-state A*, diagnostic bidirectional/D* Lite
+  boundaries, P-CBS evaluation utilities, and timeout reporting helpers.
+- Data and model I/O: Zelda dataset loaders, processed-data adapters,
+  checkpoint utilities, heuristic-learning model save/load, and experiment
+  output writers.
+- Ablation scripts: Round-5 study runner, LogicNet repair ablation,
+  fast-sampler visual audit, P-CBS component/persona sweeps, designer
+  controllability, random baseline, and paired-seed reporting scripts.
+
+Confirmed and fixed:
+
+- The lightweight simulation MAP-Elites wrapper now rejects all non-finite
+  scores, not just `NaN`, before inserting into its legacy grid or mirroring
+  into the CVT archive.
+- MAP-Elites and CVT archive persistence now uses temporary files followed by
+  `replace()` so interrupted archive saves do not corrupt the active archive.
+- Evolutionary-director CVT QD archive persistence now writes atomically.
+- Processed Zelda adapter dumps now write through a temporary pickle file
+  before replacing the requested output.
+- Heuristic-learning model checkpoints and LogicNet tile-classifier
+  checkpoints now use the repository `atomic_torch_save()` helper.
+- Advanced pipeline artifact export now writes dungeon grids, visual grids,
+  mission graph, and stats through temp files before replacement. Stats JSON is
+  written with `allow_nan=False` so non-standard NaN evidence cannot silently
+  enter artifact bundles.
+
+Checked and retained:
+
+- The remaining explicit `torch.save()` call is inside `atomic_torch_save()`.
+- The remaining `while True` loops in production search/generation code are
+  bounded by visited sets, Bresenham endpoint equality, or interactive CLI
+  commands; no new non-interactive infinite loop was confirmed in this pass.
+- Several experiment scripts still intentionally emit planned manifests or
+  `NaN` placeholders before sanitization. Those are acceptable only when they
+  are explicitly labeled as planned/missing evidence and are not promoted to
+  executed result tables.
+
+### Direct Source Audit And Architecture Wiring Pass (2026-07-03)
+
+Directly inspected components:
+
+- Block I: grammar generation, evolutionary director, MAP-Elites/CVT archives,
+  graph descriptors, and node-cap/feasibility boundaries.
+- Block II: VQ-VAE and Gaussian-VAE models, codebook maintenance, standalone
+  trainers, validation aggregation, and checkpoint selection.
+- Block III: strict graph-conditioning schemas, padded-node masks, all-masked
+  attention rows, topology maps, and edge-semantic conditioning.
+- Block IV: U-Net/DiT diffusion, LCM-LoRA fast sampling, categorical and
+  MaskGIT paths, attention/topology refinement modes, and sampler decoding.
+- Block V: LogicNet supervision and guidance wiring in diffusion and
+  masked-room training.
+- Block VI: weighted Bayesian WFC propagation, backtracking/restart bounds,
+  symbolic repair, and pre/post-repair metric separation.
+- Block VII: finite archive contracts, QD replacement semantics, persistence,
+  and archive statistics.
+- Cross-cutting: full-state A* oracle, restricted bidirectional/D* Lite roles,
+  P-CBS behavioral evaluation, retry contracts, dataset alignment,
+  distributed gradients, experiment manifests, and atomic artifacts.
+
+Confirmed and fixed:
+
+- Uniform-grid and CVT archives now reject non-finite or wrong-dimensional
+  behavior descriptors before cell lookup. Loaded uniform archives discard
+  invalid legacy elites, and feature-diversity statistics use only valid rows.
+- The simulation MAP-Elites archive now lets a finite candidate replace a
+  legacy non-finite cell and discards invalid bins while loading.
+- `atomic_torch_save()` now uses a unique sibling temp file and removes it on
+  failure. Filename-only heuristic checkpoints work without requiring a
+  directory component.
+- `CheckpointManager` now updates `best_metric` even when regular epoch
+  checkpoints are enabled. Missing/non-finite best metrics cannot overwrite
+  `best_model.pth`; invalid comparison modes fail at construction.
+- VQ-VAE and Gaussian-VAE trainers now skip optimizer updates for non-finite
+  losses, gradients, or clipped gradient norms. Their training/evaluation
+  loops exclude skipped batches and fail instead of saving a zero-valued model
+  selection metric when every batch is invalid.
+- Diffusion, masked-room, and LCM-LoRA epoch aggregation now excludes
+  explicitly skipped non-finite batches and reports the skipped count.
+- Diffusion and DPO loss-finiteness decisions are reduced across all workers
+  before backward. One rank can no longer return early while peers enter
+  gradient collectives for the same batch.
+- MaskGIT edge-aware topology bias now raises a non-retryable contract error
+  on topology/logit shape drift instead of silently generating without graph
+  constraints.
+- Learned Graphormer distance and degree clipping are configurable through
+  config, training CLI, checkpoints, and inference reconstruction instead of
+  being fixed at 16/64.
+- The architecture-ablation manifest now has explicit single-factor attention,
+  topology-refinement, and topology-conditioning arms. Runs disable implicit
+  auto-resume, declare `final_model.pth` as evidence, and validate metrics that
+  training actually writes. Publication-only quality/efficiency metrics remain
+  separately labeled as requiring downstream evaluation.
+- Weighted Bayesian WFC now validates prior domains at construction,
+  precomputes directional compatibility matrices, and uses a deque in its
+  propagation loop. This removes repeated tile-pair recomputation without
+  changing the compatibility rule.
+- A stale WFC pseudo-label test was corrected: one repaired sample in a
+  four-sample batch contributes one quarter of the repaired-sample mean,
+  preserving proportional full-batch supervision.
+
+Verification:
+
+- Direct behavior probes passed for archive descriptor rejection and legacy
+  replacement, checkpoint best-epoch selection, atomic temp cleanup,
+  non-finite VAE update rejection, Graphormer bucket wiring, MaskGIT topology
+  contract failure, architecture-ablation command wiring, and WFC generation.
+- `72` VQ-VAE/Gaussian-VAE/evaluation tests passed.
+- `91` vulnerability, topology, and diffusion-conditioning tests passed after
+  correcting the stale WFC expectation.
+- `14` weighted-WFC and mathematical-rigor tests passed.
+- Compile and Ruff checks passed on all files changed in this pass.
+
+Still empirical, not code-complete evidence:
+
+- Real multi-rank dynamic-parameter gradient synchronization must be exercised
+  with `torchrun`.
+- SPADE/additive, attention-kernel, topology-refinement, LCM-LoRA, WFC-prior,
+  P-CBS persona, and 100/500-room controllability arms still require matched
+  seeds, trained checkpoints, timing/memory capture, and statistical analysis.
+- Human-likeness claims still require calibrated playtest telemetry; P-CBS is
+  a behavioral proxy and must not be presented as a validated human model.

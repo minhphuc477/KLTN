@@ -1775,16 +1775,30 @@ class DungeonGenerationResult:
         output_dir.mkdir(parents=True, exist_ok=True)
         
         # Save grids
-        np.save(output_dir / "dungeon_grid.npy", self.dungeon_grid)
-        np.save(output_dir / "visual_grid.npy", self.visual_grid)
+        dungeon_grid_path = output_dir / "dungeon_grid.npy"
+        dungeon_grid_tmp = dungeon_grid_path.with_name(f"{dungeon_grid_path.name}.tmp")
+        with open(dungeon_grid_tmp, "wb") as grid_file:
+            np.save(grid_file, self.dungeon_grid)
+        dungeon_grid_tmp.replace(dungeon_grid_path)
+
+        visual_grid_path = output_dir / "visual_grid.npy"
+        visual_grid_tmp = visual_grid_path.with_name(f"{visual_grid_path.name}.tmp")
+        with open(visual_grid_tmp, "wb") as grid_file:
+            np.save(grid_file, self.visual_grid)
+        visual_grid_tmp.replace(visual_grid_path)
         
         # Save mission graph
-        with open(output_dir / "mission_graph.gpickle", "wb") as graph_file:
+        graph_path = output_dir / "mission_graph.gpickle"
+        graph_tmp = graph_path.with_name(f"{graph_path.name}.tmp")
+        with open(graph_tmp, "wb") as graph_file:
             pickle.dump(self.mission_graph, graph_file, protocol=pickle.HIGHEST_PROTOCOL)
+        graph_tmp.replace(graph_path)
         
         # Save stats as JSON
         import json
-        with open(output_dir / "stats.json", "w") as f:
+        stats_path = output_dir / "stats.json"
+        stats_tmp = stats_path.with_name(f"{stats_path.name}.tmp")
+        with open(stats_tmp, "w", encoding="utf-8") as f:
             json.dump({
                 "total_time": self.stats.total_time,
                 "generation_time": self.stats.generation_time,
@@ -1810,7 +1824,8 @@ class DungeonGenerationResult:
                 "wfc_prior_sha256": self.stats.wfc_prior_sha256,
                 "decision_count": self.stats.decision_count,
                 "fully_traceable": self.stats.fully_traceable
-            }, f, indent=2)
+            }, f, indent=2, allow_nan=False)
+        stats_tmp.replace(stats_path)
         
         logger.info(f"Artifacts saved to {output_dir}")
 

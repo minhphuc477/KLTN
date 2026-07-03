@@ -510,11 +510,19 @@ class DiscreteMaskedRoomModel(nn.Module):
         topo = topo.to(logits.device)
         if topo.dim() == 3:
             topo = topo.unsqueeze(0)
+        if topo.dim() != 4:
+            raise ModelContextContractError(
+                "room_topology_map must have shape [C,H,W] or [B,C,H,W], "
+                f"got {tuple(topo.shape)}."
+            )
         if int(topo.shape[0]) == 1 and B > 1:
             topo = topo.expand(B, -1, -1, -1)
         if int(topo.shape[0]) != B or topo.shape[-2:] != (H, W):
-            # Shape mismatch - skip silently rather than crash.
-            return logits
+            raise ModelContextContractError(
+                "room_topology_map/logit contract mismatch: "
+                f"topology={tuple(topo.shape)}, logits={tuple(logits.shape)}. "
+                "Refusing to drop topology conditioning silently."
+            )
 
         bias = torch.zeros_like(logits)  # [B, C, H, W]
         door_mask = self._door_class_mask.to(logits.device)  # [C]

@@ -35,7 +35,6 @@ from src.pipeline.room_topology_conditioning import (
     DEFAULT_PUZZLE_STAGE_TRACE_DECAY,
     DEFAULT_SEMANTIC_PUZZLE_OFFSET,
     DEFAULT_SEMANTIC_ROLE_PRIOR_STRENGTH,
-    apply_puzzle_structure_control_to_conditioning,
     apply_puzzle_structure_dropout_batch,
     build_topology_anchor_policy_metadata,
     build_topology_loss_focus_map,
@@ -793,6 +792,7 @@ class ConsistencyLoRATrainer:
             "val_puzzle_stage_slot_acc": 0.0,
         }
         count = 0
+        skipped = 0
         for batch_idx, batch_data in enumerate(dataloader):
             if isinstance(batch_data, (list, tuple)) and len(batch_data) == 2:
                 real_maps, graph_list = batch_data
@@ -804,13 +804,28 @@ class ConsistencyLoRATrainer:
                 batch_index=batch_idx,
                 eval_seed=eval_seed,
             )
+            if float(step_metrics.get("skipped_nonfinite_batch", 0.0)) >= 0.5:
+                skipped += 1
+                if max_batches is not None and batch_idx + 1 >= int(max_batches):
+                    break
+                continue
             for key, value in step_metrics.items():
+                if key == "skipped_nonfinite_batch":
+                    continue
                 metrics[key] = metrics.get(key, 0.0) + float(value)
             count += 1
-            if max_batches is not None and count >= int(max_batches):
+            if max_batches is not None and batch_idx + 1 >= int(max_batches):
                 break
         self.student.train()
-        return {k: (v / max(1, count)) for k, v in metrics.items()}
+        if count <= 0:
+            raise RuntimeError(
+                "Fast-sampler validation produced no finite batches "
+                f"({skipped} non-finite batch(es))."
+            )
+        averaged = {k: (v / max(1, count)) for k, v in metrics.items()}
+        averaged["skipped_nonfinite_batches"] = float(skipped)
+        averaged["valid_batches"] = float(count)
+        return averaged
 
     @torch.no_grad()
     def distill_step_eval(
@@ -908,7 +923,7 @@ class ConsistencyLoRATrainer:
             + (self.config.topology_alignment_weight * topology_decode_ce_loss)
             + (float(getattr(self.config, "puzzle_stage_semantics_loss_weight", 0.0)) * puzzle_stage_semantic_loss)
         )
-        return {
+        metrics = {
             "val_loss": float(loss.item()),
             "val_x0_loss": float(x0_loss.item()),
             "val_prediction_loss": float(pred_loss.item()),
@@ -918,6 +933,10 @@ class ConsistencyLoRATrainer:
             "val_puzzle_stage_gate_acc": float(puzzle_stage_semantic_metrics["puzzle_stage_gate_acc"]),
             "val_puzzle_stage_slot_acc": float(puzzle_stage_semantic_metrics["puzzle_stage_slot_acc"]),
         }
+        metrics["skipped_nonfinite_batch"] = (
+            0.0 if all(self._tensor_is_finite(value) for value in metrics.values()) else 1.0
+        )
+        return metrics
 
     def save_checkpoint(self, path: str, metrics: Optional[Dict[str, Any]] = None) -> None:
         save_fast_sampler_checkpoint(
@@ -1264,6 +1283,7 @@ def train_fast_sampler(config: FastSamplerTrainingConfig) -> ConsistencyLoRATrai
             "topology_decode_ce_loss": 0.0,
         }
         count = 0
+        skipped = 0
         for batch_idx, batch_data in enumerate(train_loader):
             if isinstance(batch_data, (list, tuple)) and len(batch_data) == 2:
                 real_maps, graph_list = batch_data
@@ -1277,7 +1297,17 @@ def train_fast_sampler(config: FastSamplerTrainingConfig) -> ConsistencyLoRATrai
                     dropout_prob=float(config.puzzle_structure_dropout_prob),
                 )
             step_metrics = trainer.distill_step(real_maps, graph_list)
+            if float(step_metrics.get("skipped_nonfinite_batch", 0.0)) >= 0.5:
+                skipped += 1
+                logger.warning(
+                    "Skipping non-finite fast-sampler batch %d in epoch %d.",
+                    batch_idx,
+                    epoch + 1,
+                )
+                continue
             for key, value in step_metrics.items():
+                if key == "skipped_nonfinite_batch":
+                    continue
                 running[key] = running.get(key, 0.0) + float(value)
             count += 1
             if batch_idx % 10 == 0:
@@ -1290,7 +1320,13 @@ def train_fast_sampler(config: FastSamplerTrainingConfig) -> ConsistencyLoRATrai
                     step_metrics["topology_decode_ce_loss"],
                 )
 
-        train_metrics = {k: (v / max(1, count)) for k, v in running.items()}
+        if count <= 0:
+            raise RuntimeError(
+                f"Fast-sampler epoch {epoch + 1} produced no finite training batches "
+                f"({skipped} non-finite batch(es))."
+            )
+        train_metrics = {k: (v / count) for k, v in running.items()}
+        train_metrics["skipped_nonfinite_batches"] = float(skipped)
         val_metrics = trainer.validate(
             val_loader,
             max_batches=config.validation_max_batches,

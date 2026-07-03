@@ -1476,15 +1476,16 @@ class MaskedRoomTrainer:
             "logic_global_graph_reachability": self._logic_info_scalar(logic_info, "global_graph_reachability", 0.0),
             "logic_global_room_passability": self._logic_info_scalar(logic_info, "global_room_passability", 0.0),
         }
-        if train:
-            if not self._tensor_is_finite(total_loss):
+        if not self._tensor_is_finite(total_loss):
+            if train:
                 self.optimizer.zero_grad(set_to_none=True)
-                metrics = dict(metrics)
-                metrics["loss"] = 0.0
-                metrics.update(puzzle_stage_semantic_metrics)
-                metrics.update(logic_metrics)
-                metrics["skipped_nonfinite_batch"] = 1.0
-                return metrics
+            metrics = dict(metrics)
+            metrics["loss"] = 0.0
+            metrics.update(puzzle_stage_semantic_metrics)
+            metrics.update(logic_metrics)
+            metrics["skipped_nonfinite_batch"] = 1.0
+            return metrics
+        if train:
             self.optimizer.zero_grad()
             total_loss.backward()
             trainable_params = [
@@ -1793,6 +1794,7 @@ def train_masked_room(config: MaskedRoomTrainingConfig) -> MaskedRoomTrainer:
             "puzzle_stage_slot_acc": 0.0,
         }
         train_batches = 0
+        skipped_train_batches = 0
         for batch in train_loader:
             real_maps, graph_list = batch if isinstance(batch, (list, tuple)) and len(batch) == 2 else (batch, None)
             if graph_list is not None and float(getattr(config, "puzzle_structure_dropout_prob", 0.0)) > 0.0:
@@ -1803,6 +1805,9 @@ def train_masked_room(config: MaskedRoomTrainingConfig) -> MaskedRoomTrainer:
                     dropout_prob=float(config.puzzle_structure_dropout_prob),
                 )
             metrics = trainer._step(real_maps, graph_list, train=True)
+            if float(metrics.get("skipped_nonfinite_batch", 0.0)) >= 0.5:
+                skipped_train_batches += 1
+                continue
             for key, value in metrics.items():
                 train_sum[key] = float(train_sum.get(key, 0.0)) + float(value)
             train_batches += 1
@@ -1814,27 +1819,33 @@ def train_masked_room(config: MaskedRoomTrainingConfig) -> MaskedRoomTrainer:
             trainer.logic_net.eval()
         val_sum: Dict[str, float] = {}
         val_batches = 0
+        skipped_val_batches = 0
         with torch.no_grad():
             for batch_idx, batch in enumerate(val_loader):
                 real_maps, graph_list = batch if isinstance(batch, (list, tuple)) and len(batch) == 2 else (batch, None)
                 metrics = trainer._step(real_maps, graph_list, train=False)
-                for key, value in metrics.items():
-                    metric_key = f"val_{key}"
-                    val_sum[metric_key] = float(val_sum.get(metric_key, 0.0)) + float(value)
-                val_batches += 1
+                if float(metrics.get("skipped_nonfinite_batch", 0.0)) >= 0.5:
+                    skipped_val_batches += 1
+                else:
+                    for key, value in metrics.items():
+                        metric_key = f"val_{key}"
+                        val_sum[metric_key] = float(val_sum.get(metric_key, 0.0)) + float(value)
+                    val_batches += 1
                 if batch_idx + 1 >= int(getattr(config, "validation_max_batches", 16)):
                     break
 
         if train_batches <= 0:
-            logger.warning(
-                "Skipping masked-room scheduler step for epoch %d because no train batches were processed.",
-                epoch,
+            raise RuntimeError(
+                f"Masked-room epoch {epoch + 1} produced no finite training batches "
+                f"({skipped_train_batches} non-finite batch(es))."
             )
         epoch_metrics = {
             "epoch": epoch,
             "eval_split": eval_split_name,
             **{k: v / max(1, train_batches) for k, v in train_sum.items()},
             **{k: v / max(1, val_batches) for k, v in val_sum.items()},
+            "skipped_nonfinite_train_batches": float(skipped_train_batches),
+            "skipped_nonfinite_val_batches": float(skipped_val_batches),
         }
         if val_batches <= 0:
             for key in train_sum:

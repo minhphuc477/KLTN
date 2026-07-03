@@ -215,6 +215,8 @@ CONFIG_FIELDS: List[ConfigField] = [
     ConfigField("diffusion.topology_conditioning_mode", str, "spade", "Room-topology conditioning path.", choices=("additive", "spade")),
     ConfigField("diffusion.hedgehog_feature_dim", int, 32, "Linear-attention feature width.", min_value=4),
     ConfigField("diffusion.graph_auto_linear_attention_nodes", int, 128, "Switch graph-to-grid attention to linear mode above this node count. 0 disables the auto-switch.", min_value=0),
+    ConfigField("diffusion.graphormer_max_distance", int, 16, "Largest distinct shortest-path bucket for learned Graphormer bias; larger distances share a clipped bucket.", min_value=1),
+    ConfigField("diffusion.graphormer_max_degree", int, 64, "Largest distinct in/out-degree bucket for learned Graphormer encodings.", min_value=1),
     ConfigField("diffusion.graph_to_grid_edge_semantics", bool, False, "Ablation: inject edge-label semantics into graph-to-grid spatial attention."),
     ConfigField("diffusion.spatial_graph_gate_init", float, -2.0, "Initial logit for graph-conditioning gate."),
     ConfigField("diffusion.spatial_topology_gate_init", float, -2.0, "Initial logit for room-topology gate."),

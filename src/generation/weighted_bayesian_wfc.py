@@ -49,7 +49,7 @@ import numpy as np
 import logging
 from typing import Dict, List, Tuple, Optional, Any
 from dataclasses import dataclass, field
-from collections import defaultdict, Counter
+from collections import Counter, defaultdict, deque
 
 logger = logging.getLogger(__name__)
 
@@ -122,15 +122,26 @@ class WeightedBayesianWFC:
         config: Optional[WeightedBayesianWFCConfig] = None,
         seed: Optional[int] = None,
     ):
-        self.width = width
-        self.height = height
+        self.width = int(width)
+        self.height = int(height)
+        if self.width <= 0 or self.height <= 0:
+            raise ValueError(f"WFC width and height must be positive, got {(width, height)}.")
+        if not tile_priors:
+            raise ValueError("WeightedBayesianWFC requires at least one tile prior.")
         self.tile_priors = tile_priors
         self.config = config or WeightedBayesianWFCConfig()
         
         # Get all tile IDs
         self.tile_ids = list(tile_priors.keys())
+        for tile_id in self.tile_ids:
+            frequency = float(tile_priors[tile_id].frequency)
+            if not np.isfinite(frequency) or frequency < 0.0:
+                raise ValueError(
+                    f"Tile prior frequency must be finite and non-negative, got {frequency} for tile {tile_id}."
+                )
         self._tile_to_index = {tile_id: i for i, tile_id in enumerate(self.tile_ids)}
         self.num_tiles = len(self.tile_ids)
+        self._compatibility_by_direction = self._build_compatibility_matrices()
         self._base_distribution = self._compute_base_distribution()
         self.superposition = np.empty((height, width, self.num_tiles), dtype=np.float32)
         self.grid = np.full((height, width), -1, dtype=int)
@@ -153,6 +164,27 @@ class WeightedBayesianWFC:
         self._reset_generation_state()
         
         logger.info(f"Initialized Weighted Bayesian WFC: {width}x{height}, {self.num_tiles} tiles")
+
+    def _build_compatibility_matrices(self) -> Dict[str, np.ndarray]:
+        """Precompute P(neighbor | source, direction) for the propagation hot path."""
+        matrices: Dict[str, np.ndarray] = {}
+        for direction in ("N", "S", "E", "W"):
+            matrix = np.zeros((self.num_tiles, self.num_tiles), dtype=np.float32)
+            for source_idx, source_tile_id in enumerate(self.tile_ids):
+                prior = self.tile_priors[source_tile_id]
+                for neighbor_idx, neighbor_tile_id in enumerate(self.tile_ids):
+                    probability = float(
+                        prior.get_adjacency_probability(neighbor_tile_id, direction)
+                    )
+                    if not np.isfinite(probability) or probability < 0.0:
+                        raise ValueError(
+                            "Adjacency probabilities must be finite and non-negative: "
+                            f"source={source_tile_id}, neighbor={neighbor_tile_id}, "
+                            f"direction={direction}, value={probability}."
+                        )
+                    matrix[source_idx, neighbor_idx] = probability
+            matrices[direction] = matrix
+        return matrices
     
     def generate(
         self,
@@ -425,11 +457,11 @@ class WeightedBayesianWFC:
         For each neighbor, update its tile probabilities based on adjacency
         compatibility with the collapsed tile.
         """
-        queue: List[Tuple[int, int]] = [(row, col)]
+        queue = deque([(row, col)])
         processed_soft_edges = set()
 
         while queue:
-            source_row, source_col = queue.pop(0)
+            source_row, source_col = queue.popleft()
             source_probs = self.superposition[source_row, source_col, :]
             source_indices = np.flatnonzero(source_probs > 0.0)
             if len(source_indices) == 0:
@@ -446,15 +478,7 @@ class WeightedBayesianWFC:
                 if not (0 <= nr < self.height and 0 <= nc < self.width):
                     continue
 
-                compatibility = np.zeros(self.num_tiles, dtype=np.float32)
-                for source_idx in source_indices:
-                    source_tile_id = self.tile_ids[int(source_idx)]
-                    prior = self.tile_priors[source_tile_id]
-                    for neighbor_idx, neighbor_tile_id in enumerate(self.tile_ids):
-                        compatibility[neighbor_idx] = max(
-                            compatibility[neighbor_idx],
-                            float(prior.get_adjacency_probability(neighbor_tile_id, direction)),
-                        )
+                compatibility = self._compatibility_by_direction[direction][source_indices].max(axis=0)
 
                 if self.collapsed_mask[nr, nc]:
                     neighbor_idx = self._tile_to_index[int(self.grid[nr, nc])]

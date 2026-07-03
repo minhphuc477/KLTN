@@ -34,7 +34,7 @@ from src.generation.grammar import (
 from src.zelda_data.vglc_utils import filter_virtual_nodes, validate_topology
 
 from ._shared import CVTEliteArchive, DEFAULT_REALISM_TUNING, DEFAULT_ZELDA_TRANSITIONS
-from .converters import mission_graph_to_networkx, networkx_to_mission_graph
+from .converters import mission_graph_to_networkx
 from .evaluator import TensionCurveEvaluator
 from .executor import GraphGrammarExecutor
 from .individual import Individual
@@ -2868,8 +2868,10 @@ class EvolutionaryTopologyGenerator:
                     "seed": self.seed,
                 },
             }
-            with self.qd_archive_path.open("wb") as f:
+            tmp_path = self.qd_archive_path.with_name(f"{self.qd_archive_path.name}.tmp")
+            with tmp_path.open("wb") as f:
                 pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
+            tmp_path.replace(self.qd_archive_path)
         except (AttributeError, OSError, pickle.PickleError, TypeError, ValueError) as exc:
             logger.warning("Failed to persist QD archive to %s: %s", self.qd_archive_path, exc)
 

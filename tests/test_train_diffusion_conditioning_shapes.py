@@ -676,7 +676,7 @@ def test_wfc_pseudo_label_loss_is_opt_in_and_backpropagates(monkeypatch):
     assert pred_tile_logits.grad.abs().sum().item() > 0.0
 
 
-def test_wfc_pseudo_label_loss_scales_subset_by_repaired_samples(monkeypatch):
+def test_wfc_pseudo_label_loss_scales_by_original_batch_coverage(monkeypatch):
     trainer = DiffusionTrainer.__new__(DiffusionTrainer)
     trainer.device = torch.device("cpu")
     trainer.global_step = 0
@@ -702,7 +702,7 @@ def test_wfc_pseudo_label_loss_scales_subset_by_repaired_samples(monkeypatch):
     )
 
     assert sample_count == pytest.approx(1.0)
-    assert scaled_loss.item() == pytest.approx(repaired_mean.item())
+    assert scaled_loss.item() == pytest.approx(repaired_mean.item() / 4.0)
 
 
 def test_wfc_pseudo_label_loss_keeps_successful_sample_alignment(monkeypatch):

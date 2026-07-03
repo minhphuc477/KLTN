@@ -394,8 +394,9 @@ class HeuristicTrainer:
     
     def save_model(self, path: str):
         """Save trained model to disk."""
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        torch.save({
+        from src.utils.checkpoint import atomic_torch_save
+
+        atomic_torch_save({
             'model_state_dict': self.model.state_dict(),
             'map_height': self.map_height,
             'map_width': self.map_width,

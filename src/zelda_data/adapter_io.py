@@ -140,8 +140,10 @@ def save_processed_data(
             "node_features": getattr(dungeon, "node_features", None),
         }
 
-    with open(output_path, "wb") as file_obj:
+    tmp_path = output_path.with_name(f"{output_path.name}.tmp")
+    with open(tmp_path, "wb") as file_obj:
         pickle.dump(save_data, file_obj)
+    tmp_path.replace(output_path)
 
     logger.info("Saved processed data to %s", output_path)
     return str(output_path)

@@ -30,6 +30,7 @@ Metrics:
 import logging
 from typing import Dict, List, Tuple, Optional, Any, Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 import random
 
 import numpy as np
@@ -381,13 +382,28 @@ class EliteArchive:
         cells_per_dim: int = 10,
         feature_ranges: Optional[List[Tuple[float, float]]] = None,
     ):
-        self.feature_dims = feature_dims
-        self.cells_per_dim = cells_per_dim
+        self.feature_dims = int(feature_dims)
+        self.cells_per_dim = int(cells_per_dim)
+        if self.feature_dims <= 0:
+            raise ValueError(f"feature_dims must be positive, got {feature_dims}.")
+        if self.cells_per_dim <= 0:
+            raise ValueError(f"cells_per_dim must be positive, got {cells_per_dim}.")
         
         # Default ranges: [0, 1] for each dimension
         if feature_ranges is None:
-            feature_ranges = [(0.0, 1.0) for _ in range(feature_dims)]
-        self.feature_ranges = feature_ranges
+            feature_ranges = [(0.0, 1.0) for _ in range(self.feature_dims)]
+        if len(feature_ranges) != self.feature_dims:
+            raise ValueError(
+                f"feature_ranges must contain {self.feature_dims} ranges, got {len(feature_ranges)}."
+            )
+        self.feature_ranges = []
+        for index, bounds in enumerate(feature_ranges):
+            if len(bounds) != 2:
+                raise ValueError(f"Feature range {index} must contain (min, max), got {bounds!r}.")
+            lower, upper = float(bounds[0]), float(bounds[1])
+            if not np.isfinite(lower) or not np.isfinite(upper) or upper <= lower:
+                raise ValueError(f"Feature range {index} must be finite with max > min, got {bounds!r}.")
+            self.feature_ranges.append((lower, upper))
         
         # Archive storage: cell -> Elite
         self.archive: Dict[Tuple[int, ...], Elite] = {}
@@ -417,6 +433,16 @@ class EliteArchive:
             cell_idx = min(int(np.floor(scaled + 1e-12)), self.cells_per_dim - 1)
             cell.append(cell_idx)
         return tuple(cell)
+
+    def _validated_features(self, features: Tuple[float, ...]) -> Optional[Tuple[float, ...]]:
+        """Return a finite, dimensionally valid feature vector or ``None``."""
+        try:
+            values = tuple(float(value) for value in features)
+        except (TypeError, ValueError):
+            return None
+        if len(values) != self.feature_dims or not all(np.isfinite(value) for value in values):
+            return None
+        return values
     
     def add(
         self,
@@ -446,13 +472,17 @@ class EliteArchive:
         if not feasible:
             self.total_rejections += 1
             return False
-        
-        cell = self._discretize(features)
+        validated_features = self._validated_features(features)
+        if validated_features is None:
+            self.total_rejections += 1
+            return False
+
+        cell = self._discretize(validated_features)
         
         elite = Elite(
             solution=solution,
             fitness=fitness_value,
-            features=features,
+            features=validated_features,
             cell=cell,
             metadata=metadata or {},
         )
@@ -499,7 +529,12 @@ class EliteArchive:
         fitnesses = [float(e.fitness) for e in self.archive.values() if np.isfinite(float(e.fitness))]
         if not fitnesses:
             fitnesses = [0.0]
-        features = np.array([e.features for e in self.archive.values()])
+        feature_rows = []
+        for elite in self.archive.values():
+            validated = self._validated_features(elite.features)
+            if validated is not None:
+                feature_rows.append(validated)
+        features = np.asarray(feature_rows, dtype=np.float64)
         
         total_cells = self.cells_per_dim ** self.feature_dims
         
@@ -510,7 +545,7 @@ class EliteArchive:
             max_fitness=float(max(fitnesses)),
             min_fitness=float(min(fitnesses)),
             num_elites=len(self.archive),
-            feature_diversity=np.var(features).mean() if len(features) > 1 else 0.0,
+            feature_diversity=float(np.var(features, axis=0).mean()) if len(features) > 1 else 0.0,
         )
     
     def clear(self):
@@ -804,7 +839,10 @@ class MAPElites:
     def save_archive(self, filepath: str):
         """Save archive to file."""
         import pickle
-        with open(filepath, 'wb') as f:
+        path = Path(filepath)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = path.with_name(f"{path.name}.tmp")
+        with tmp_path.open('wb') as f:
             pickle.dump({
                 'archive': self.archive.archive,
                 'stats': {
@@ -814,7 +852,8 @@ class MAPElites:
                     'total_rejections': self.archive.total_rejections,
                 }
             }, f)
-        logger.info(f"Saved archive to {filepath}")
+        tmp_path.replace(path)
+        logger.info(f"Saved archive to {path}")
     
     def load_archive(self, filepath: str):
         """Load archive from file."""
@@ -822,12 +861,27 @@ class MAPElites:
         with open(filepath, 'rb') as f:
             data = pickle.load(f)
         
-        self.archive.archive = data['archive']
+        loaded_archive = data.get('archive', {})
+        if not isinstance(loaded_archive, dict):
+            raise ValueError(f"Invalid MAP-Elites archive payload in {filepath}")
+        valid_archive = {}
+        for cell, elite in loaded_archive.items():
+            if not isinstance(elite, Elite):
+                continue
+            validated_features = self.archive._validated_features(elite.features)
+            if validated_features is None or not np.isfinite(float(elite.fitness)):
+                continue
+            elite.features = validated_features
+            valid_archive[cell] = elite
+        discarded = len(loaded_archive) - len(valid_archive)
+        self.archive.archive = valid_archive
         stats = data.get('stats', {})
         self.archive.total_evaluations = stats.get('total_evaluations', 0)
         self.archive.total_additions = stats.get('total_additions', 0)
         self.archive.total_replacements = stats.get('total_replacements', 0)
         self.archive.total_rejections = stats.get('total_rejections', 0)
+        if discarded:
+            logger.warning("Discarded %d invalid elite(s) while loading %s", discarded, filepath)
         logger.info(f"Loaded archive from {filepath}")
 
 
@@ -861,13 +915,29 @@ class CVTEliteArchive:
         num_cvt_samples: int = 10000,
         seed: Optional[int] = None,
     ):
-        self.num_cells = num_cells
-        self.feature_dims = feature_dims
-        self.feature_ranges = feature_ranges or [(0.0, 1.0)] * feature_dims
+        self.num_cells = int(num_cells)
+        self.feature_dims = int(feature_dims)
+        if self.num_cells <= 0:
+            raise ValueError(f"num_cells must be positive, got {num_cells}.")
+        if self.feature_dims <= 0:
+            raise ValueError(f"feature_dims must be positive, got {feature_dims}.")
+        raw_ranges = feature_ranges or [(0.0, 1.0)] * self.feature_dims
+        if len(raw_ranges) != self.feature_dims:
+            raise ValueError(
+                f"feature_ranges must contain {self.feature_dims} ranges, got {len(raw_ranges)}."
+            )
+        self.feature_ranges = []
+        for index, bounds in enumerate(raw_ranges):
+            if len(bounds) != 2:
+                raise ValueError(f"Feature range {index} must contain (min, max), got {bounds!r}.")
+            lower, upper = float(bounds[0]), float(bounds[1])
+            if not np.isfinite(lower) or not np.isfinite(upper) or upper <= lower:
+                raise ValueError(f"Feature range {index} must be finite with max > min, got {bounds!r}.")
+            self.feature_ranges.append((lower, upper))
         self.rng = np.random.default_rng(seed)
         
         # Compute CVT centroids via k-means
-        self.centroids = self._compute_cvt_centroids(num_cvt_samples)
+        self.centroids = self._compute_cvt_centroids(max(self.num_cells, int(num_cvt_samples)))
         
         # Archive storage: cell_id -> Elite
         self.archive: Dict[int, Elite] = {}
@@ -914,9 +984,19 @@ class CVTEliteArchive:
     
     def _find_cell(self, features: Tuple[float, ...]) -> int:
         """Find nearest centroid (Voronoi cell) for given features."""
-        query = np.array(features)
+        query = np.asarray(features, dtype=np.float64)
         distances = np.linalg.norm(self.centroids - query, axis=1)
         return int(np.argmin(distances))
+
+    def _validated_features(self, features: Tuple[float, ...]) -> Optional[Tuple[float, ...]]:
+        """Return a finite, dimensionally valid feature vector or ``None``."""
+        try:
+            values = tuple(float(value) for value in features)
+        except (TypeError, ValueError):
+            return None
+        if len(values) != self.feature_dims or not all(np.isfinite(value) for value in values):
+            return None
+        return values
     
     def add(
         self,
@@ -935,12 +1015,16 @@ class CVTEliteArchive:
         if not feasible:
             self.total_rejections += 1
             return False
-        cell = self._find_cell(features)
+        validated_features = self._validated_features(features)
+        if validated_features is None:
+            self.total_rejections += 1
+            return False
+        cell = self._find_cell(validated_features)
         
         elite = Elite(
             solution=solution,
             fitness=fitness_value,
-            features=features,
+            features=validated_features,
             cell=(cell,),
             metadata=metadata or {},
         )
@@ -976,7 +1060,12 @@ class CVTEliteArchive:
         fitnesses = [float(e.fitness) for e in self.archive.values() if np.isfinite(float(e.fitness))]
         if not fitnesses:
             fitnesses = [0.0]
-        features = np.array([e.features for e in self.archive.values()])
+        feature_rows = []
+        for elite in self.archive.values():
+            validated = self._validated_features(elite.features)
+            if validated is not None:
+                feature_rows.append(validated)
+        features = np.asarray(feature_rows, dtype=np.float64)
         
         return ArchiveStats(
             coverage=len(self.archive) / self.num_cells,
@@ -985,7 +1074,7 @@ class CVTEliteArchive:
             max_fitness=float(max(fitnesses)),
             min_fitness=float(min(fitnesses)),
             num_elites=len(self.archive),
-            feature_diversity=float(np.var(features).mean()) if len(features) > 1 else 0.0,
+            feature_diversity=float(np.var(features, axis=0).mean()) if len(features) > 1 else 0.0,
         )
     
     def clear(self):

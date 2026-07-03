@@ -86,6 +86,7 @@ from src.generation.weighted_bayesian_wfc import (
 )
 from src.utils.distributed import (
     DistributedContext,
+    all_ranks_true,
     average_module_parameters,
     average_gradients,
     destroy_distributed,
@@ -201,6 +202,8 @@ class DiffusionTrainingConfig:
         topology_conditioning_mode: str = "additive",
         hedgehog_feature_dim: int = 32,
         graph_auto_linear_attention_nodes: int = 128,
+        graphormer_max_distance: int = 16,
+        graphormer_max_degree: int = 64,
         graph_to_grid_edge_semantics: bool = False,
         spatial_graph_gate_init: float = -2.0,
         spatial_topology_gate_init: float = -2.0,
@@ -463,6 +466,8 @@ class DiffusionTrainingConfig:
         self.topology_conditioning_mode = topo_mode
         self.hedgehog_feature_dim = int(max(4, hedgehog_feature_dim))
         self.graph_auto_linear_attention_nodes = int(max(0, graph_auto_linear_attention_nodes))
+        self.graphormer_max_distance = int(max(1, graphormer_max_distance))
+        self.graphormer_max_degree = int(max(1, graphormer_max_degree))
         self.graph_to_grid_edge_semantics = bool(graph_to_grid_edge_semantics)
         self.spatial_graph_gate_init = float(spatial_graph_gate_init)
         self.spatial_topology_gate_init = float(spatial_topology_gate_init)
@@ -702,6 +707,8 @@ def diffusion_training_kwargs_from_resolved_config(
         "topology_conditioning_mode": stage["topology_conditioning_mode"],
         "hedgehog_feature_dim": stage["hedgehog_feature_dim"],
         "graph_auto_linear_attention_nodes": stage["graph_auto_linear_attention_nodes"],
+        "graphormer_max_distance": stage["graphormer_max_distance"],
+        "graphormer_max_degree": stage["graphormer_max_degree"],
         "graph_to_grid_edge_semantics": stage.get("graph_to_grid_edge_semantics", False),
         "spatial_graph_gate_init": stage["spatial_graph_gate_init"],
         "spatial_topology_gate_init": stage["spatial_topology_gate_init"],
@@ -1042,6 +1049,8 @@ def _legacy_diffusion_overrides_from_args(args: argparse.Namespace) -> Dict[str,
         "graph_auto_linear_attention_nodes",
         getattr(args, "graph_auto_linear_attention_nodes", None),
     )
+    _set("graphormer_max_distance", getattr(args, "graphormer_max_distance", None))
+    _set("graphormer_max_degree", getattr(args, "graphormer_max_degree", None))
     _set("graph_to_grid_edge_semantics", getattr(args, "graph_to_grid_edge_semantics", None))
     _set("spatial_graph_gate_init", getattr(args, "spatial_graph_gate_init", None))
     _set("spatial_topology_gate_init", getattr(args, "spatial_topology_gate_init", None))
@@ -1469,6 +1478,8 @@ class DiffusionTrainer:
             topology_conditioning_mode=self.config.topology_conditioning_mode,
             hedgehog_feature_dim=self.config.hedgehog_feature_dim,
             graph_auto_linear_attention_nodes=self.config.graph_auto_linear_attention_nodes,
+            graphormer_max_distance=self.config.graphormer_max_distance,
+            graphormer_max_degree=self.config.graphormer_max_degree,
             graph_to_grid_edge_semantics=self.config.graph_to_grid_edge_semantics,
             spatial_graph_gate_init=self.config.spatial_graph_gate_init,
             spatial_topology_gate_init=self.config.spatial_topology_gate_init,
@@ -3123,7 +3134,12 @@ class DiffusionTrainer:
         # === Part 1: Diffusion / flow objective ===
         with self._autocast_context():
             diffusion_loss = self._diffusion_objective_loss(z_0, conditioning, diffusion_graph_data)
-        if not self._tensor_is_finite(diffusion_loss):
+        diffusion_loss_is_finite = all_ranks_true(
+            self._tensor_is_finite(diffusion_loss),
+            device=self.device,
+            context=getattr(self, "distributed_context", None),
+        )
+        if not diffusion_loss_is_finite:
             self._reset_gradient_accumulation()
             self._warn_nonfinite(
                 "diffusion_loss",
@@ -3247,7 +3263,12 @@ class DiffusionTrainer:
             + float(getattr(self.config, "alpha_logic_tile", 0.0)) * logic_tile_loss
             + float(getattr(self.config, "alpha_wfc_pseudo", 0.0)) * wfc_pseudo_loss
         )
-        if not self._tensor_is_finite(total_loss):
+        total_loss_is_finite = all_ranks_true(
+            self._tensor_is_finite(total_loss),
+            device=self.device,
+            context=getattr(self, "distributed_context", None),
+        )
+        if not total_loss_is_finite:
             self._reset_gradient_accumulation()
             self._warn_nonfinite(
                 "total_loss",
@@ -3425,7 +3446,12 @@ class DiffusionTrainer:
                 beta=float(beta),
                 objective=objective,
             )
-        if not self._tensor_is_finite(loss):
+        dpo_loss_is_finite = all_ranks_true(
+            self._tensor_is_finite(loss),
+            device=self.device,
+            context=getattr(self, "distributed_context", None),
+        )
+        if not dpo_loss_is_finite:
             self._reset_gradient_accumulation()
             self._warn_nonfinite(
                 "dpo_loss",
@@ -3558,6 +3584,7 @@ class DiffusionTrainer:
             'solvability': 0,
         }
         num_batches = 0
+        skipped_nonfinite_batches = 0
         
         # DESIGN-08: Compute actual optimizer steps for temperature annealing
         total_epochs = int(getattr(self.config, "epochs", self.epoch + 1))
@@ -3623,8 +3650,14 @@ class DiffusionTrainer:
                 diffusion_graph_data=diffusion_graph_data,
                 force_optimizer_step=is_last_batch,
             )
+
+            if float(metrics.get("skipped_nonfinite_batch", 0.0)) >= 0.5:
+                skipped_nonfinite_batches += 1
+                continue
             
             for k, v in metrics.items():
+                if k == "skipped_nonfinite_batch":
+                    continue
                 metrics_sum[k] = metrics_sum.get(k, 0.0) + float(v)
             num_batches += 1
             
@@ -3637,13 +3670,20 @@ class DiffusionTrainer:
                 )
         
         metrics_sum["num_batches"] = float(num_batches)
+        metrics_sum["skipped_nonfinite_batches"] = float(skipped_nonfinite_batches)
         reduced = reduce_scalar_metrics(
             metrics_sum,
             device=self.device,
             context=getattr(self, "distributed_context", None),
             average=False,
         )
-        total_batches = float(max(1.0, reduced.pop("num_batches", float(num_batches))))
+        total_batches = float(reduced.pop("num_batches", float(num_batches)))
+        total_skipped = float(reduced.pop("skipped_nonfinite_batches", float(skipped_nonfinite_batches)))
+        if total_batches <= 0.0:
+            raise RuntimeError(
+                "Diffusion epoch produced no finite training batches "
+                f"({int(total_skipped)} non-finite batch(es) across workers)."
+            )
         wfc_loss_sum = float(reduced.pop("wfc_pseudo_loss_sum", 0.0))
         wfc_sample_total = float(reduced.get("wfc_pseudo_samples", 0.0))
         epoch_metrics = {k: float(v) / total_batches for k, v in reduced.items()}
@@ -3653,6 +3693,7 @@ class DiffusionTrainer:
             else 0.0
         )
         epoch_metrics["wfc_pseudo_total_samples"] = wfc_sample_total
+        epoch_metrics["skipped_nonfinite_batches"] = total_skipped
         cache = getattr(self, "_latent_cache", None)
         if isinstance(cache, FrozenLatentCache) and cache.total_lookups > 0:
             epoch_metrics["latent_cache_hit_rate"] = float(cache.hit_rate)
@@ -4665,6 +4706,8 @@ def main():
     )
     parser.add_argument('--hedgehog-feature-dim', type=int, default=None)
     parser.add_argument('--graph-auto-linear-attention-nodes', type=int, default=None)
+    parser.add_argument('--graphormer-max-distance', type=int, default=None)
+    parser.add_argument('--graphormer-max-degree', type=int, default=None)
     parser.add_argument('--graph-to-grid-edge-semantics', action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument('--spatial-graph-gate-init', type=float, default=None)
     parser.add_argument('--spatial-topology-gate-init', type=float, default=None)

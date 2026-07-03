@@ -168,6 +168,24 @@ def maybe_barrier(context: Optional[DistributedContext]) -> None:
         dist.barrier()
 
 
+def all_ranks_true(
+    value: bool,
+    *,
+    device: torch.device,
+    context: Optional[DistributedContext],
+) -> bool:
+    """Return true only when every distributed worker reports true."""
+    if context is None or not context.enabled or int(context.world_size) <= 1:
+        return bool(value)
+    flag = torch.tensor(
+        1 if bool(value) else 0,
+        device=device,
+        dtype=torch.int32,
+    )
+    dist.all_reduce(flag, op=dist.ReduceOp.MIN)
+    return bool(flag.item())
+
+
 def resolve_device(device: str, context: Optional[DistributedContext]) -> torch.device:
     requested = str(device).strip().lower()
     if requested == "cpu":

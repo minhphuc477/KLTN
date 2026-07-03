@@ -20,6 +20,8 @@ import json
 import os
 import logging
 import hashlib
+import math
+import tempfile
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List, Iterable
@@ -257,13 +259,22 @@ def write_checkpoint_metadata(
     return metadata_path
 
 
-def atomic_torch_save(payload: Any, path: str) -> Path:
-    """Atomically save a PyTorch payload to disk."""
+def atomic_torch_save(payload: Any, path: str | Path) -> Path:
+    """Atomically save a PyTorch payload using a unique sibling temp file."""
     out_path = Path(path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = out_path.with_name(f"{out_path.name}.tmp")
-    torch.save(payload, tmp_path)
-    os.replace(tmp_path, out_path)
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{out_path.name}.",
+        suffix=".tmp",
+        dir=str(out_path.parent),
+    )
+    os.close(fd)
+    tmp_path = Path(tmp_name)
+    try:
+        torch.save(payload, tmp_path)
+        os.replace(tmp_path, out_path)
+    finally:
+        tmp_path.unlink(missing_ok=True)
     return out_path
 
 
@@ -347,10 +358,12 @@ class CheckpointManager:
         self.max_checkpoints = max_checkpoints
         self.save_best_only = save_best_only
         self.metric_name = metric_name
-        self.mode = mode
+        self.mode = str(mode).strip().lower()
+        if self.mode not in {"min", "max"}:
+            raise ValueError(f"CheckpointManager mode must be 'min' or 'max', got {mode!r}.")
         
         # Track best metric
-        self.best_metric = float('inf') if mode == 'min' else float('-inf')
+        self.best_metric = float('inf') if self.mode == 'min' else float('-inf')
         self.best_epoch = -1
         
         # Track all checkpoints for rotation
@@ -387,19 +400,43 @@ class CheckpointManager:
             Path to saved checkpoint, or None if not saved
         """
         metrics = metrics or {}
-        
-        # Check if we should save based on metric
-        if self.save_best_only and self.metric_name in metrics:
-            current_metric = metrics[self.metric_name]
-            is_best = (
-                (self.mode == 'min' and current_metric < self.best_metric) or
-                (self.mode == 'max' and current_metric > self.best_metric)
+
+        current_metric: Optional[float] = None
+        is_best = False
+        if self.metric_name in metrics:
+            try:
+                candidate_metric = float(metrics[self.metric_name])
+            except (TypeError, ValueError):
+                candidate_metric = float("nan")
+            if math.isfinite(candidate_metric):
+                current_metric = candidate_metric
+                is_best = (
+                    (self.mode == 'min' and current_metric < self.best_metric) or
+                    (self.mode == 'max' and current_metric > self.best_metric)
+                )
+            else:
+                logger.warning(
+                    "Checkpoint metric %s is non-finite; it cannot update best_model.pth.",
+                    self.metric_name,
+                )
+        elif self.save_best_only:
+            logger.warning(
+                "Skipping best-only checkpoint at epoch %d because metric %r is missing.",
+                epoch,
+                self.metric_name,
             )
-            if not is_best:
-                logger.debug(f"Skipping save: {self.metric_name}={current_metric:.4f} "
-                           f"not better than {self.best_metric:.4f}")
-                return None
-            
+            return None
+
+        if self.save_best_only and not is_best:
+            logger.debug(
+                "Skipping save: %s=%s not better than %.4f",
+                self.metric_name,
+                current_metric,
+                self.best_metric,
+            )
+            return None
+
+        if is_best and current_metric is not None:
             self.best_metric = current_metric
             self.best_epoch = epoch
         
@@ -434,17 +471,15 @@ class CheckpointManager:
         self._rotate_checkpoints()
         
         # Save best model separately
-        if self.metric_name in metrics:
-            current_metric = metrics[self.metric_name]
-            is_best = (
-                (self.mode == 'min' and current_metric <= self.best_metric) or
-                (self.mode == 'max' and current_metric >= self.best_metric)
+        if is_best and current_metric is not None:
+            best_path = self.save_dir / "best_model.pth"
+            atomic_torch_save(checkpoint, best_path)
+            logger.info(
+                "Updated best model (epoch %d, %s=%.4f)",
+                epoch,
+                self.metric_name,
+                current_metric,
             )
-            if is_best:
-                best_path = self.save_dir / "best_model.pth"
-                atomic_torch_save(checkpoint, str(best_path))
-                logger.info(f"Updated best model (epoch {epoch}, "
-                          f"{self.metric_name}={current_metric:.4f})")
         
         # Always save latest
         latest_path = self.save_dir / "checkpoint_latest.pth"
@@ -567,11 +602,13 @@ class EarlyStopping:
         min_delta: float = 0.0,
         mode: str = "min",
     ):
-        self.patience = patience
-        self.min_delta = min_delta
-        self.mode = mode
+        self.patience = max(1, int(patience))
+        self.min_delta = float(max(0.0, min_delta))
+        self.mode = str(mode).strip().lower()
+        if self.mode not in {"min", "max"}:
+            raise ValueError(f"EarlyStopping mode must be 'min' or 'max', got {mode!r}.")
         
-        self.best_metric = float('inf') if mode == 'min' else float('-inf')
+        self.best_metric = float('inf') if self.mode == 'min' else float('-inf')
         self.counter = 0
         self.best_epoch = 0
     
@@ -586,6 +623,9 @@ class EarlyStopping:
         Returns:
             True if training should stop
         """
+        metric = float(metric)
+        if not math.isfinite(metric):
+            raise ValueError(f"EarlyStopping received non-finite metric at epoch {epoch}: {metric}")
         if self.mode == 'min':
             improved = metric < self.best_metric - self.min_delta
         else:
@@ -703,7 +743,16 @@ class MetricsLogger:
     
     def get_best(self, metric_name: str, mode: str = 'min') -> Dict[str, Any]:
         """Get the entry with best value for a metric."""
-        entries = [m for m in self.metrics_history if metric_name in m]
+        entries = []
+        for metrics in self.metrics_history:
+            if metric_name not in metrics:
+                continue
+            try:
+                value = float(metrics[metric_name])
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(value):
+                entries.append(metrics)
         if not entries:
             return {}
         

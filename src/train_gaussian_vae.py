@@ -263,6 +263,7 @@ def evaluate_gaussian_vae_loader(
         "accuracy": 0.0,
     }
     batches = 0
+    skipped_batches = 0
     model.eval()
     with torch.no_grad():
         for batch in loader:
@@ -271,15 +272,24 @@ def evaluate_gaussian_vae_loader(
             batch = batch.to(device)
             x_onehot = grids_to_onehot(batch, num_classes=num_classes)
             info = trainer.eval_step(x_onehot)
+            if float(info.get("skipped_nonfinite_batch", 0.0)) >= 0.5:
+                skipped_batches += 1
+                continue
             for key in totals:
                 totals[key] += float(info.get(key, 0.0))
             batches += 1
             if max_batches is not None and batches >= int(max_batches):
                 break
 
+    if batches <= 0:
+        raise RuntimeError(
+            "Gaussian-VAE evaluation produced no finite batches "
+            f"({skipped_batches} non-finite batch(es))."
+        )
     for key in totals:
-        totals[key] /= max(1, batches)
+        totals[key] /= batches
     totals["batches"] = float(batches)
+    totals["skipped_nonfinite_batches"] = float(skipped_batches)
     return totals
 
 
@@ -466,6 +476,7 @@ def train_gaussian_vae(args):
             "illegal_adjacency_penalty": 0.0,
         }
         num_batches = 0
+        skipped_batches = 0
 
         for batch_idx, batch in enumerate(dataloader):
             if isinstance(batch, (list, tuple)):
@@ -487,6 +498,15 @@ def train_gaussian_vae(args):
                     "illegal_adjacency_penalty": 0.0,
                 }
 
+            if float(metrics.get("skipped_nonfinite_batch", 0.0)) >= 0.5:
+                skipped_batches += 1
+                logger.warning(
+                    "Skipping non-finite Gaussian-VAE batch %d in epoch %d.",
+                    batch_idx,
+                    epoch + 1,
+                )
+                continue
+
             for key in epoch_metrics:
                 epoch_metrics[key] += metrics.get(key, 0.0)
             num_batches += 1
@@ -505,8 +525,15 @@ def train_gaussian_vae(args):
                     metrics.get("illegal_adjacency_penalty", 0.0),
                 )
 
+        if num_batches <= 0:
+            raise RuntimeError(
+                f"Gaussian-VAE epoch {epoch + 1} produced no finite training batches "
+                f"({skipped_batches} non-finite batch(es))."
+            )
+
         for key in epoch_metrics:
-            epoch_metrics[key] /= max(num_batches, 1)
+            epoch_metrics[key] /= num_batches
+        epoch_metrics["skipped_nonfinite_batches"] = float(skipped_batches)
 
         eval_metrics = evaluate_gaussian_vae_loader(
             model,

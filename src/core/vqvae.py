@@ -1744,6 +1744,37 @@ class VQVAETrainer:
             lr=lr,
             weight_decay=0.0,
         )
+
+    @staticmethod
+    def _tensor_is_finite(value: Any) -> bool:
+        if isinstance(value, Tensor):
+            return bool(torch.isfinite(value).all().item())
+        try:
+            return math.isfinite(float(value))
+        except (TypeError, ValueError):
+            return False
+
+    @staticmethod
+    def _gradients_are_finite(parameters: Iterable[nn.Parameter]) -> bool:
+        return all(
+            param.grad is None or bool(torch.isfinite(param.grad).all().item())
+            for param in parameters
+        )
+
+    @classmethod
+    def _skipped_metrics(cls, losses: Dict[str, Tensor]) -> Dict[str, float]:
+        def finite_value(name: str) -> float:
+            value = losses.get(name)
+            return float(value.detach().item()) if cls._tensor_is_finite(value) else 0.0
+
+        return {
+            'loss': finite_value('total_loss'),
+            'recon_loss': finite_value('recon_loss'),
+            'vq_loss': finite_value('vq_loss'),
+            'illegal_adjacency_penalty': finite_value('illegal_adjacency_penalty'),
+            'perplexity': finite_value('perplexity'),
+            'skipped_nonfinite_batch': 1.0,
+        }
     
     def train_step(
         self, 
@@ -1761,18 +1792,37 @@ class VQVAETrainer:
             metrics: Dict of metric values
         """
         self.model.train()
-        self.optimizer.zero_grad()
+        self.optimizer.zero_grad(set_to_none=True)
         
         # Forward
         losses = self.model.compute_loss(batch)
         
         # Backward
         loss = losses['total_loss']
+        if not self._tensor_is_finite(loss):
+            metrics = self._skipped_metrics(losses)
+            if return_metrics:
+                return 0.0, metrics
+            return 0.0
         loss.backward()
+
+        parameters = tuple(self.model.parameters())
+        if not self._gradients_are_finite(parameters):
+            self.optimizer.zero_grad(set_to_none=True)
+            metrics = self._skipped_metrics(losses)
+            if return_metrics:
+                return 0.0, metrics
+            return 0.0
         
         # Gradient clipping
         if self.grad_clip_norm > 0:
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip_norm)
+            grad_norm = torch.nn.utils.clip_grad_norm_(parameters, self.grad_clip_norm)
+            if not self._tensor_is_finite(grad_norm):
+                self.optimizer.zero_grad(set_to_none=True)
+                metrics = self._skipped_metrics(losses)
+                if return_metrics:
+                    return 0.0, metrics
+                return 0.0
         
         self.optimizer.step()
         
@@ -1783,6 +1833,7 @@ class VQVAETrainer:
             'vq_loss': losses['vq_loss'].item(),
             'illegal_adjacency_penalty': losses.get('illegal_adjacency_penalty', torch.tensor(0.0)).item(),
             'perplexity': losses['perplexity'].item(),
+            'skipped_nonfinite_batch': 0.0,
         }
         
         loss_value = float(loss.item())
@@ -1802,13 +1853,17 @@ class VQVAETrainer:
         target = batch.argmax(dim=1) if batch.shape[1] > 1 else batch.squeeze(1)
         accuracy = (pred == target).float().mean()
         
-        return {
+        metrics = {
             'loss': losses['total_loss'].item(),
             'recon_loss': losses['recon_loss'].item(),
             'illegal_adjacency_penalty': losses.get('illegal_adjacency_penalty', torch.tensor(0.0)).item(),
             'accuracy': accuracy.item(),
             'perplexity': losses['perplexity'].item(),
         }
+        metrics['skipped_nonfinite_batch'] = (
+            0.0 if all(self._tensor_is_finite(value) for value in metrics.values()) else 1.0
+        )
+        return metrics
 
 
 # ============================================================================
