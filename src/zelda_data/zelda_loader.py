@@ -843,6 +843,9 @@ class ZeldaDungeonDataset(Dataset):
                     dungeon = adapter.load_dungeon(dungeon_num, variant)
                     stitched = adapter.stitch_dungeon(dungeon)
                     grid = stitched.global_grid
+                    graph = None
+                    if self.load_graphs and self.graphs is not None and not self.lazy_vglc:
+                        graph = self._extract_graph(dungeon)
                     self._vglc_index.append((int(dungeon_num), int(variant)))
                     if self.samples is not None:
                         self.samples.append(grid.astype(np.float32))
@@ -854,9 +857,7 @@ class ZeldaDungeonDataset(Dataset):
                         }
                     )
                     
-                    # Extract graph if load_graphs is enabled
-                    if self.load_graphs and self.graphs is not None and not self.lazy_vglc:
-                        graph = self._extract_graph(dungeon)
+                    if graph is not None:
                         self.graphs.append(graph)
                     
                     # Track max dimensions
@@ -935,7 +936,7 @@ class ZeldaDungeonDataset(Dataset):
         # Normalize to [0, 1] using fixed num_classes divisor
         # IMPORTANT: Use fixed constant (43 = max tile ID) so that
         # grids_to_onehot / encode_to_latent can invert with *43 exactly.
-        if self.normalize and tensor_map.max() > 1:
+        if self.normalize:
             NUM_TILE_IDS = 43  # TileID.PUZZLE = 43, the highest ID
             tensor_map = tensor_map / NUM_TILE_IDS
         
@@ -1116,6 +1117,19 @@ class ZeldaRoomDataset(Dataset):
                         if grid is None:
                             grid = getattr(room, 'grid', None)
                         if grid is not None:
+                            room_graph = None
+                            if self.graphs is not None and dungeon_graph is not None:
+                                room_graph = _build_room_graph_sample(
+                                    dungeon,
+                                    coord,
+                                    room,
+                                    dungeon_graph,
+                                    topology_supervision_mode=self.topology_supervision_mode,
+                                    semantic_role_prior_strength=self.semantic_role_prior_strength,
+                                    semantic_puzzle_offset=self.semantic_puzzle_offset,
+                                    puzzle_stage_topology_enabled=self.puzzle_stage_topology_enabled,
+                                    puzzle_stage_trace_decay=self.puzzle_stage_trace_decay,
+                                )
                             self.rooms.append(grid.astype(np.float32))
                             self.sample_metadata.append(
                                 {
@@ -1125,20 +1139,8 @@ class ZeldaRoomDataset(Dataset):
                                     "room_coord": tuple(coord) if isinstance(coord, tuple) else coord,
                                 }
                             )
-                            if self.graphs is not None and dungeon_graph is not None:
-                                self.graphs.append(
-                                    _build_room_graph_sample(
-                                        dungeon,
-                                        coord,
-                                        room,
-                                        dungeon_graph,
-                                        topology_supervision_mode=self.topology_supervision_mode,
-                                        semantic_role_prior_strength=self.semantic_role_prior_strength,
-                                        semantic_puzzle_offset=self.semantic_puzzle_offset,
-                                        puzzle_stage_topology_enabled=self.puzzle_stage_topology_enabled,
-                                        puzzle_stage_trace_decay=self.puzzle_stage_trace_decay,
-                                    )
-                                )
+                            if self.graphs is not None and room_graph is not None:
+                                self.graphs.append(room_graph)
                 except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                     raise RuntimeError(
                         f"Failed to load room dataset entry for dungeon {dungeon_num} variant {variant}"
@@ -1155,7 +1157,7 @@ class ZeldaRoomDataset(Dataset):
         
         # Use fixed constant (43 = max tile ID) so grids_to_onehot / encode_to_latent
         # can invert exactly with *43
-        if self.normalize and tensor.max() > 1:
+        if self.normalize:
             NUM_TILE_IDS = 43  # TileID.PUZZLE = 43
             tensor = tensor / NUM_TILE_IDS
         
@@ -1176,7 +1178,7 @@ class ZeldaRoomDataset(Dataset):
                     neighbor_maps[direction] = None
                     continue
                 room_tensor = torch.tensor(room_map, dtype=torch.float32).unsqueeze(0)
-                if self.normalize and room_tensor.max() > 1:
+                if self.normalize:
                     room_tensor = room_tensor / num_tile_ids
                 neighbor_maps[direction] = room_tensor
             return tensor, {

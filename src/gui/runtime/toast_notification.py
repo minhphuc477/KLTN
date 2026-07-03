@@ -2,6 +2,8 @@
 
 from typing import Any
 
+from src.gui.rendering.font_cache import get_sys_font
+
 
 class ToastNotification:
     """Floating toast message with auto-dismiss and fade animations."""
@@ -41,7 +43,7 @@ class ToastNotification:
         """Render toast notification at specified position."""
         pygame = pygame_module if pygame_module is not None else __import__("pygame")
         alpha = self.get_alpha()
-        font = pygame.font.SysFont("Arial", 20)
+        font = get_sys_font(pygame, "Arial", 20)
         text_surf = font.render(self.message, True, (255, 255, 255))
 
         padding = 15

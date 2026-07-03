@@ -20,6 +20,8 @@ This module extends gui_runner.py with new UI components.
 """
 
 import pygame
+
+from src.gui.rendering.font_cache import get_default_font
 import logging
 from typing import Optional, List, Tuple
 from dataclasses import dataclass
@@ -301,7 +303,7 @@ class MinimapZoom:
             surface.blit(zoom_surface, zoom_rect)
             
             # Label
-            font = pygame.font.Font(None, 24)
+            font = get_default_font(pygame, 24)
             label = font.render(f"Zoom: {zoom_factor:.1f}×", True, (255, 255, 255))
             surface.blit(label, (self.overlay_rect.x + 10, self.overlay_rect.y + 10))
 
@@ -401,7 +403,7 @@ class ItemTooltip:
         if not self.visible or not self.text_lines:
             return
         
-        font = pygame.font.Font(None, 20)
+        font = get_default_font(pygame, 20)
         
         # Calculate tooltip size
         line_height = 22
@@ -492,7 +494,7 @@ class ReplanningIndicator:
         alpha = int(128 + 127 * math.sin(self.pulse_phase))
         
         # Background
-        font = pygame.font.Font(None, 36)
+        font = get_default_font(pygame, 36)
         text = font.render(self.message, True, (255, 200, 0))
         text_rect = text.get_rect(center=(self.x, self.y))
         

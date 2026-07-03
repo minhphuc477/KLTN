@@ -2,11 +2,13 @@
 
 from typing import Any
 
+from src.gui.rendering.font_cache import get_sys_font
+
 
 def render_debug_overlay(gui: Any, surface: Any, pygame: Any, time_module: Any) -> None:
     """Render debug overlay with mouse/widget diagnostics and recent clicks."""
     try:
-        font = pygame.font.SysFont("Arial", 12)
+        font = get_sys_font(pygame, "Arial", 12)
     except (AttributeError, RuntimeError, ValueError, TypeError):
         return
 

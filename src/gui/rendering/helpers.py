@@ -6,6 +6,7 @@ import logging
 from typing import Any
 
 from src.core.definitions import ROOM_HEIGHT, ROOM_WIDTH, SEMANTIC_PALETTE
+from src.gui.rendering.font_cache import get_sys_font
 
 
 logger = logging.getLogger(__name__)
@@ -230,7 +231,7 @@ def render_topology_overlay(
             pygame.draw.line(surface, color[:3], (int(x1), int(y1)), (int(x2), int(y2)), 3)
 
     node_radius = max(8, tile_size // 3)
-    font = pygame.font.SysFont("Arial", 12, bold=True)
+    font = get_sys_font(pygame, "Arial", 12, bold=True)
     for node, (cx, cy) in node_pos.items():
         try:
             pygame.draw.circle(target_surface, (255, 255, 255, 100), (int(cx), int(cy)), node_radius + 3)
@@ -252,7 +253,7 @@ def render_topology_overlay(
 
     if unmatched_nodes > 0:
         try:
-            warn_font = pygame.font.SysFont("Arial", 14, bold=True)
+            warn_font = get_sys_font(pygame, "Arial", 14, bold=True)
             warn_text = warn_font.render(f"{unmatched_nodes} unmatched nodes", True, (255, 150, 100))
             surface.blit(warn_text, (10, 10))
         except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
@@ -282,7 +283,7 @@ def render_solver_comparison_overlay(
     pygame.draw.rect(surface, (38, 38, 55), box_rect)
     pygame.draw.rect(surface, (100, 150, 255), box_rect, 1)
 
-    font = pygame.font.SysFont("Arial", 11, bold=True)
+    font = get_sys_font(pygame, "Arial", 11, bold=True)
     if has_cbs:
         header = font.render("Solver Comparison", True, (200, 200, 255))
     else:
@@ -290,7 +291,7 @@ def render_solver_comparison_overlay(
     surface.blit(header, (box_rect.x + 6, box_rect.y + 6))
 
     y = box_rect.y + 28
-    small = pygame.font.SysFont("Arial", 10)
+    small = get_sys_font(pygame, "Arial", 10)
     for row in results:
         if "CBS" in row["name"] and "confusion" in row:
             line1 = f"{row['name'][:15]:15} {str(row.get('success', False))[:5]:5} Len:{row.get('path_len', 0):<4}"

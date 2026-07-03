@@ -670,6 +670,48 @@ Latest local verification (2026-07-03):
   checkpoint-backed end-to-end run were not executed in this pass and remain
   publication-lock requirements.
 
+### Component And Pipeline Recheck (2026-07-03)
+
+Component map checked in this pass:
+
+- Data and alignment: `src/zelda_data/`, `src/data_processing/`, and
+  room/topology conditioning helpers.
+- Graph generation and QD: `src/generation/grammar/`,
+  `src/generation/evolutionary_director/`, MAP-Elites evaluators, and
+  controllability scripts.
+- Model stack: VQ-VAE/FSQ, condition encoder, latent diffusion/DiT, MaskGIT,
+  LogicNet, LCM-LoRA fast sampler, categorical sampler, and model manager.
+- Inference pipeline: graph context, room sampler, room stitching, semantic
+  constrained decoding, WFC repair, overlay, and robust retry orchestration.
+- Validation and search: full-state A*, Dijkstra fallback, role-limited
+  Bidirectional A*, role-limited D* Lite, P-CBS, graph key-economy validation,
+  and external benchmark adapters.
+- Experiment layer: SPADE/additive topology conditioning, LCM-LoRA paired
+  quality, P-CBS matched-budget personas, WFC prior controls, random baseline,
+  fixed-graph multi-seed audit, and 100/250/500-room controllability stress.
+
+Confirmed implementation state:
+
+- The strict publication-facing solvability oracle remains full-state A*;
+  Bidirectional A* and D* Lite are diagnostics only on reversible stateless
+  grids.
+- Categorical data loading keeps discrete token IDs unnormalized when
+  `categorical_tokens=True`.
+- Categorical sampler decoding keeps exact `decode_indices` logits and samples
+  on-device.
+- MaskGIT context shape failures and condition-encoder schema failures are
+  non-retryable contract errors in the robust block loop.
+- The Round-5 manifest wires SPADE/additive, LCM-LoRA, WFC-prior, P-CBS, and
+  controllability commands, and rejects stale/empty/missing-metric outputs.
+
+New fix in this pass:
+
+- Graph-conditioning schema drift now fails closed by default across
+  `config_system`, `PipelineConfig`, runtime initialization, config bridging,
+  diffusion training, masked-room training, and direct condition-encoder
+  construction. Legacy pad/truncate compatibility remains available only by
+  explicitly setting `condition_strict_schema=False`.
+
 ### Search And Key-Economy Audit Addendum (2026-07-03)
 
 Confirmed and fixed:
@@ -732,3 +774,43 @@ Focused verification:
 - Ruff passed on the touched search/key-economy files and their focused tests.
 - `python -m graphify update .` completed after one timeout retry; the final
   run reported no code-graph topology changes.
+
+### Training, Data, And GUI Reliability Addendum (2026-07-03)
+
+Confirmed and fixed:
+
+- AMP non-finite-gradient skip paths in diffusion and DPO training now still
+  notify `GradScaler.update()` outside Accelerate. This lets AMP reduce its
+  scale after detected non-finite gradients instead of repeatedly retrying the
+  same invalid scale.
+- WFC pseudo-label supervision now keeps proportional full-batch weighting:
+  successful repaired samples are still averaged for diagnostics, but the loss
+  used by training is divided by the original batch's `B * H * W` support so
+  one repaired sample does not carry the same weight as a fully repaired batch.
+- Zelda semantic-grid normalization no longer special-cases binary-looking
+  rooms. When `normalize=True`, raw tile IDs are always scaled by the semantic
+  palette size; categorical-token loaders still keep integer token IDs.
+- VGLC dungeon and room dataset ingestion now builds the optional graph sample
+  before appending the aligned map/metadata rows. Failed graph extraction no
+  longer leaves `samples`, `sample_metadata`, and `graphs` with different
+  lengths.
+- GUI font construction now flows through `src/gui/rendering/font_cache.py`.
+  Direct `pygame.font.SysFont` / `pygame.font.Font(None, ...)` calls outside
+  the cache were removed from GUI code, preventing repeated OS font registry
+  churn during rendering.
+
+Checked and retained:
+
+- Frame-local overlay `Surface` allocations were not globally pooled in this
+  pass. Many of those surfaces are intentional transient alpha buffers whose
+  safe reuse depends on size, alpha, and clipping state; pooling should be a
+  dedicated renderer refactor with visual regression screenshots.
+
+Focused verification:
+
+- Compile and Ruff checks passed on the touched training, data-loading, and GUI
+  files.
+- A direct production `ZeldaRoomDataset.__getitem__` probe confirmed that a
+  binary semantic grid now normalizes max tile value to `1 / 43` instead of
+  leaking a raw `1.0`.
+- `python -m graphify update .` completed after this pass.

@@ -5,6 +5,7 @@ import time
 from typing import Any, Tuple
 
 from src.core.definitions import SEMANTIC_PALETTE
+from src.gui.rendering.font_cache import get_sys_font
 from src.pipeline.spatial_utils import normalize_node_id, stable_node_sort_key
 
 MINIMAP_KEY_TILE_IDS = frozenset(
@@ -38,7 +39,7 @@ def render_minimap(gui: Any, pygame: Any) -> None:
         gui, "ai_mission_graph_draft", None
     ) is not None
 
-    title_font = pygame.font.SysFont("Arial", 10, bold=True)
+    title_font = get_sys_font(pygame, "Arial", 10, bold=True)
     title_label = "Mission Graph" if editor_mode else "Dungeon Map"
     title_surf = title_font.render(title_label, True, (180, 180, 200))
     minimap.blit(title_surf, (5, 3))

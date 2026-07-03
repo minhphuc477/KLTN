@@ -2,6 +2,8 @@
 
 from typing import Any
 
+from src.gui.rendering.font_cache import get_sys_font
+
 
 def render_tooltips(gui: Any, surface: Any, mouse_pos: tuple, button_widget_cls: Any, pygame: Any) -> None:
     """Render tooltip for the first hovered widget with known tooltip mapping."""
@@ -76,7 +78,7 @@ def render_tooltips(gui: Any, surface: Any, mouse_pos: tuple, button_widget_cls:
 
 def draw_tooltip(gui: Any, surface: Any, pos: tuple, text: str, pygame: Any) -> None:
     """Draw a tooltip box near cursor and keep it within screen bounds."""
-    font = pygame.font.SysFont("Arial", 18)
+    font = get_sys_font(pygame, "Arial", 18)
     padding = 8
 
     text_surf = font.render(text, True, (255, 255, 255))

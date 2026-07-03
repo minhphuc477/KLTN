@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from enum import Enum
 import logging
 
+from src.gui.rendering.font_cache import get_sys_font
+
 try:
     import pygame
     PYGAME_AVAILABLE = True
@@ -137,9 +139,9 @@ class CheckboxWidget(BaseWidget):
                             return pygame.Surface((1, 1))
                     self.font = _StubFont()
                 else:
-                    self.font = pygame.font.SysFont('Arial', 12)
+                    self.font = get_sys_font(pygame, 'Arial', 12)
             else:
-                self.font = pygame.font.SysFont('Arial', 12)
+                self.font = get_sys_font(pygame, 'Arial', 12)
     
     @property
     def pos(self):
@@ -252,8 +254,8 @@ class DropdownWidget(BaseWidget):
         
         # Fonts
         if PYGAME_AVAILABLE:
-            self.font = pygame.font.SysFont('Arial', 12)
-            self.label_font = pygame.font.SysFont('Arial', 11, bold=True)
+            self.font = get_sys_font(pygame, 'Arial', 12)
+            self.label_font = get_sys_font(pygame, 'Arial', 11, bold=True)
         # Initialize rects via pos setter to ensure full_rect is created
         try:
             self.pos = self._pos
@@ -289,7 +291,7 @@ class DropdownWidget(BaseWidget):
             lbl_font = getattr(self, 'label_font', None) or getattr(self, 'font', None)
             if lbl_font is None:
                 # Last resort: create a small default font (shouldn't normally be necessary)
-                lbl_font = pygame.font.SysFont('Arial', 11, bold=True)
+                lbl_font = get_sys_font(pygame, 'Arial', 11, bold=True)
             # Add a bit more padding above the control so the label sits further away
             label_h = max(12, lbl_font.get_height() + 8)
         except (AttributeError, RuntimeError, ValueError, TypeError):
@@ -378,7 +380,7 @@ class DropdownWidget(BaseWidget):
             try:
                 lbl_font = getattr(self, 'label_font', None) or getattr(self, 'font', None)
                 if lbl_font is None:
-                    lbl_font = pygame.font.SysFont('Arial', 11, bold=True)
+                    lbl_font = get_sys_font(pygame, 'Arial', 11, bold=True)
                 label_surf = lbl_font.render(str(self.label), True, self.theme.text_normal)
                 # Render label at a slightly larger local offset inside full_rect so it feels spaced out
                 # (full_rect is created to include this area)
@@ -389,7 +391,7 @@ class DropdownWidget(BaseWidget):
             except (AttributeError, RuntimeError, ValueError, TypeError):
                 # On error, fallback to render with main font at a safe offset
                 try:
-                    fallback = getattr(self, 'font', None) or pygame.font.SysFont('Arial', 12)
+                    fallback = getattr(self, 'font', None) or get_sys_font(pygame, 'Arial', 12)
                     label_surf = fallback.render(str(self.label), True, self.theme.text_normal)
                     surface.blit(label_surf, (4, 4))
                 except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
@@ -541,7 +543,7 @@ class ButtonWidget(BaseWidget):
         
         # Font
         if PYGAME_AVAILABLE:
-            self.font = pygame.font.SysFont('Arial', 12, bold=True)
+            self.font = get_sys_font(pygame, 'Arial', 12, bold=True)
     
     @property
     def pos(self):

@@ -2,6 +2,8 @@
 
 from typing import Any
 
+from src.gui.rendering.font_cache import get_sys_font
+
 
 def show_error(gui: Any, message: str, logger: Any, time_module: Any) -> None:
     """Display error message state with timestamp and status label."""
@@ -42,7 +44,7 @@ def render_error_banner(gui: Any, surface: Any, pygame: Any, time_module: Any) -
     banner_surface.fill((200, 0, 0, int(220 * alpha)))
     surface.blit(banner_surface, (0, 0))
 
-    font = pygame.font.SysFont("Arial", 28)
+    font = get_sys_font(pygame, "Arial", 28)
     text = f"[!] {gui.error_message}"
     text_surf = font.render(text, True, (255, 255, 255))
     text_surf.set_alpha(int(255 * alpha))
@@ -81,7 +83,7 @@ def render_solver_status_banner(
     banner_surface.fill((200, 150, 0, alpha))
     surface.blit(banner_surface, (0, banner_y))
 
-    font = pygame.font.SysFont("Arial", 32)
+    font = get_sys_font(pygame, "Arial", 32)
     text = f"Computing path with {alg_name}..."
     text_surf = font.render(text, True, (255, 255, 255))
     text_rect = text_surf.get_rect(center=(gui.screen_w // 2, banner_y + banner_height // 2))
@@ -99,7 +101,7 @@ def render_status_bar(gui: Any, surface: Any, pygame: Any) -> None:
     bar_surface.fill((40, 40, 50, 200))
     surface.blit(bar_surface, (0, bar_y))
 
-    font = pygame.font.SysFont("Arial", 20)
+    font = get_sys_font(pygame, "Arial", 20)
 
     status_text = f"Status: {gui.status_message}"
     status_surf = font.render(status_text, True, (180, 220, 255))

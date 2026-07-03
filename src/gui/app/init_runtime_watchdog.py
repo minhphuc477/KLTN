@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from src.gui.rendering.font_cache import get_sys_font
+
 
 def initialize_runtime_timing_state(*, gui: Any, pygame: Any, os_module: Any, time_module: Any, threading_module: Any, logger: Any) -> None:
     """Initialize timing, display health, cursor/debug state, and watchdog."""
@@ -33,9 +35,9 @@ def initialize_runtime_timing_state(*, gui: Any, pygame: Any, os_module: Any, ti
     gui.fullscreen = False
 
     gui.clock = pygame.time.Clock()
-    gui.font = pygame.font.SysFont("Arial", 14, bold=True)
-    gui.big_font = pygame.font.SysFont("Arial", 20, bold=True)
-    gui.small_font = pygame.font.SysFont("Arial", 12)
+    gui.font = get_sys_font(pygame, "Arial", 14, bold=True)
+    gui.big_font = get_sys_font(pygame, "Arial", 20, bold=True)
+    gui.small_font = get_sys_font(pygame, "Arial", 12)
 
     gui.debug_control_panel = os_module.environ.get("KLTN_DEBUG_CONTROL_PANEL", "0") == "1"
     gui.debug_panel_click_padding = _safe_int_env("KLTN_DEBUG_PANEL_PADDING", 40) if gui.debug_control_panel else 0

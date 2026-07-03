@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from src.gui.rendering.font_cache import get_sys_font
+
 
 def handle_empty_frame_recovery(
     *,
@@ -27,7 +29,7 @@ def handle_empty_frame_recovery(
                     pass
                 gui._auto_recenter_done = True
 
-            diag_font = pygame.font.SysFont("Arial", 18, bold=True)
+            diag_font = get_sys_font(pygame, "Arial", 18, bold=True)
             diag_text = diag_font.render("No map tiles visible - check zoom/offset", True, (255, 100, 100))
             tx = max(10, (view_w - diag_text.get_width()) // 2)
             ty = max(10, (view_h - diag_text.get_height()) // 2)
@@ -37,7 +39,7 @@ def handle_empty_frame_recovery(
             map_surface.blit(box, (tx - 10, ty - 9))
             map_surface.blit(diag_text, (tx, ty))
 
-            small = pygame.font.SysFont("Arial", 12)
+            small = get_sys_font(pygame, "Arial", 12)
             try:
                 map_w = gui.env.width if gui.env is not None else 0
                 map_h = gui.env.height if gui.env is not None else 0

@@ -496,7 +496,7 @@ class GlobalStreamEncoder(nn.Module):
         use_current_node_distance_features: bool = True,
         current_node_distance_dim: int = 4,
         use_rrwp_edge_features: bool = False,
-        strict_schema: bool = False,
+        strict_schema: bool = True,
     ):
         super().__init__()
 
@@ -1599,7 +1599,7 @@ class DualStreamConditionEncoder(nn.Module):
         reference_embedding_dim: int = 32,
         reference_hidden_dim: int = 64,
         use_rrwp_edge_features: bool = False,
-        strict_schema: bool = False,
+        strict_schema: bool = True,
     ):
         super().__init__()
         

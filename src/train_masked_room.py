@@ -104,7 +104,7 @@ class MaskedRoomTrainingConfig:
         condition_reference_tile_vocab_size: int = 44,
         condition_reference_embedding_dim: int = 32,
         condition_reference_hidden_dim: int = 64,
-        condition_strict_schema: bool = False,
+        condition_strict_schema: bool = True,
         graph_conditioning_mode: str = "node_sequence",
         use_current_node_distance_features: bool = True,
         current_node_distance_max: int = 8,
@@ -397,7 +397,7 @@ def masked_room_training_kwargs_from_resolved_config(config: Dict[str, Any]) -> 
         "condition_reference_tile_vocab_size": stage["condition_reference_tile_vocab_size"],
         "condition_reference_embedding_dim": stage["condition_reference_embedding_dim"],
         "condition_reference_hidden_dim": stage["condition_reference_hidden_dim"],
-        "condition_strict_schema": stage.get("condition_strict_schema", False),
+        "condition_strict_schema": stage.get("condition_strict_schema", True),
         "graph_conditioning_mode": stage["graph_conditioning_mode"],
         "use_current_node_distance_features": stage["use_current_node_distance_features"],
         "current_node_distance_max": stage["current_node_distance_max"],
@@ -717,7 +717,7 @@ class MaskedRoomTrainer:
             reference_num_tile_types=config.condition_reference_tile_vocab_size,
             reference_embedding_dim=config.condition_reference_embedding_dim,
             reference_hidden_dim=config.condition_reference_hidden_dim,
-            strict_schema=bool(getattr(config, "condition_strict_schema", False)),
+            strict_schema=bool(getattr(config, "condition_strict_schema", True)),
         )).to(self.device)
         self.puzzle_stage_semantics_head = PuzzleStageSemanticsHead(
             num_tile_classes=int(config.num_classes),

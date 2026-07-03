@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from src.gui.rendering.font_cache import get_sys_font
+
 
 def log_draw_ranges(
     *,
@@ -54,7 +56,7 @@ def render_empty_range_warning(
 
     try:
         pygame.draw.rect(gui.screen, (200, 0, 0), (gui.screen_w // 2 - 120, gui.screen_h // 2 - 40, 240, 80))
-        font = gui.big_font if hasattr(gui, "big_font") else pygame.font.SysFont("Arial", 20, True)
+        font = gui.big_font if hasattr(gui, "big_font") else get_sys_font(pygame, "Arial", 20, bold=True)
         txt = font.render("RENDER RANGE EMPTY - CHECK OFFSETS", True, (255, 255, 255))
         gui.screen.blit(txt, (gui.screen_w // 2 - txt.get_width() // 2, gui.screen_h // 2 - txt.get_height() // 2))
     except (AttributeError, RuntimeError, ValueError, TypeError):

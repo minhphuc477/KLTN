@@ -193,7 +193,7 @@ class DiffusionTrainingConfig:
         condition_reference_embedding_dim: int = 32,
         condition_reference_hidden_dim: int = 64,
         condition_use_rrwp_edge_features: bool = True,
-        condition_strict_schema: bool = False,
+        condition_strict_schema: bool = True,
         num_timesteps: int = 1000,
         schedule_type: str = "cosine",
         topology_refinement_mode: str = "gat2",  # none | lightweight | sparse*/gat2* | graphormer
@@ -694,7 +694,7 @@ def diffusion_training_kwargs_from_resolved_config(
         "condition_reference_embedding_dim": stage["condition_reference_embedding_dim"],
         "condition_reference_hidden_dim": stage["condition_reference_hidden_dim"],
         "condition_use_rrwp_edge_features": stage.get("condition_use_rrwp_edge_features", True),
-        "condition_strict_schema": stage.get("condition_strict_schema", False),
+        "condition_strict_schema": stage.get("condition_strict_schema", True),
         "num_timesteps": stage["num_timesteps"],
         "schedule_type": stage["schedule_type"],
         "topology_refinement_mode": stage["topology_refinement_mode"],
@@ -1494,7 +1494,7 @@ class DiffusionTrainer:
             reference_embedding_dim=self.config.condition_reference_embedding_dim,
             reference_hidden_dim=self.config.condition_reference_hidden_dim,
             use_rrwp_edge_features=self.config.condition_use_rrwp_edge_features,
-            strict_schema=bool(getattr(self.config, "condition_strict_schema", False)),
+            strict_schema=bool(getattr(self.config, "condition_strict_schema", True)),
         )
 
     def _stack_conditioning_vectors(self, cond_vectors: List[torch.Tensor]) -> torch.Tensor:
@@ -1813,6 +1813,25 @@ class DiffusionTrainer:
             scaler.update()
             return
         self.optimizer.step()
+
+    def _amp_update_after_skipped_step(self) -> None:
+        """
+        Let AMP react to detected non-finite gradients even when we skip step().
+
+        GradScaler records found-inf state during ``unscale_``. If a manual
+        finite-gradient guard returns before ``scaler.update()``, the scale
+        never decreases and subsequent micro-batches can remain stuck at the
+        same overflowing scale.
+        """
+        if self._accelerator is not None:
+            return
+        scaler = getattr(self, "_grad_scaler", None)
+        if scaler is None or not bool(getattr(scaler, "is_enabled", lambda: False)()):
+            return
+        try:
+            scaler.update()
+        except (AssertionError, RuntimeError) as exc:
+            logger.debug("Skipped AMP scaler update after skipped step: %s", exc)
 
     def _decode_latent_for_logic(self, latent: torch.Tensor) -> torch.Tensor:
         """
@@ -2811,7 +2830,7 @@ class DiffusionTrainer:
         logits = pred_tile_logits.index_select(0, selected)
         repaired_mean = F.cross_entropy(logits, target_batch, reduction="mean")
         full_batch_loss = F.cross_entropy(logits, target_batch, reduction="sum") / float(
-            max(1, int(target_batch.shape[0]) * int(pred_tile_logits.shape[2]) * int(pred_tile_logits.shape[3]))
+            max(1, int(pred_tile_logits.shape[0]) * int(pred_tile_logits.shape[2]) * int(pred_tile_logits.shape[3]))
         )
         return full_batch_loss, float(target_batch.shape[0]), repaired_mean
     
@@ -3298,6 +3317,7 @@ class DiffusionTrainer:
         )
         self._scale_accumulated_gradients(micro_steps)
         if not self._gradients_are_finite():
+            self._amp_update_after_skipped_step()
             self._reset_gradient_accumulation()
             self._warn_nonfinite(
                 "gradient",
@@ -3324,6 +3344,7 @@ class DiffusionTrainer:
                 if bool(getattr(self.config, "logic_net_trainable", True)):
                     grad_norms.append(torch.nn.utils.clip_grad_norm_(self.logic_net.parameters(), max_norm=grad_clip_norm))
             if not all(self._tensor_is_finite(norm) for norm in grad_norms):
+                self._amp_update_after_skipped_step()
                 self._reset_gradient_accumulation()
                 self._warn_nonfinite(
                     "gradient_norm",
@@ -3450,6 +3471,7 @@ class DiffusionTrainer:
         )
         self._scale_accumulated_gradients(micro_steps)
         if not self._gradients_are_finite():
+            self._amp_update_after_skipped_step()
             self._reset_gradient_accumulation()
             self._warn_nonfinite(
                 "dpo_gradient",
@@ -3479,6 +3501,7 @@ class DiffusionTrainer:
                 if bool(getattr(self.config, "logic_net_trainable", True)):
                     grad_norms.append(torch.nn.utils.clip_grad_norm_(self.logic_net.parameters(), grad_clip))
             if not all(self._tensor_is_finite(norm) for norm in grad_norms):
+                self._amp_update_after_skipped_step()
                 self._reset_gradient_accumulation()
                 self._warn_nonfinite(
                     "dpo_gradient_norm",

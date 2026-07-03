@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from src.gui.rendering.font_cache import get_sys_font
+
 
 def render_translucent_event_overlays(
     *,
@@ -87,8 +89,8 @@ def render_preview_layer(
             pygame.draw.rect(gui.screen, (40, 40, 60), box_rect)
             pygame.draw.rect(gui.screen, (100, 150, 255), box_rect, 2)
 
-            font = pygame.font.SysFont("Arial", 14, bold=True)
-            small = pygame.font.SysFont("Arial", 12)
+            font = get_sys_font(pygame, "Arial", 14, bold=True)
+            small = get_sys_font(pygame, "Arial", 12)
             path_len = len(gui.auto_path) if getattr(gui, "auto_path", None) else 0
             text1 = font.render(f"Preview: {path_len} steps", True, (200, 200, 255))
             gui.screen.blit(text1, (box_rect.x + 8, box_rect.y + 8))
