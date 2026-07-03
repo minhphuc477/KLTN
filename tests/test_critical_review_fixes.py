@@ -277,6 +277,44 @@ def test_key_economy_accepts_specific_boss_key_identifier():
     assert result.is_valid
 
 
+def test_key_economy_infers_boss_key_from_target_boss_door_node():
+    from src.simulation.key_economy_validator import KeyEconomyValidator
+
+    graph = nx.DiGraph()
+    graph.add_node("start", type="START")
+    graph.add_node("big_key", type="BIG_KEY", key_id=7)
+    graph.add_node("boss_door", type="BOSS_DOOR", key_id=7)
+    graph.add_node("goal", type="GOAL")
+    graph.add_edge("start", "big_key", edge_type="open")
+    graph.add_edge("big_key", "boss_door", edge_type="boss_locked")
+    graph.add_edge("boss_door", "goal", edge_type="open")
+
+    result = KeyEconomyValidator(graph).validate()
+
+    assert result.greedy_solvable
+    assert result.adversarial_solvable
+    assert result.is_valid
+
+
+def test_key_economy_infers_item_gate_requirement_from_target_node():
+    from src.simulation.key_economy_validator import KeyEconomyValidator
+
+    graph = nx.DiGraph()
+    graph.add_node("start", type="START")
+    graph.add_node("item", type="ITEM", item_type="HOOKSHOT")
+    graph.add_node("gate", type="PUZZLE", required_item="HOOKSHOT")
+    graph.add_node("goal", type="GOAL")
+    graph.add_edge("start", "item", edge_type="open")
+    graph.add_edge("item", "gate", edge_type="item_gate")
+    graph.add_edge("gate", "goal", edge_type="open")
+
+    result = KeyEconomyValidator(graph).validate()
+
+    assert result.greedy_solvable
+    assert result.adversarial_solvable
+    assert result.is_valid
+
+
 def test_key_economy_does_not_collect_required_key_from_lock_nodes():
     from src.simulation.key_economy_validator import KeyEconomyValidator
 
@@ -293,6 +331,93 @@ def test_key_economy_does_not_collect_required_key_from_lock_nodes():
 
     assert result.greedy_solvable is False
     assert result.is_valid is False
+
+
+def test_map_elites_progression_does_not_collect_required_key_from_lock_nodes():
+    from src.simulation.map_elites import MAPElitesEvaluator
+
+    graph = nx.DiGraph()
+    graph.add_node("start", type="START", items=["small_1"])
+    graph.add_node("lock_1", type="LOCK", key_id="small_2")
+    graph.add_node("lock_2", type="LOCK")
+    graph.add_node("goal", type="GOAL")
+    graph.add_edge("start", "lock_1", edge_type="key_locked", key_required="small_1")
+    graph.add_edge("lock_1", "lock_2", edge_type="key_locked", key_required="small_2")
+    graph.add_edge("lock_2", "goal", edge_type="open")
+
+    assert MAPElitesEvaluator._progression_feasible_path(graph, "start", "goal") is None
+
+
+def test_map_elites_progression_infers_gate_key_from_target_lock_node():
+    from src.simulation.map_elites import MAPElitesEvaluator
+
+    graph = nx.DiGraph()
+    graph.add_node("start", type="START")
+    graph.add_node("key", type="KEY", key_id=7)
+    graph.add_node("lock", type="LOCK", key_id=7)
+    graph.add_node("goal", type="GOAL")
+    graph.add_edge("start", "key", edge_type="open")
+    graph.add_edge("key", "lock", edge_type="key_locked")
+    graph.add_edge("lock", "goal", edge_type="open")
+
+    result = MAPElitesEvaluator._progression_feasible_path(graph, "start", "goal")
+
+    assert result is not None
+    path, _inventory, keys_collected, keys_consumed = result
+    assert path == ["start", "key", "lock", "goal"]
+    assert keys_collected == 1
+    assert keys_consumed == 1
+
+
+def test_external_validator_infers_boss_key_from_target_boss_door_node():
+    from src.evaluation.validator import AgentSimulator
+
+    graph = nx.DiGraph()
+    graph.add_node("start", type="START")
+    graph.add_node("big_key", type="BIG_KEY", key_id=7)
+    graph.add_node("boss_door", type="BOSS_DOOR", key_id=9)
+    graph.add_node("goal", type="GOAL")
+    graph.add_edge("start", "big_key", edge_type="open")
+    graph.add_edge("big_key", "boss_door", edge_type="boss_locked")
+    graph.add_edge("boss_door", "goal", edge_type="open")
+
+    assert AgentSimulator(graph).find_path().is_solvable is False
+
+    graph.nodes["boss_door"]["key_id"] = 7
+    assert AgentSimulator(graph).find_path().is_solvable is True
+
+
+def test_external_validator_infers_item_gate_requirement_from_target_node():
+    from src.evaluation.validator import AgentSimulator
+
+    graph = nx.DiGraph()
+    graph.add_node("start", type="START")
+    graph.add_node("item", type="ITEM", item_type="RAFT")
+    graph.add_node("gate", type="PUZZLE", required_item="BOW")
+    graph.add_node("goal", type="GOAL")
+    graph.add_edge("start", "item", edge_type="open")
+    graph.add_edge("item", "gate", edge_type="item_gate")
+    graph.add_edge("gate", "goal", edge_type="open")
+
+    assert AgentSimulator(graph).find_path().is_solvable is False
+
+    graph.nodes["item"]["item_type"] = "BOW"
+    assert AgentSimulator(graph).find_path().is_solvable is True
+
+
+def test_external_validator_does_not_collect_required_item_as_provider():
+    from src.evaluation.validator import AgentSimulator
+
+    graph = nx.DiGraph()
+    graph.add_node("start", type="START")
+    graph.add_node("consumer_metadata", type="ITEM", required_item="BOW")
+    graph.add_node("gate", type="PUZZLE", required_item="BOW")
+    graph.add_node("goal", type="GOAL")
+    graph.add_edge("start", "consumer_metadata", edge_type="open")
+    graph.add_edge("consumer_metadata", "gate", edge_type="item_gate")
+    graph.add_edge("gate", "goal", edge_type="open")
+
+    assert AgentSimulator(graph).find_path().is_solvable is False
 
 
 def test_src_ml_logicnet_exports_canonical_block_v_logicnet():

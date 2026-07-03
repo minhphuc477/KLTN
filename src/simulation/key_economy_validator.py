@@ -229,6 +229,36 @@ def _edge_required_item(edge_data: Dict) -> object:
     return "ITEM"
 
 
+def _edge_with_endpoint_requirements(
+    graph: nx.DiGraph,
+    source: int,
+    target: int,
+    edge_data: Dict,
+) -> Dict:
+    """Copy edge attrs and infer missing requirements from the consumer node.
+
+    Several graph exporters store the required key/item on the target lock
+    node rather than duplicating it on the incoming edge. The player model
+    consumes edge records, so normalize that schema at the traversal boundary.
+    """
+    normalized = dict(edge_data or {})
+    target_data = graph.nodes.get(target, {})
+    target_role = _normalized_node_role(target_data)
+    lock_type = _normalized_lock_type(normalized)
+
+    if lock_type in {"key_locked", "boss"} and _edge_key_id(normalized, default=None) is None:
+        target_key = _resource_key(target_data.get("key_id"))
+        if target_key is not None and ("LOCK" in target_role or "DOOR" in target_role):
+            normalized["key_id"] = target_key
+
+    if lock_type == "item" and _edge_required_item(normalized) == "ITEM":
+        required_item = _resource_key(target_data.get("required_item"))
+        if required_item is not None:
+            normalized["item_required"] = str(required_item)
+
+    return normalized
+
+
 def _node_resources(node_data: Dict) -> List[object]:
     """Return resources supplied by a node; consumer-only fields are ignored."""
     resources: List[object] = []
@@ -302,13 +332,13 @@ def _iter_accessible_neighbor_edges(graph: nx.DiGraph, node: int):
     for neighbor in graph.successors(node):
         edge_data = graph.get_edge_data(node, neighbor, {}) or {}
         seen.add(neighbor)
-        yield neighbor, edge_data
+        yield neighbor, _edge_with_endpoint_requirements(graph, node, neighbor, edge_data)
     for predecessor in graph.predecessors(node):
         if predecessor in seen:
             continue
         edge_data = graph.get_edge_data(predecessor, node, {}) or {}
         if _edge_is_reversible(edge_data):
-            yield predecessor, edge_data
+            yield predecessor, _edge_with_endpoint_requirements(graph, predecessor, node, edge_data)
 
 
 @dataclass

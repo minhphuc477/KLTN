@@ -267,16 +267,22 @@ class AgentSimulator:
                 names: Set[str] = set()
                 for raw_name in (
                     data.get('item_type'),
-                    data.get('required_item'),
                     data.get('protection_item_id'),
                 ):
                     if raw_name is not None and str(raw_name).strip():
                         names.add(str(raw_name).strip().upper())
                 # Legacy "I" nodes carry no identity. Preserve compatibility
-                # explicitly as a wildcard rather than conflating all typed items.
-                if not names:
+                # explicitly as a wildcard rather than conflating all typed
+                # items. A node that only declares `required_item` is a
+                # consumer-side schema and must not become a wildcard provider.
+                has_provider_hint = any(
+                    data.get(field) is not None and str(data.get(field)).strip()
+                    for field in ("item_type", "protection_item_id")
+                )
+                if not names and not data.get("required_item") and not has_provider_hint:
                     names.add('*')
-                self.item_nodes[node_id] = names
+                if names:
+                    self.item_nodes[node_id] = names
             if (
                 'switch' in lowered_parts
                 or 'puzzle' in lowered_parts
@@ -440,6 +446,7 @@ class AgentSimulator:
         )
         if edge_data is None:
             return False, state, 'none'
+        edge_data = self._edge_data_with_endpoint_requirements(to_node, dict(edge_data))
         
         edge_label = edge_data.get('label', '')
         raw_edge_type = edge_data.get(
@@ -635,6 +642,36 @@ class AgentSimulator:
         # Unknown edge type - do not silently flatten progression semantics.
         logger.warning(f"Unknown edge type: {edge_type}")
         return False, state, edge_type
+
+    def _edge_data_with_endpoint_requirements(self, to_node: Any, edge_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Infer missing gate requirements from the target consumer node."""
+        if self.graph is None or to_node not in self.graph:
+            return edge_data
+        target_data = dict(self.graph.nodes[to_node])
+        target_type = str(target_data.get("type", target_data.get("label", "")) or "").strip().lower()
+        raw_edge_type = edge_data.get(
+            "edge_type",
+            edge_data.get("type", EDGE_TYPE_MAP.get(edge_data.get("label", ""), "open")),
+        )
+        constraints = parse_edge_type_tokens(
+            label=str(edge_data.get("label", "") or ""),
+            edge_type=str(getattr(raw_edge_type, "name", raw_edge_type) or ""),
+        )
+        lowered = {str(token).strip().lower() for token in constraints}
+
+        is_key_gate = bool({"key_locked", "locked", "k"} & lowered)
+        is_boss_gate = bool({"boss_locked", "boss"} & lowered)
+        if (is_key_gate or is_boss_gate) and edge_data.get("key_required") is None:
+            target_key = target_data.get("key_id")
+            if target_key is not None and ("lock" in target_type or "door" in target_type):
+                edge_data["key_required"] = target_key
+
+        if bool({"item_locked", "item_gate"} & lowered) and edge_data.get("item_required") is None:
+            required_item = target_data.get("required_item")
+            if required_item is not None and str(required_item).strip():
+                edge_data["item_required"] = str(required_item).strip()
+
+        return edge_data
     
     def collect_items(self, node_id: Any, state: ValidationState) -> ValidationState:
         """Collect any items at the current node."""

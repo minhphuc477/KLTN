@@ -688,6 +688,16 @@ Confirmed and fixed:
 - `LOCK`, `BOSS_DOOR`, and other consumer nodes no longer become key providers
   merely because their metadata contains `key_id`. This closes a false-positive
   route where the required-key annotation could be collected after traversal.
+- Graph traversal now infers omitted `key_required` / `item_required` fields
+  from target consumer nodes when exporters store the requirement on
+  `LOCK`, `BOSS_DOOR`, or puzzle nodes instead of duplicating it on the edge.
+- MAP-Elites macro-feasibility and the external `AgentSimulator` now use the
+  same consumer/provider distinction, so QD descriptors and benchmark
+  solvability do not reward keys or items that only exist as requirement
+  metadata.
+- External graph validation no longer treats `required_item` as an item
+  provider. Legacy untyped `I` nodes still act as wildcard item pickups, but
+  consumer-only requirement metadata does not create inventory.
 - Masked-room checkpoint resume now refuses LogicNet states that omit learned
   parameters, preventing mixed trained/random LogicNet supervision after
   partial checkpoints.
@@ -715,6 +725,10 @@ Focused verification:
 - A follow-up focused run passed the item-gate softlock, specific boss-key,
   consumer-node key metadata, own-lock, edge-type locked, and persistent
   boss-key key-economy regressions.
+- A second follow-up run passed endpoint-inferred boss-key/item-gate
+  regressions across `KeyEconomyValidator`, MAP-Elites macro feasibility, and
+  the external `AgentSimulator`; the full `tests/test_critical_review_fixes.py`
+  file passed with 53 behavior tests.
 - Ruff passed on the touched search/key-economy files and their focused tests.
 - `python -m graphify update .` completed after one timeout retry; the final
   run reported no code-graph topology changes.

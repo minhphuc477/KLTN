@@ -258,6 +258,29 @@ class MAPElitesEvaluator:
         def normalize(value: Any) -> str:
             return str(value or '').strip().lower()
 
+        def target_requirement(edge_data: Dict[str, Any], target: Any) -> Dict[str, Any]:
+            normalized = dict(edge_data or {})
+            target_data = dict(mission_graph.nodes[target])
+            target_role = normalize(target_data.get('type', target_data.get('label', '')))
+            edge_tokens = set(parse_edge_type_tokens(
+                label=str(normalized.get('label', '') or ''),
+                edge_type=str(normalized.get('edge_type', normalized.get('type', '')) or ''),
+            ))
+            lock_type = normalize(normalized.get('lock_type'))
+            is_key_gate = lock_type in {'locked', 'key_locked'} or {'locked', 'key_locked'} & edge_tokens
+            is_boss_gate = lock_type == 'boss' or {'boss_locked', 'boss_lock'} & edge_tokens
+            is_item_gate = bool(normalize(normalized.get('item_required'))) or 'item_gate' in edge_tokens
+
+            if (is_key_gate or is_boss_gate) and not normalize(normalized.get('key_required', normalized.get('key_id'))):
+                target_key = normalize(target_data.get('key_id'))
+                if target_key and ('lock' in target_role or 'door' in target_role):
+                    normalized['key_required'] = target_key
+            if is_item_gate and not normalize(normalized.get('item_required')):
+                required_item = normalize(target_data.get('required_item'))
+                if required_item:
+                    normalized['item_required'] = required_item
+            return normalized
+
         def collect(node: Any, inventory: Dict[str, int], collected: frozenset) -> Tuple[Dict[str, int], frozenset, int]:
             if node in collected:
                 return inventory, collected, 0
@@ -267,7 +290,8 @@ class MAPElitesEvaluator:
             role = normalize(data.get('type', data.get('label', '')))
             key_id = normalize(data.get('key_id'))
             key_count = max(1, int(data.get('key_count_hint', data.get('key_count', 0)) or 0))
-            if key_id:
+            consumer_role = 'lock' in role or 'door' in role
+            if key_id and not consumer_role:
                 updated[key_id] = updated.get(key_id, 0) + key_count
                 gained_keys += key_count
             elif data.get('has_key') or role in {'key', 'k'}:
@@ -336,7 +360,10 @@ class MAPElitesEvaluator:
                 return list(reversed(path)), inventory, keys_collected, keys_consumed
 
             for neighbor in mission_graph.neighbors(node):
-                edge_data = dict(mission_graph.get_edge_data(node, neighbor, {}) or {})
+                edge_data = target_requirement(
+                    dict(mission_graph.get_edge_data(node, neighbor, {}) or {}),
+                    neighbor,
+                )
                 traversed = traverse(edge_data, inventory)
                 if traversed is None:
                     continue

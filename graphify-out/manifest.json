@@ -885,8 +885,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\evaluation\\validator.py": {
-    "mtime": 1782966556.5714114,
-    "ast_hash": "27054723ac94b46339fc4d8f0d6ec502",
+    "mtime": 1783054762.8334804,
+    "ast_hash": "27da51af12e66cc6ef1cbeeb866eec47",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\generate.py": {
@@ -2330,13 +2330,13 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\simulation\\key_economy_validator.py": {
-    "mtime": 1783023464.671672,
-    "ast_hash": "3eb78d38965cd6a74185fa8a41dde6d8",
+    "mtime": 1783054497.418652,
+    "ast_hash": "922588bfb0843a64ea2e0e36e2ab522b",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\simulation\\map_elites.py": {
-    "mtime": 1782927739.5499833,
-    "ast_hash": "02b5ea3da1e3a42ed20b143aa1540e11",
+    "mtime": 1783054592.6172671,
+    "ast_hash": "07f8097da2f45a37f58ccaed9f04f240",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\simulation\\multi_goal.py": {
@@ -2810,8 +2810,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_critical_review_fixes.py": {
-    "mtime": 1783023473.0145574,
-    "ast_hash": "91abcd180f719f417b2830681bf1a69d",
+    "mtime": 1783054772.0956016,
+    "ast_hash": "d182690b0275e87b97d2935e6680951b",
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_cuda_smoke.py": {
@@ -3820,8 +3820,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\docs\\architecture_audit_research_notes.md": {
-    "mtime": 1783023513.648564,
-    "ast_hash": "dbc47acd27c0f7ed634fcf8d44f424ab",
+    "mtime": 1783054882.5333197,
+    "ast_hash": "babbbd9bf54adb884dab47dbf2621c46",
     "semantic_hash": ""
   },
   "F:\\KLTN\\docs\\archive\\2026-q1\\ARCHITECTURE_RESEARCH_JUDGMENT_2026_02_24.md": {
