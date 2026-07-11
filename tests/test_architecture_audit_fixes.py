@@ -14,6 +14,7 @@ from src.core.symbolic_refiner import DEFAULT_ADJACENCY, TileType
 from src.pipeline.dungeon_pipeline import NeuralSymbolicDungeonPipeline, RoomGenerationResult
 from src.pipeline.graph_features import compute_current_node_distance_features
 from src.pipeline.room_stitching import StitchedRoomLayout
+from src.pipeline.types import NeuralGenerationComponents, PipelineComponents
 from src.pipeline.room_topology_conditioning import (
     ROOM_TOPOLOGY_CHANNEL_COUNT,
     build_room_semantic_anchor_points,
@@ -139,6 +140,35 @@ def test_p_sample_guides_pred_x0_before_rebuilding_posterior(monkeypatch):
     assert seen["scale_multiplier"] == pytest.approx(model._guidance_timestep_scale(0))
     assert torch.allclose(seen["posterior_pred_x0"], torch.full_like(x_t, -1.0))
     assert torch.allclose(out, torch.full_like(out, -1.0))
+
+
+def _conditioning_only_pipeline() -> NeuralSymbolicDungeonPipeline:
+    """Build the real conditioning path without unrelated generative models.
+
+    These tests exercise ``_compute_room_condition``. Loading a production
+    VQ-VAE and diffusion model here adds native allocations unrelated to that
+    contract and makes test outcomes depend on host PyTorch allocator state.
+    The pipeline still initializes normally and binds a real condition encoder.
+    """
+    encoder = create_condition_encoder(
+        latent_dim=4,
+        node_feature_dim=12,
+        edge_feature_dim=14,
+        hidden_dim=32,
+        output_dim=256,
+        num_gnn_layers=1,
+        num_attention_heads=4,
+        dropout=0.0,
+    )
+    return NeuralSymbolicDungeonPipeline.from_components(
+        components=PipelineComponents(
+            neural=NeuralGenerationComponents(condition_encoder=encoder),
+        ),
+        device="cpu",
+        enable_logging=False,
+        room_generator_mode="latent_diffusion",
+        use_graph_node_cross_attention=True,
+    )
 
 
 def test_min_snr_gamma_defaults_to_five_and_clamps_snr_weights():
@@ -1734,12 +1764,7 @@ def test_pipeline_refiner_can_refresh_into_learned_rules():
 
 
 def test_compute_room_condition_reuses_global_tokens_without_second_encoder_pass(monkeypatch):
-    pipeline = NeuralSymbolicDungeonPipeline(
-        device="cpu",
-        enable_logging=False,
-        room_generator_mode="latent_diffusion",
-        use_graph_node_cross_attention=True,
-    )
+    pipeline = _conditioning_only_pipeline()
 
     graph_context = {
         "node_features": torch.randn(3, 12),
@@ -1772,13 +1797,8 @@ def test_compute_room_condition_reuses_global_tokens_without_second_encoder_pass
 def test_compute_room_condition_keeps_batch_dim_stable_when_puzzle_control_runs_in_cross_attention_fallback(
     monkeypatch,
 ):
-    pipeline = NeuralSymbolicDungeonPipeline(
-        device="cpu",
-        enable_logging=False,
-        room_generator_mode="latent_diffusion",
-        use_graph_node_cross_attention=True,
-        diffusion_fallback_config={"puzzle_structure_dropout_prob": 0.35},
-    )
+    pipeline = _conditioning_only_pipeline()
+    pipeline.diffusion_puzzle_structure_condition_enabled = True
 
     graph_context = {
         "node_features": torch.randn(3, 12),

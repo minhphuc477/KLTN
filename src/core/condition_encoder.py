@@ -1370,7 +1370,7 @@ class CrossAttentionFusion(nn.Module):
     Uses local context as queries and global context as keys/values
     to produce a unified conditioning vector.
     
-    Attention(Q, K, V) = softmax(QK^T / √d_k) V
+    Attention(Q, K, V) = softmax(QK^T / sqrt(d_k)) V
     
     Args:
         local_dim: Dimension of local stream output

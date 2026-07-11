@@ -40,6 +40,11 @@ from src.zelda_data.splits import validate_disjoint_dungeon_splits
 from src.core.latent_diffusion import LatentDiffusionModel, create_latent_diffusion
 from src.core.vqvae import SemanticVQVAE as VQVAE, create_vqvae
 from src.core.condition_encoder import DualStreamConditionEncoder, create_condition_encoder
+from src.core.puzzle_stage_semantics import (
+    DEFAULT_PUZZLE_STAGE_MAX_SEQUENCE_LENGTH,
+    DEFAULT_PUZZLE_STAGE_SEMANTICS_HIDDEN_DIM,
+    PuzzleStageSemanticsHead,
+)
 from src.core.definitions import (
     GRAPH_EDGE_FEATURE_DIM,
     GRAPH_NODE_FEATURE_DIM,
@@ -59,6 +64,7 @@ from src.pipeline.graph_features import (
     compute_rwse_features,
 )
 from src.pipeline.room_topology_conditioning import (
+    DEFAULT_PUZZLE_STAGE_TRACE_DECAY,
     DEFAULT_PUZZLE_STAGE_TOKEN_SCALE,
     DEFAULT_SEMANTIC_PUZZLE_OFFSET,
     DEFAULT_SEMANTIC_ROLE_PRIOR_STRENGTH,
@@ -208,13 +214,20 @@ class DiffusionTrainingConfig:
         spatial_graph_gate_init: float = -2.0,
         spatial_topology_gate_init: float = -2.0,
         use_teacher_forced_neighbor_latents: bool = True,
-        puzzle_structure_dropout_prob: float = 0.35,
+        puzzle_structure_dropout_prob: float = 0.0,
         use_current_node_distance_features: bool = True,
         current_node_distance_max: int = 8,
         room_topology_channels: int = ROOM_TOPOLOGY_CHANNEL_COUNT,
         topology_supervision_mode: str = "runtime_aligned",
         semantic_role_prior_strength: float = DEFAULT_SEMANTIC_ROLE_PRIOR_STRENGTH,
         semantic_puzzle_offset: int = DEFAULT_SEMANTIC_PUZZLE_OFFSET,
+        puzzle_stage_conditioning_enabled: bool = False,
+        puzzle_stage_token_scale: float = DEFAULT_PUZZLE_STAGE_TOKEN_SCALE,
+        puzzle_stage_topology_enabled: bool = False,
+        puzzle_stage_trace_decay: float = DEFAULT_PUZZLE_STAGE_TRACE_DECAY,
+        puzzle_stage_semantics_loss_weight: float = 0.0,
+        puzzle_stage_semantics_hidden_dim: int = DEFAULT_PUZZLE_STAGE_SEMANTICS_HIDDEN_DIM,
+        puzzle_stage_semantics_max_sequence_length: int = DEFAULT_PUZZLE_STAGE_MAX_SEQUENCE_LENGTH,
         cfg_dropout_prob: float = 0.1,
         cfg_scale: float = 3.0,
         cfg_schedule_mode: str = "constant",
@@ -483,6 +496,15 @@ class DiffusionTrainingConfig:
             )
         self.semantic_role_prior_strength = float(max(0.0, min(1.0, semantic_role_prior_strength)))
         self.semantic_puzzle_offset = int(max(0, semantic_puzzle_offset))
+        self.puzzle_stage_conditioning_enabled = bool(puzzle_stage_conditioning_enabled)
+        self.puzzle_stage_token_scale = float(max(0.0, puzzle_stage_token_scale))
+        self.puzzle_stage_topology_enabled = bool(puzzle_stage_topology_enabled)
+        self.puzzle_stage_trace_decay = float(max(0.05, min(1.0, puzzle_stage_trace_decay)))
+        self.puzzle_stage_semantics_loss_weight = float(max(0.0, puzzle_stage_semantics_loss_weight))
+        self.puzzle_stage_semantics_hidden_dim = int(max(16, puzzle_stage_semantics_hidden_dim))
+        self.puzzle_stage_semantics_max_sequence_length = int(
+            max(1, puzzle_stage_semantics_max_sequence_length)
+        )
         self.cfg_dropout_prob = float(max(0.0, min(1.0, cfg_dropout_prob)))
         self.cfg_scale = float(max(0.0, cfg_scale))
         self.cfg_schedule_mode = str(cfg_schedule_mode).strip().lower()
@@ -713,7 +735,20 @@ def diffusion_training_kwargs_from_resolved_config(
         "spatial_graph_gate_init": stage["spatial_graph_gate_init"],
         "spatial_topology_gate_init": stage["spatial_topology_gate_init"],
         "use_teacher_forced_neighbor_latents": stage["use_teacher_forced_neighbor_latents"],
-        "puzzle_structure_dropout_prob": stage.get("puzzle_structure_dropout_prob", 0.35),
+        "puzzle_structure_dropout_prob": stage.get("puzzle_structure_dropout_prob", 0.0),
+        "puzzle_stage_conditioning_enabled": stage.get("puzzle_stage_conditioning_enabled", False),
+        "puzzle_stage_token_scale": stage.get("puzzle_stage_token_scale", DEFAULT_PUZZLE_STAGE_TOKEN_SCALE),
+        "puzzle_stage_topology_enabled": stage.get("puzzle_stage_topology_enabled", False),
+        "puzzle_stage_trace_decay": stage.get("puzzle_stage_trace_decay", DEFAULT_PUZZLE_STAGE_TRACE_DECAY),
+        "puzzle_stage_semantics_loss_weight": stage.get("puzzle_stage_semantics_loss_weight", 0.0),
+        "puzzle_stage_semantics_hidden_dim": stage.get(
+            "puzzle_stage_semantics_hidden_dim",
+            DEFAULT_PUZZLE_STAGE_SEMANTICS_HIDDEN_DIM,
+        ),
+        "puzzle_stage_semantics_max_sequence_length": stage.get(
+            "puzzle_stage_semantics_max_sequence_length",
+            DEFAULT_PUZZLE_STAGE_MAX_SEQUENCE_LENGTH,
+        ),
         "use_current_node_distance_features": stage["use_current_node_distance_features"],
         "current_node_distance_max": stage["current_node_distance_max"],
         "room_topology_channels": stage["room_topology_channels"],
@@ -1210,6 +1245,13 @@ class DiffusionTrainer:
         self.model = self.diffusion
         self.condition_encoder = condition_encoder or self._create_condition_encoder()
         self.logic_net = logic_net or self._create_logic_net()
+        self.puzzle_stage_semantics_head: Optional[PuzzleStageSemanticsHead] = None
+        if float(getattr(config, "puzzle_stage_semantics_loss_weight", 0.0)) > 0.0:
+            self.puzzle_stage_semantics_head = PuzzleStageSemanticsHead(
+                num_tile_classes=int(config.num_classes),
+                hidden_dim=int(config.puzzle_stage_semantics_hidden_dim),
+                max_sequence_length=int(config.puzzle_stage_semantics_max_sequence_length),
+            )
         diffusion_context_dim = int(getattr(self.diffusion, "context_dim", self.config.context_dim))
         encoder_output_dim = int(getattr(self.condition_encoder, "output_dim", self.config.context_dim))
         if diffusion_context_dim != encoder_output_dim:
@@ -1223,6 +1265,8 @@ class DiffusionTrainer:
         self.diffusion = self.diffusion.to(self.device)
         self.condition_encoder = self.condition_encoder.to(self.device)
         self.logic_net = self.logic_net.to(self.device)
+        if self.puzzle_stage_semantics_head is not None:
+            self.puzzle_stage_semantics_head = self.puzzle_stage_semantics_head.to(self.device)
         
         # Freeze VQ-VAE
         self.vqvae.eval()
@@ -1235,7 +1279,7 @@ class DiffusionTrainer:
         
         # --- Wire LogicNet into diffusion model's GradientGuidance ---
         # This enables gradient guidance during sampling: at each denoising
-        # step, ∇_{x_t}L_logic nudges the sample toward solvable configs.
+        # step, grad_{x_t} L_logic nudges the sample toward solvable configs.
         self._configure_guidance()
 
         # --- Gradient checkpointing (reduces VRAM at cost of recompute) ---
@@ -1262,6 +1306,14 @@ class DiffusionTrainer:
                 weight_decay=float(config.optimizer_weight_decay),
             )
         )
+        if self.puzzle_stage_semantics_head is not None:
+            optimizer_groups.extend(
+                self._adamw_decay_param_groups(
+                    "puzzle_stage_semantics_head",
+                    self.puzzle_stage_semantics_head,
+                    weight_decay=float(config.optimizer_weight_decay),
+                )
+            )
         if bool(getattr(config, "logic_net_trainable", True)):
             logic_groups = self._adamw_decay_param_groups(
                 "logic_net",
@@ -1310,14 +1362,19 @@ class DiffusionTrainer:
             try:
                 mixed_precision = self._amp_mixed_precision if self._amp_enabled else "no"
                 self._accelerator = Accelerator(mixed_precision=mixed_precision)
-                self.diffusion, self.condition_encoder, self.logic_net, self.optimizer = (
-                    self._accelerator.prepare(
-                        self.diffusion,
-                        self.condition_encoder,
-                        self.logic_net,
-                        self.optimizer,
-                    )
-                )
+                prepare_items: List[Any] = [self.diffusion, self.condition_encoder, self.logic_net]
+                if self.puzzle_stage_semantics_head is not None:
+                    prepare_items.append(self.puzzle_stage_semantics_head)
+                prepare_items.append(self.optimizer)
+                prepared_items = self._accelerator.prepare(*prepare_items)
+                self.diffusion = prepared_items[0]
+                self.condition_encoder = prepared_items[1]
+                self.logic_net = prepared_items[2]
+                next_index = 3
+                if self.puzzle_stage_semantics_head is not None:
+                    self.puzzle_stage_semantics_head = prepared_items[next_index]
+                    next_index += 1
+                self.optimizer = prepared_items[next_index]
                 self.model = self.diffusion
                 self._configure_guidance()
                 logger.info(
@@ -2921,10 +2978,12 @@ class DiffusionTrainer:
                 )
 
     def _gradients_are_finite(self) -> bool:
-        """Check trainable diffusion/condition-encoder gradients before stepping."""
+        """Check all trainable optimizer modules before stepping."""
         modules = [self.diffusion, self.condition_encoder]
         if bool(getattr(self.config, "logic_net_trainable", True)):
             modules.append(self.logic_net)
+        if self.puzzle_stage_semantics_head is not None:
+            modules.append(self.puzzle_stage_semantics_head)
         for module in modules:
             for param in module.parameters():
                 if param.grad is None:
@@ -3070,6 +3129,8 @@ class DiffusionTrainer:
         modules = [self.diffusion, self.condition_encoder]
         if bool(getattr(self.config, "logic_net_trainable", True)):
             modules.append(self.logic_net)
+        if self.puzzle_stage_semantics_head is not None:
+            modules.append(self.puzzle_stage_semantics_head)
         seen: Set[int] = set()
         for module in modules:
             for param in module.parameters():
@@ -3080,6 +3141,94 @@ class DiffusionTrainer:
                     continue
                 seen.add(param_id)
                 param.grad.detach().div_(scale)
+
+    def _puzzle_stage_semantic_loss(
+        self,
+        *,
+        tile_logits: Optional[torch.Tensor],
+        graph_list: Optional[List[dict]],
+    ) -> Tuple[torch.Tensor, Dict[str, float]]:
+        """Supervise ordered puzzle semantics only for the explicit ablation."""
+        zero = torch.zeros((), device=self.device, dtype=torch.float32)
+        empty_metrics = {
+            "puzzle_stage_semantic_loss": 0.0,
+            "puzzle_stage_gate_loss": 0.0,
+            "puzzle_stage_sequence_loss": 0.0,
+            "puzzle_stage_count_loss": 0.0,
+            "puzzle_stage_slot_loss": 0.0,
+            "puzzle_stage_gate_acc": 0.0,
+            "puzzle_stage_sequence_acc": 0.0,
+            "puzzle_stage_count_acc": 0.0,
+            "puzzle_stage_slot_acc": 0.0,
+        }
+        if (
+            self.puzzle_stage_semantics_head is None
+            or tile_logits is None
+            or tile_logits.numel() == 0
+            or not graph_list
+            or float(getattr(self.config, "puzzle_stage_semantics_loss_weight", 0.0)) <= 0.0
+        ):
+            return zero, empty_metrics
+        return self.puzzle_stage_semantics_head.compute_loss(
+            tile_logits,
+            [
+                graph_dict.get("puzzle_stage_condition")
+                if isinstance(graph_dict, dict)
+                else {}
+                for graph_dict in graph_list
+            ],
+        )
+
+    def _predict_x0_for_auxiliary_supervision(
+        self,
+        z_0: torch.Tensor,
+        conditioning: torch.Tensor,
+        diffusion_graph_data: Optional[Dict[str, torch.Tensor]],
+    ) -> Optional[torch.Tensor]:
+        """Denoise one noisy latent so auxiliary room losses train the denoiser."""
+        batch_size = int(z_0.shape[0])
+        timesteps = torch.randint(
+            0,
+            self.diffusion.num_timesteps,
+            (batch_size,),
+            device=self.device,
+        )
+        x_t = self.diffusion.q_sample(z_0, timesteps, torch.randn_like(z_0))
+        topology_tensors = self.diffusion._extract_context_topology(
+            conditioning,
+            diffusion_graph_data,
+        )
+        if len(topology_tensors) == 2:
+            context_edge_index, context_node_mask = topology_tensors
+            context_edge_attr = None
+        else:
+            context_edge_index, context_edge_attr, context_node_mask = topology_tensors
+        spatial_graph_data = self.diffusion._extract_spatial_graph_context(
+            conditioning,
+            diffusion_graph_data,
+        )
+        with self._autocast_context():
+            prediction = self.diffusion.denoiser(
+                x_t,
+                timesteps,
+                conditioning,
+                context_edge_index=context_edge_index,
+                context_edge_attr=context_edge_attr,
+                context_node_mask=context_node_mask,
+                spatial_graph_data=spatial_graph_data,
+            )
+            predicted_x0 = torch.clamp(
+                self._prediction_to_x0(prediction, x_t, timesteps),
+                -1.0,
+                1.0,
+            )
+        if not self._tensor_is_finite(predicted_x0):
+            self._warn_nonfinite(
+                "auxiliary_pred_x0",
+                "Diffusion training: non-finite predicted x0 for auxiliary supervision; skipping auxiliary losses for this batch.",
+            )
+            return None
+        return predicted_x0
     
     def train_step(
         self,
@@ -3088,6 +3237,7 @@ class DiffusionTrainer:
         include_logic_loss: bool = True,
         logic_graph_data: Optional[dict] = None,
         diffusion_graph_data: Optional[dict] = None,
+        graph_list: Optional[List[dict]] = None,
         force_optimizer_step: bool = False,
     ) -> Dict[str, float]:
         """
@@ -3111,6 +3261,8 @@ class DiffusionTrainer:
         """
         self.diffusion.train()
         self.condition_encoder.train()
+        if self.puzzle_stage_semantics_head is not None:
+            self.puzzle_stage_semantics_head.train()
         
         batch_size = real_maps.shape[0]
         
@@ -3160,6 +3312,17 @@ class DiffusionTrainer:
                 'logic_loss_mode_predicted': 1.0 if self.config.logic_loss_mode == 'predicted_latent' else 0.0,
                 'skipped_nonfinite_batch': 1.0,
             }
+            metrics.update({
+                "puzzle_stage_semantic_loss": 0.0,
+                "puzzle_stage_gate_loss": 0.0,
+                "puzzle_stage_sequence_loss": 0.0,
+                "puzzle_stage_count_loss": 0.0,
+                "puzzle_stage_slot_loss": 0.0,
+                "puzzle_stage_gate_acc": 0.0,
+                "puzzle_stage_sequence_acc": 0.0,
+                "puzzle_stage_count_acc": 0.0,
+                "puzzle_stage_slot_acc": 0.0,
+            })
             metrics.update(self._vqvae_codebook_stats())
             return metrics
         
@@ -3175,6 +3338,19 @@ class DiffusionTrainer:
         logic_tile_accuracy = torch.tensor(0.0, device=self.device)
         solvability_proxy = torch.tensor(0.0, device=self.device)
         logic_info: Dict[str, Any] = {}
+        puzzle_stage_semantic_loss = torch.zeros((), device=self.device)
+        puzzle_stage_semantic_metrics: Dict[str, float] = {
+            "puzzle_stage_semantic_loss": 0.0,
+            "puzzle_stage_gate_loss": 0.0,
+            "puzzle_stage_sequence_loss": 0.0,
+            "puzzle_stage_count_loss": 0.0,
+            "puzzle_stage_slot_loss": 0.0,
+            "puzzle_stage_gate_acc": 0.0,
+            "puzzle_stage_sequence_acc": 0.0,
+            "puzzle_stage_count_acc": 0.0,
+            "puzzle_stage_slot_acc": 0.0,
+        }
+        predicted_tile_logits: Optional[torch.Tensor] = None
         
         logic_enabled = bool(getattr(self.config, "logic_net_enabled", True))
         logic_loss_weight = self._effective_logic_loss_weight(include_logic_loss)
@@ -3195,54 +3371,23 @@ class DiffusionTrainer:
                 logic_loss, logic_info = self.logic_net(z_for_logic, graph_data=logic_graph_data)
             else:
                 # New default: logic supervision on predicted latent (trains diffusion).
-                t_logic = torch.randint(0, self.diffusion.num_timesteps, (batch_size,), device=self.device)
-                noise_logic = torch.randn_like(z_0)
-                x_t_logic = self.diffusion.q_sample(z_0, t_logic, noise_logic)
-
-                # Predict noise/velocity and convert to predicted clean latent x0.
-                topology_tensors = self.diffusion._extract_context_topology(
+                pred_x0_logic = self._predict_x0_for_auxiliary_supervision(
+                    z_0,
                     conditioning,
                     diffusion_graph_data,
                 )
-                if len(topology_tensors) == 2:
-                    context_edge_index, context_node_mask = topology_tensors
-                    context_edge_attr = None
-                else:
-                    context_edge_index, context_edge_attr, context_node_mask = topology_tensors
-                spatial_graph_data = self.diffusion._extract_spatial_graph_context(
-                    conditioning,
-                    diffusion_graph_data,
-                )
-                with self._autocast_context():
-                    pred_logic = self.diffusion.denoiser(
-                        x_t_logic,
-                        t_logic,
-                        conditioning,
-                        context_edge_index=context_edge_index,
-                        context_edge_attr=context_edge_attr,
-                        context_node_mask=context_node_mask,
-                        spatial_graph_data=spatial_graph_data,
-                    )
-                    pred_x0_logic = self._prediction_to_x0(pred_logic, x_t_logic, t_logic)
-
-                    # Keep latent range bounded similarly to sampling path.
-                    pred_x0_logic = torch.clamp(pred_x0_logic, -1.0, 1.0)
-                    if not self._tensor_is_finite(pred_x0_logic):
-                        self._warn_nonfinite(
-                            "logic_pred_x0",
-                            "Diffusion training: non-finite predicted x0 for logic supervision; disabling logic loss for this batch.",
-                        )
-                        pred_x0_logic = None
-
+                if pred_x0_logic is not None:
                     # Decode predicted x0 before LogicNet so pathfinding sees tile
                     # logits/walkability rather than arbitrary continuous latents.
-                    if pred_x0_logic is not None:
-                        pred_tile_logits = self._decode_latent_for_logic(pred_x0_logic)
-                        logic_loss, logic_info = self.logic_net(pred_tile_logits, graph_data=logic_graph_data)
-                        wfc_pseudo_loss, wfc_pseudo_samples, wfc_pseudo_mean_loss = self._wfc_pseudo_label_loss(
-                            pred_tile_logits,
-                            real_maps,
-                        )
+                    predicted_tile_logits = self._decode_latent_for_logic(pred_x0_logic)
+                    logic_loss, logic_info = self.logic_net(
+                        predicted_tile_logits,
+                        graph_data=logic_graph_data,
+                    )
+                    wfc_pseudo_loss, wfc_pseudo_samples, wfc_pseudo_mean_loss = self._wfc_pseudo_label_loss(
+                        predicted_tile_logits,
+                        real_maps,
+                    )
 
             if self._tensor_is_finite(logic_loss):
                 if isinstance(logic_loss, torch.Tensor) and logic_loss.numel() != 1:
@@ -3255,6 +3400,20 @@ class DiffusionTrainer:
                 )
                 logic_loss = torch.zeros((), device=self.device, dtype=diffusion_loss.dtype)
                 solvability_proxy = torch.zeros((), device=self.device, dtype=diffusion_loss.dtype)
+
+        if self.puzzle_stage_semantics_head is not None and graph_list:
+            if predicted_tile_logits is None:
+                predicted_x0_for_stage = self._predict_x0_for_auxiliary_supervision(
+                    z_0,
+                    conditioning,
+                    diffusion_graph_data,
+                )
+                if predicted_x0_for_stage is not None:
+                    predicted_tile_logits = self._decode_latent_for_logic(predicted_x0_for_stage)
+            puzzle_stage_semantic_loss, puzzle_stage_semantic_metrics = self._puzzle_stage_semantic_loss(
+                tile_logits=predicted_tile_logits,
+                graph_list=graph_list,
+            )
         
         # Combined loss
         total_loss = (
@@ -3262,6 +3421,7 @@ class DiffusionTrainer:
             logic_loss_weight * logic_loss
             + float(getattr(self.config, "alpha_logic_tile", 0.0)) * logic_tile_loss
             + float(getattr(self.config, "alpha_wfc_pseudo", 0.0)) * wfc_pseudo_loss
+            + float(getattr(self.config, "puzzle_stage_semantics_loss_weight", 0.0)) * puzzle_stage_semantic_loss
         )
         total_loss_is_finite = all_ranks_true(
             self._tensor_is_finite(total_loss),
@@ -3289,6 +3449,7 @@ class DiffusionTrainer:
                 'logic_loss_mode_predicted': 1.0 if self.config.logic_loss_mode == 'predicted_latent' else 0.0,
                 'skipped_nonfinite_batch': 1.0,
             }
+            metrics.update(puzzle_stage_semantic_metrics)
             metrics.update(self._vqvae_codebook_stats())
             return metrics
         
@@ -3324,6 +3485,7 @@ class DiffusionTrainer:
             'gradient_accumulation_micro_steps': float(micro_steps),
             'optimizer_step': 0.0,
         }
+        metrics.update(puzzle_stage_semantic_metrics)
         if not should_step_optimizer:
             metrics.update(self._vqvae_codebook_stats())
             return metrics
@@ -3332,6 +3494,8 @@ class DiffusionTrainer:
         modules_for_average = [self.diffusion, self.condition_encoder]
         if bool(getattr(self.config, "logic_net_trainable", True)):
             modules_for_average.append(self.logic_net)
+        if self.puzzle_stage_semantics_head is not None:
+            modules_for_average.append(self.puzzle_stage_semantics_head)
         average_gradients(
             tuple(modules_for_average),
             context=getattr(self, "distributed_context", None),
@@ -3357,6 +3521,13 @@ class DiffusionTrainer:
                 ]
                 if bool(getattr(self.config, "logic_net_trainable", True)):
                     grad_norms.append(self._accelerator.clip_grad_norm_(self.logic_net.parameters(), max_norm=grad_clip_norm))
+                if self.puzzle_stage_semantics_head is not None:
+                    grad_norms.append(
+                        self._accelerator.clip_grad_norm_(
+                            self.puzzle_stage_semantics_head.parameters(),
+                            max_norm=grad_clip_norm,
+                        )
+                    )
             else:
                 grad_norms = [
                     torch.nn.utils.clip_grad_norm_(self.diffusion.parameters(), max_norm=grad_clip_norm),
@@ -3364,6 +3535,13 @@ class DiffusionTrainer:
                 ]
                 if bool(getattr(self.config, "logic_net_trainable", True)):
                     grad_norms.append(torch.nn.utils.clip_grad_norm_(self.logic_net.parameters(), max_norm=grad_clip_norm))
+                if self.puzzle_stage_semantics_head is not None:
+                    grad_norms.append(
+                        torch.nn.utils.clip_grad_norm_(
+                            self.puzzle_stage_semantics_head.parameters(),
+                            max_norm=grad_clip_norm,
+                        )
+                    )
             if not all(self._tensor_is_finite(norm) for norm in grad_norms):
                 self._amp_update_after_skipped_step()
                 self._reset_gradient_accumulation()
@@ -3648,6 +3826,7 @@ class DiffusionTrainer:
                 include_logic_loss=include_logic,
                 logic_graph_data=logic_graph_data,
                 diffusion_graph_data=diffusion_graph_data,
+                graph_list=graph_list,
                 force_optimizer_step=is_last_batch,
             )
 
@@ -3710,6 +3889,8 @@ class DiffusionTrainer:
         """Validate model using EMA weights and real graph conditioning."""
         eval_model = self.ema_diffusion if hasattr(self, 'ema_diffusion') else self.diffusion
         eval_model.eval()
+        if self.puzzle_stage_semantics_head is not None:
+            self.puzzle_stage_semantics_head.eval()
 
         if num_diffusion_samples is None:
             num_diffusion_samples = int(getattr(self.config, "validation_num_diffusion_samples", num_samples))
@@ -3990,6 +4171,10 @@ class DiffusionTrainer:
             and getattr(self, "logic_net", None) is not None
         ):
             payload['logic_net_state_dict'] = self.logic_net.state_dict()
+        if self.puzzle_stage_semantics_head is not None:
+            payload['puzzle_stage_semantics_head_state_dict'] = (
+                self.puzzle_stage_semantics_head.state_dict()
+            )
         return payload
 
     def _build_inference_checkpoint_payload(self, metrics: Optional[Dict] = None) -> Dict[str, Any]:
@@ -4201,6 +4386,7 @@ class DiffusionTrainer:
             'ema_diffusion_state_dict',
             'condition_encoder_state_dict',
             'logic_net_state_dict',
+            'puzzle_stage_semantics_head_state_dict',
         ):
             if key in checkpoint and not self._state_dict_is_finite(checkpoint[key]):
                 raise ValueError(
@@ -4222,6 +4408,16 @@ class DiffusionTrainer:
         self.condition_encoder.load_state_dict(checkpoint['condition_encoder_state_dict'])
         if 'logic_net_state_dict' in checkpoint:
             self.logic_net.load_state_dict(checkpoint['logic_net_state_dict'])
+        stage_head_state = checkpoint.get('puzzle_stage_semantics_head_state_dict')
+        if stage_head_state is not None:
+            if self.puzzle_stage_semantics_head is None:
+                logger.warning(
+                    "Checkpoint %s contains puzzle-stage semantics weights, but the current "
+                    "configuration disables that ablation; leaving those weights unused.",
+                    path,
+                )
+            else:
+                self.puzzle_stage_semantics_head.load_state_dict(stage_head_state)
         optimizer_state_loaded = False
         if 'optimizer_state_dict' in checkpoint:
             try:
@@ -4302,6 +4498,8 @@ def train_diffusion(config: DiffusionTrainingConfig) -> DiffusionTrainer:
             topology_supervision_mode=config.topology_supervision_mode,
             semantic_role_prior_strength=config.semantic_role_prior_strength,
             semantic_puzzle_offset=config.semantic_puzzle_offset,
+            puzzle_stage_topology_enabled=config.puzzle_stage_topology_enabled,
+            puzzle_stage_trace_decay=config.puzzle_stage_trace_decay,
             dungeon_ids=config.train_dungeon_ids,
             variants=config.variants,
         )
@@ -4400,6 +4598,11 @@ def train_diffusion(config: DiffusionTrainingConfig) -> DiffusionTrainer:
             diffusion_trainable = count_parameters(trainer.diffusion, trainable_only=True)
             condition_trainable = count_parameters(trainer.condition_encoder, trainable_only=True)
             logic_subset = count_parameters(trainer.logic_net, trainable_only=True)
+            puzzle_stage_subset = (
+                count_parameters(trainer.puzzle_stage_semantics_head, trainable_only=True)
+                if trainer.puzzle_stage_semantics_head is not None
+                else 0
+            )
             logger.info(
                 "LogicNet guidance parameters are optimized separately: logic_net=%s.",
                 format_parameter_count(logic_subset),
@@ -4412,6 +4615,7 @@ def train_diffusion(config: DiffusionTrainingConfig) -> DiffusionTrainer:
                     "diffusion": diffusion_trainable,
                     "condition_encoder": condition_trainable,
                     "logic_net": logic_subset,
+                    "puzzle_stage_semantics_head": puzzle_stage_subset,
                 },
                 recommended_config="configs/zelda_hmolqd.yaml",
                 capacity_knobs=(

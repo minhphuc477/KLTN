@@ -32,7 +32,7 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 import networkx as nx
-from typing import Dict, List, Tuple, Optional, Any, Set
+from typing import Dict, List, Tuple, Optional, Any, Mapping, Set
 from dataclasses import dataclass
 from pathlib import Path
 import logging
@@ -42,6 +42,7 @@ import copy
 import hashlib
 from collections import deque
 from datetime import datetime
+from types import SimpleNamespace
 
 # Core pipeline
 
@@ -63,7 +64,11 @@ from src.generation.weighted_bayesian_wfc import (
     extract_tile_priors_from_grids,
 )
 from src.pipeline.dungeon_pipeline import NeuralSymbolicDungeonPipeline
-from src.pipeline.room_stitching import StitchedRoomLayout, compute_graph_aware_room_slots
+from src.pipeline.room_stitching import (
+    StitchedRoomLayout,
+    compute_graph_aware_room_slots,
+    validate_connection_realizations,
+)
 from src.core.definitions import ROOM_HEIGHT, ROOM_WIDTH, parse_node_label_tokens
 from src.optimization.lcm_lora import load_fast_sampler_checkpoint
 
@@ -135,6 +140,8 @@ class AdvancedPipelineConfig:
     topology_qd_archive_cells: int = 128
     require_graph_solvability: bool = True
     require_final_solvability: bool = True
+    require_spatial_topology_preservation: bool = True
+    min_spatial_topology_invariant_score: float = 1.0
     allow_linear_graph_fallback: bool = False
     allow_room_generation_fallback: bool = False
     graph_oracle_max_states: int = 1_000_000
@@ -178,8 +185,13 @@ class PipelineStats:
     topology_qd_infeasible_rejections: int
     final_map_archive_elites: int
     final_map_archive_coverage: float
+    spatial_graph_edge_carve_rate: float
+    spatial_topology_invariant_preservation_score: float
+    final_spatial_edge_integrity_rate: float
+    final_spatial_edge_records_broken: int
     room_generation_fallbacks: int
     wfc_refinement_failures: int
+    wfc_refinement_fallbacks: int
     wfc_prior_source: Optional[str]
     wfc_prior_grid_count: int
     wfc_prior_sha256: Optional[str]
@@ -215,6 +227,9 @@ class AdvancedNeuralSymbolicPipeline:
         self.fast_sampling_reason = "LCM-LoRA disabled by config."
         self._room_generation_fallbacks = 0
         self._wfc_refinement_failures = 0
+        self._wfc_refinement_fallbacks = 0
+        self._last_stitch_realization_metrics: Dict[str, Any] = {}
+        self._last_stitch_connection_realizations: Dict[Tuple[Any, Any], Dict[str, Any]] = {}
         self._wfc_prior_source: Optional[str] = None
         self._wfc_prior_grid_count = 0
         self._wfc_prior_sha256: Optional[str] = None
@@ -515,13 +530,81 @@ class AdvancedNeuralSymbolicPipeline:
             'proven_unsolvable': bool(result.proven_unsolvable),
         }
 
-    def _validate_final_dungeon(self, dungeon_grid: np.ndarray) -> Dict[str, Any]:
+    def _build_final_puzzle_metadata(
+        self,
+        *,
+        dungeon_grid: np.ndarray,
+        mission_graph: nx.Graph,
+        room_layout: Mapping[Any, Tuple[int, int, int, int]],
+    ) -> Dict[str, Any]:
+        """Compile final room markers into the validator's staged-puzzle contract."""
+        records: Dict[Any, Any] = {}
+        room_offsets: Dict[Any, Tuple[int, int]] = {}
+        layout_map: Dict[Any, Tuple[int, int, int, int]] = {}
+        grid = np.asarray(dungeon_grid, dtype=np.int32)
+
+        for room_id, raw_bbox in dict(room_layout or {}).items():
+            if not isinstance(raw_bbox, (tuple, list)) or len(raw_bbox) != 4:
+                continue
+            x_min, y_min, x_max, y_max = (int(value) for value in raw_bbox)
+            if (
+                x_min < 0
+                or y_min < 0
+                or x_max < x_min
+                or y_max < y_min
+                or y_max >= grid.shape[0]
+                or x_max >= grid.shape[1]
+            ):
+                continue
+
+            room_grid = grid[y_min:y_max + 1, x_min:x_max + 1].copy()
+            start_goal = self.neural_pipeline._extract_room_start_goal(mission_graph, room_id)
+            marker_plan = self.neural_pipeline._plan_room_graph_marker_layout(
+                room_grid,
+                graph=mission_graph,
+                room_id=room_id,
+                start_goal=start_goal,
+            )
+            local_metadata = self.neural_pipeline._build_room_puzzle_metadata(
+                grid=room_grid,
+                graph=mission_graph,
+                room_id=room_id,
+                start_goal=start_goal,
+                marker_plan=marker_plan,
+            )
+            records[room_id] = SimpleNamespace(puzzle_metadata=local_metadata)
+            room_offsets[room_id] = (y_min, x_min)
+            layout_map[room_id] = (x_min, y_min, x_max, y_max)
+
+        stitched_layout = StitchedRoomLayout(
+            dungeon_grid=grid,
+            slot_positions={},
+            room_offsets=room_offsets,
+            layout_map=layout_map,
+        )
+        metadata = self.neural_pipeline._globalize_room_puzzle_metadata(
+            rooms=records,
+            stitched_layout=stitched_layout,
+        )
+        logger.debug(
+            "Advanced pipeline compiled %d staged puzzle plans for final validation.",
+            len(dict(metadata.get("plans", {}) or {})),
+        )
+        return metadata
+
+    def _validate_final_dungeon(
+        self,
+        dungeon_grid: np.ndarray,
+        *,
+        room_puzzle_metadata: Optional[Mapping[str, Any]] = None,
+    ) -> Dict[str, Any]:
         """Run the tile-level oracle on the exact semantic artifact returned."""
         from src.simulation.validator import ZeldaValidator
 
         result = ZeldaValidator().validate_single(
             np.asarray(dungeon_grid).copy(),
             solver_timeout=int(max(1, self.config.tile_oracle_max_states)),
+            room_puzzle_metadata=room_puzzle_metadata,
         )
         path = list(result.path or [])
         path_length = int(result.path_length) if result.is_solvable else 0
@@ -643,6 +726,9 @@ class AdvancedNeuralSymbolicPipeline:
         base_seed = int(constraints.get("seed", self.config.seed))
         self._room_generation_fallbacks = 0
         self._wfc_refinement_failures = 0
+        self._wfc_refinement_fallbacks = 0
+        self._last_stitch_realization_metrics = {}
+        self._last_stitch_connection_realizations = {}
         configured_prior_source = self.config.wfc_prior_grids_path
         resolved_prior_source = (
             str(Path(configured_prior_source).resolve())
@@ -735,6 +821,22 @@ class AdvancedNeuralSymbolicPipeline:
         
         # Step 6: Stitch rooms into dungeon layout
         dungeon_grid, room_layout = self._stitch_rooms(rooms, mission_graph)
+        stitch_metrics = dict(self._last_stitch_realization_metrics)
+        topology_score = float(
+            stitch_metrics.get("spatial_topology_invariant_preservation_score", 1.0)
+        )
+        required_topology_score = float(
+            np.clip(self.config.min_spatial_topology_invariant_score, 0.0, 1.0)
+        )
+        if (
+            self.config.require_spatial_topology_preservation
+            and topology_score < required_topology_score
+        ):
+            raise RuntimeError(
+                "Stitching failed to preserve the mission graph's flat spatial topology: "
+                f"score={topology_score:.3f}, required={required_topology_score:.3f}, "
+                f"metrics={stitch_metrics}"
+            )
         
         if self.demo_recorder:
             self.demo_recorder.capture_frame(
@@ -875,9 +977,29 @@ class AdvancedNeuralSymbolicPipeline:
         )
         logger.info(f"Spawned {len(entities)} entities")
         dungeon_grid = materialize_entities_on_grid(dungeon_grid, entities)
+        final_edge_integrity = validate_connection_realizations(
+            dungeon_grid,
+            self._last_stitch_connection_realizations,
+        )
+        if (
+            self.config.require_spatial_topology_preservation
+            and int(final_edge_integrity["final_spatial_edge_records_broken"]) > 0
+        ):
+            raise RuntimeError(
+                "Post-processing sealed recorded stitched connections: "
+                f"{final_edge_integrity['final_spatial_edge_integrity_failures']}"
+            )
 
+        final_puzzle_metadata = self._build_final_puzzle_metadata(
+            dungeon_grid=dungeon_grid,
+            mission_graph=mission_graph,
+            room_layout=room_layout,
+        )
         final_validation_start = time.time()
-        final_validation = self._validate_final_dungeon(dungeon_grid)
+        final_validation = self._validate_final_dungeon(
+            dungeon_grid,
+            room_puzzle_metadata=final_puzzle_metadata,
+        )
         val_time += time.time() - final_validation_start
         if self.config.require_final_solvability and not final_validation['solvable']:
             outcome = (
@@ -997,8 +1119,19 @@ class AdvancedNeuralSymbolicPipeline:
             ),
             final_map_archive_elites=final_map_archive_elites,
             final_map_archive_coverage=final_map_archive_coverage,
+            spatial_graph_edge_carve_rate=float(
+                stitch_metrics.get("spatial_graph_edge_carve_rate", 1.0)
+            ),
+            spatial_topology_invariant_preservation_score=topology_score,
+            final_spatial_edge_integrity_rate=float(
+                final_edge_integrity["final_spatial_edge_integrity_rate"]
+            ),
+            final_spatial_edge_records_broken=int(
+                final_edge_integrity["final_spatial_edge_records_broken"]
+            ),
             room_generation_fallbacks=int(self._room_generation_fallbacks),
             wfc_refinement_failures=int(self._wfc_refinement_failures),
+            wfc_refinement_fallbacks=int(self._wfc_refinement_fallbacks),
             wfc_prior_source=self._wfc_prior_source,
             wfc_prior_grid_count=int(self._wfc_prior_grid_count),
             wfc_prior_sha256=self._wfc_prior_sha256,
@@ -1536,6 +1669,13 @@ class AdvancedNeuralSymbolicPipeline:
                     
                     # Initialize WFC with neural output as seed
                     refined_room = wfc.generate(seed=room_seed, initial_grid=neural_room)
+                    wfc_diagnostics = wfc.get_diagnostics()
+                    if bool(wfc_diagnostics.get("required_fallback", False)):
+                        self._wfc_refinement_fallbacks += 1
+                        raise RuntimeError(
+                            "Weighted Bayesian WFC required best-effort completion "
+                            f"for room {node_id}: {wfc_diagnostics}"
+                        )
 
                     # Neuro-symbolic discrepancy heatmap: where symbolic correction overrides neural belief.
                     if self.explainability_mgr is not None and getattr(result, "neural_probs", None) is not None:
@@ -1725,6 +1865,8 @@ class AdvancedNeuralSymbolicPipeline:
             rooms=rooms,
             mission_graph=mission_graph,
         )
+        self._last_stitch_realization_metrics = dict(stitched.realization_metrics or {})
+        self._last_stitch_connection_realizations = dict(stitched.connection_realizations or {})
         return stitched.dungeon_grid, stitched.layout_map
 
     def stitch_room_layout(
@@ -1817,8 +1959,13 @@ class DungeonGenerationResult:
                 "topology_qd_infeasible_rejections": self.stats.topology_qd_infeasible_rejections,
                 "final_map_archive_elites": self.stats.final_map_archive_elites,
                 "final_map_archive_coverage": self.stats.final_map_archive_coverage,
+                "spatial_graph_edge_carve_rate": self.stats.spatial_graph_edge_carve_rate,
+                "spatial_topology_invariant_preservation_score": self.stats.spatial_topology_invariant_preservation_score,
+                "final_spatial_edge_integrity_rate": self.stats.final_spatial_edge_integrity_rate,
+                "final_spatial_edge_records_broken": self.stats.final_spatial_edge_records_broken,
                 "room_generation_fallbacks": self.stats.room_generation_fallbacks,
                 "wfc_refinement_failures": self.stats.wfc_refinement_failures,
+                "wfc_refinement_fallbacks": self.stats.wfc_refinement_fallbacks,
                 "wfc_prior_source": self.stats.wfc_prior_source,
                 "wfc_prior_grid_count": self.stats.wfc_prior_grid_count,
                 "wfc_prior_sha256": self.stats.wfc_prior_sha256,

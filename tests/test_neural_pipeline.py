@@ -26,6 +26,7 @@ from src.pipeline import (
 )
 from src.pipeline.dungeon_pipeline import RoomGenerationResult
 from src.core import ROOM_HEIGHT, ROOM_WIDTH, SEMANTIC_PALETTE
+from src.core.definitions import GRAPH_NODE_FEATURE_DIM
 
 
 # =============================================================================
@@ -71,7 +72,7 @@ def neighbor_latents(device):
 def graph_context(device):
     """Create dummy graph context."""
     return {
-        'node_features': torch.randn(3, 6, device=device),
+        'node_features': torch.randn(3, GRAPH_NODE_FEATURE_DIM, device=device),
         'edge_index': torch.tensor([[0, 1], [1, 2]], device=device).t(),
         'tpe': torch.randn(3, 8, device=device),
         'current_node_idx': 0,

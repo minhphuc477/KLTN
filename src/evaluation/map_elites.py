@@ -31,7 +31,6 @@ import logging
 from typing import Dict, List, Tuple, Optional, Any, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-import random
 
 import numpy as np
 import networkx as nx
@@ -381,6 +380,7 @@ class EliteArchive:
         feature_dims: int = 2,
         cells_per_dim: int = 10,
         feature_ranges: Optional[List[Tuple[float, float]]] = None,
+        seed: Optional[int] = None,
     ):
         self.feature_dims = int(feature_dims)
         self.cells_per_dim = int(cells_per_dim)
@@ -404,6 +404,7 @@ class EliteArchive:
             if not np.isfinite(lower) or not np.isfinite(upper) or upper <= lower:
                 raise ValueError(f"Feature range {index} must be finite with max > min, got {bounds!r}.")
             self.feature_ranges.append((lower, upper))
+        self.rng = np.random.default_rng(seed)
         
         # Archive storage: cell -> Elite
         self.archive: Dict[Tuple[int, ...], Elite] = {}
@@ -507,7 +508,8 @@ class EliteArchive:
         """Get a random elite from the archive."""
         if not self.archive:
             return None
-        return random.choice(list(self.archive.values()))
+        elites = list(self.archive.values())
+        return elites[int(self.rng.integers(0, len(elites)))]
     
     def get_all_elites(self) -> List[Elite]:
         """Get all elites in the archive."""
@@ -696,6 +698,7 @@ class MAPElites:
         feature_ranges: Optional[List[Tuple[float, float]]] = None,
         feature_dims: int = 2,
         feasibility_fn: Optional[Callable[[Any], bool]] = None,
+        seed: Optional[int] = None,
     ):
         self.feature_extractor = feature_extractor
         self.fitness_fn = fitness_fn
@@ -705,6 +708,7 @@ class MAPElites:
             feature_dims=feature_dims,
             cells_per_dim=cells_per_dim,
             feature_ranges=feature_ranges,
+            seed=seed,
         )
         
         self.diversity_metrics = DiversityMetrics(self.archive)
@@ -794,7 +798,7 @@ class MAPElites:
         remaining = elites.copy()
         
         # Start with random elite
-        first = random.choice(remaining)
+        first = remaining[int(self.archive.rng.integers(0, len(remaining)))]
         selected.append(first)
         remaining.remove(first)
         
@@ -850,7 +854,8 @@ class MAPElites:
                     'total_additions': self.archive.total_additions,
                     'total_replacements': self.archive.total_replacements,
                     'total_rejections': self.archive.total_rejections,
-                }
+                },
+                'rng_state': self.archive.rng.bit_generator.state,
             }, f)
         tmp_path.replace(path)
         logger.info(f"Saved archive to {path}")
@@ -880,6 +885,12 @@ class MAPElites:
         self.archive.total_additions = stats.get('total_additions', 0)
         self.archive.total_replacements = stats.get('total_replacements', 0)
         self.archive.total_rejections = stats.get('total_rejections', 0)
+        rng_state = data.get('rng_state')
+        if isinstance(rng_state, dict):
+            try:
+                self.archive.rng.bit_generator.state = rng_state
+            except (TypeError, ValueError):
+                logger.warning("Ignoring incompatible MAP-Elites RNG state in %s", filepath)
         if discarded:
             logger.warning("Discarded %d invalid elite(s) while loading %s", discarded, filepath)
         logger.info(f"Loaded archive from {filepath}")
@@ -1186,6 +1197,7 @@ def create_map_elites(
     cells_per_dim: int = 10,
     archive_type: str = 'grid',
     num_cells: int = 100,
+    seed: Optional[int] = None,
 ) -> MAPElites:
     """
     Create a MAP-Elites instance.
@@ -1201,6 +1213,7 @@ def create_map_elites(
         cells_per_dim: Archive resolution (for grid archive)
         archive_type: 'grid' (default) or 'cvt' (centroidal Voronoi)
         num_cells: Number of CVT cells (for cvt archive)
+        seed: Seed for archive sampling and CVT construction
         
     Returns:
         MAPElites instance
@@ -1252,6 +1265,7 @@ def create_map_elites(
         feature_dims=feature_dims,
         feature_ranges=feature_ranges,
         feasibility_fn=feasibility_fn,
+        seed=seed,
     )
     
     # Replace archive with CVT if requested
@@ -1260,6 +1274,7 @@ def create_map_elites(
             num_cells=num_cells,
             feature_dims=feature_dims,
             feature_ranges=feature_ranges,
+            seed=seed,
         )
         map_elites.diversity_metrics = DiversityMetrics(map_elites.archive)
     

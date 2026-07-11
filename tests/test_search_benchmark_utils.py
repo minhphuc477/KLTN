@@ -84,3 +84,20 @@ def test_run_astar_oracle_reports_solved_status_on_simple_grid():
     assert payload["status"] == "solved"
     assert payload["path_length"] > 0
     assert payload["states_explored"] > 0
+    assert payload["states_explored"] <= payload["state_budget"]
+
+
+def test_astar_fallback_shares_one_state_budget() -> None:
+    grid = _simple_grid()
+    grid[2, 1:-1] = int(SEMANTIC_PALETTE["WALL"])
+    env = ZeldaLogicEnv(grid, render_mode=False)
+
+    payload = run_astar_oracle(env, timeout=40)
+
+    assert payload["success"] is False
+    assert payload["states_explored"] <= 40
+    assert (
+        payload["primary_states_explored"]
+        + payload["fallback_states_explored"]
+        == payload["states_explored"]
+    )

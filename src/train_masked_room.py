@@ -149,7 +149,7 @@ class MaskedRoomTrainingConfig:
         topology_supervision_mode: str = "runtime_aligned",
         semantic_role_prior_strength: float = DEFAULT_SEMANTIC_ROLE_PRIOR_STRENGTH,
         semantic_puzzle_offset: int = DEFAULT_SEMANTIC_PUZZLE_OFFSET,
-        puzzle_structure_dropout_prob: float = 0.35,
+        puzzle_structure_dropout_prob: float = 0.0,
         puzzle_stage_conditioning_enabled: bool = False,
         puzzle_stage_token_scale: float = DEFAULT_PUZZLE_STAGE_TOKEN_SCALE,
         puzzle_stage_topology_enabled: bool = False,
@@ -377,7 +377,9 @@ def masked_room_training_kwargs_from_resolved_config(config: Dict[str, Any]) -> 
         "drop_last": dataset["drop_last"],
         "shuffle_train": dataset["shuffle_train"],
         "shuffle_val": dataset["shuffle_val"],
-        "normalize": bool(stage.get("normalize", False)),
+        # This model consumes categorical token IDs. Normalization would alter
+        # the embedding vocabulary, so it is intentionally not configurable.
+        "normalize": False,
         "train_dungeon_ids": dataset.get("train_dungeons", list(range(1, 9))),
         "test_dungeon_ids": dataset.get("test_dungeons", [9]),
         "variants": dataset.get("variants", [1, 2]),
@@ -442,7 +444,7 @@ def masked_room_training_kwargs_from_resolved_config(config: Dict[str, Any]) -> 
         "topology_supervision_mode": dataset["topology_supervision_mode"],
         "semantic_role_prior_strength": config["generation"]["semantic_role_prior_strength"],
         "semantic_puzzle_offset": config["generation"]["semantic_puzzle_offset"],
-        "puzzle_structure_dropout_prob": stage.get("puzzle_structure_dropout_prob", 0.35),
+        "puzzle_structure_dropout_prob": stage.get("puzzle_structure_dropout_prob", 0.0),
         "puzzle_stage_conditioning_enabled": stage.get("puzzle_stage_conditioning_enabled", False),
         "puzzle_stage_token_scale": stage.get("puzzle_stage_token_scale", DEFAULT_PUZZLE_STAGE_TOKEN_SCALE),
         "puzzle_stage_topology_enabled": stage.get("puzzle_stage_topology_enabled", False),

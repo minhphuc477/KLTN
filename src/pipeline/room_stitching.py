@@ -6,7 +6,7 @@ import logging
 import math
 import os
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from heapq import heappop, heappush
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
@@ -26,6 +26,7 @@ NodeSortKey = Callable[[Any], Tuple[int, Any]]
 NodePositionGetter = Callable[[nx.Graph, Any], Optional[Tuple[int, int]]]
 DiagnosticCallback = Callable[[str], None]
 ConnectorTileResolver = Callable[[Optional[Dict[str, Any]], bool], Tuple[int, int]]
+ConnectionTraceCallback = Callable[[str, List[Tuple[int, int]]], None]
 
 NON_SPATIAL_EDGE_TOKENS = frozenset(
     {
@@ -54,6 +55,12 @@ class StitchedRoomLayout:
     slot_positions: Dict[Any, Tuple[int, int]]
     room_offsets: Dict[Any, Tuple[int, int]]
     layout_map: Dict[Any, Tuple[int, int, int, int]]
+    # Graph-to-grid contract measurements. These prevent callers from assuming
+    # every mission edge survived spatial realization.
+    realization_metrics: Dict[str, Any] = field(default_factory=dict)
+    # Exact cells written for each carved spatial edge. These are retained so
+    # later mutating stages can be checked against the original realization.
+    connection_realizations: Dict[Tuple[Any, Any], Dict[str, Any]] = field(default_factory=dict)
 
 
 def _edge_tokens(edge_data: Optional[Mapping[str, Any]]) -> set:
@@ -666,6 +673,220 @@ def compute_layout_quality_metrics(
     }
 
 
+def compute_graph_edge_realization_metrics(
+    graph: nx.Graph,
+    slot_positions: Mapping[Any, Tuple[int, int]],
+    layout_map: Mapping[Any, Tuple[int, int, int, int]],
+    *,
+    carve_connections: bool,
+    carved_edge_modes: Optional[Mapping[Tuple[Any, Any], str]] = None,
+) -> Dict[str, Any]:
+    """Measure how the mission graph was realized in the stitched 2D grid.
+
+    Non-spatial links (stairs, warps, visual links, and cross-floor edges) are
+    intentionally excluded from 2D door carving. A missing or uncarved spatial
+    edge, on the other hand, is a graph-to-map contract failure and must be
+    reported instead of being hidden by a visually plausible layout.
+    """
+    carved_edge_modes = dict(carved_edge_modes or {})
+    spatial_edges = 0
+    non_spatial_edges = 0
+    missing_endpoint_edges = 0
+    adjacent_spatial_edges = 0
+    nonadjacent_spatial_edges = 0
+    carved_spatial_edges = 0
+    routed_spatial_edges = 0
+    fallback_carved_edges = 0
+    uncarved_spatial_edges = 0
+    source_spatial_topology = nx.Graph()
+    realized_spatial_topology = nx.Graph()
+
+    for source, target, edge_data in graph.edges(data=True):
+        if not _is_spatial_room_edge(graph, source, target, edge_data):
+            non_spatial_edges += 1
+            continue
+
+        spatial_edges += 1
+        source_spatial_topology.add_edge(source, target)
+        if (
+            source not in slot_positions
+            or target not in slot_positions
+            or source not in layout_map
+            or target not in layout_map
+        ):
+            missing_endpoint_edges += 1
+            continue
+
+        src_pos = slot_positions[source]
+        dst_pos = slot_positions[target]
+        distance = abs(int(src_pos[0]) - int(dst_pos[0])) + abs(int(src_pos[1]) - int(dst_pos[1]))
+        if distance == 1:
+            adjacent_spatial_edges += 1
+        else:
+            nonadjacent_spatial_edges += 1
+
+        # A physical room connection is undirected at the layout layer even
+        # when the mission graph contains two directed arcs. Keep direction and
+        # gate semantics in their dedicated validator metrics; this projection
+        # only measures preserved spatial structure.
+        mode = carved_edge_modes.get((source, target))
+        if mode is None:
+            mode = carved_edge_modes.get((target, source))
+        if mode is None:
+            uncarved_spatial_edges += 1
+            continue
+        carved_spatial_edges += 1
+        realized_spatial_topology.add_edge(source, target)
+        if mode == "routed":
+            routed_spatial_edges += 1
+        elif mode == "fallback":
+            fallback_carved_edges += 1
+
+    if spatial_edges <= 0:
+        layout_mode = "no_spatial_edges"
+    elif adjacent_spatial_edges == spatial_edges:
+        layout_mode = "all_spatial_edges_adjacent"
+    elif adjacent_spatial_edges > 0:
+        layout_mode = "partially_adjacent_spatial_edges"
+    else:
+        layout_mode = "no_spatial_edges_adjacent"
+
+    topology_metrics = _compare_spatial_topology_invariants(
+        source_spatial_topology,
+        realized_spatial_topology,
+    )
+
+    return {
+        "layout_realization_mode": layout_mode,
+        "graph_edge_total": int(graph.number_of_edges()),
+        "spatial_graph_edge_count": int(spatial_edges),
+        "non_spatial_graph_edge_count": int(non_spatial_edges),
+        "non_spatial_graph_edges_intentionally_not_carved": int(non_spatial_edges),
+        "spatial_graph_edges_missing_room_endpoint": int(missing_endpoint_edges),
+        "spatial_graph_edges_slot_adjacent": int(adjacent_spatial_edges),
+        "spatial_graph_edges_slot_nonadjacent": int(nonadjacent_spatial_edges),
+        "spatial_graph_edges_carved": int(carved_spatial_edges),
+        "spatial_graph_edges_routed": int(routed_spatial_edges),
+        "spatial_graph_edges_fallback_carved": int(fallback_carved_edges),
+        "spatial_graph_edges_uncarved": int(uncarved_spatial_edges),
+        "spatial_graph_edge_slot_adjacency_rate": (
+            float(adjacent_spatial_edges / spatial_edges) if spatial_edges else 1.0
+        ),
+        "spatial_graph_edge_carve_rate": (
+            float(carved_spatial_edges / spatial_edges) if spatial_edges else 1.0
+        ),
+        "spatial_graph_edge_missing_endpoint_rate": (
+            float(missing_endpoint_edges / spatial_edges) if spatial_edges else 0.0
+        ),
+        "stitching_requested_connection_carving": bool(carve_connections),
+        **topology_metrics,
+    }
+
+
+def _spatial_topology_signature(graph: nx.Graph) -> Dict[str, Any]:
+    """Return structural invariants of one flat, physical room graph.
+
+    This intentionally uses a simple undirected graph. It is suitable for
+    checking whether a graph's spatial loops, chokepoints, and branches survive
+    room placement and corridor carving. It is not a progression-solvability
+    signature: directed doors, keys, switches, hazards, and cross-floor links
+    need the full state-space oracle and are reported elsewhere.
+    """
+    physical = nx.Graph(graph)
+    node_count = int(physical.number_of_nodes())
+    edge_count = int(physical.number_of_edges())
+    component_count = int(nx.number_connected_components(physical)) if node_count else 0
+    cycle_rank = max(0, edge_count - node_count + component_count)
+    articulation_nodes = set(nx.articulation_points(physical)) if node_count > 2 else set()
+    branch_nodes = {node for node, degree in physical.degree() if int(degree) >= 3}
+    leaf_nodes = {node for node, degree in physical.degree() if int(degree) == 1}
+    biconnected_count = int(len(list(nx.biconnected_components(physical)))) if node_count else 0
+    return {
+        "node_count": node_count,
+        "edge_count": edge_count,
+        "component_count": component_count,
+        "cycle_rank": int(cycle_rank),
+        "articulation_nodes": articulation_nodes,
+        "branch_nodes": branch_nodes,
+        "leaf_nodes": leaf_nodes,
+        "biconnected_component_count": biconnected_count,
+    }
+
+
+def _set_jaccard(left: set, right: set) -> float:
+    union = left | right
+    return 1.0 if not union else float(len(left & right) / len(union))
+
+
+def _relative_invariant_agreement(source: int, realized: int) -> float:
+    """Return 1 for equality and decay by the source-scale absolute error."""
+    return float(max(0.0, 1.0 - (abs(int(source) - int(realized)) / max(1, int(source)))))
+
+
+def _compare_spatial_topology_invariants(
+    source: nx.Graph,
+    realized: nx.Graph,
+) -> Dict[str, Any]:
+    """Compare exact graph invariants before and after flat spatial realization."""
+    source_signature = _spatial_topology_signature(source)
+    realized_signature = _spatial_topology_signature(realized)
+    edge_recall = float(
+        realized_signature["edge_count"] / max(1, source_signature["edge_count"])
+    )
+    cycle_agreement = _relative_invariant_agreement(
+        source_signature["cycle_rank"],
+        realized_signature["cycle_rank"],
+    )
+    component_agreement = _relative_invariant_agreement(
+        source_signature["component_count"],
+        realized_signature["component_count"],
+    )
+    branch_agreement = _set_jaccard(
+        source_signature["branch_nodes"],
+        realized_signature["branch_nodes"],
+    )
+    articulation_agreement = _set_jaccard(
+        source_signature["articulation_nodes"],
+        realized_signature["articulation_nodes"],
+    )
+
+    # Keep the composite transparent and descriptive. Individual components
+    # must be reported alongside it; this score is not a replacement for the
+    # progression-aware oracle.
+    invariant_score = float(
+        np.mean(
+            [
+                edge_recall,
+                cycle_agreement,
+                component_agreement,
+                branch_agreement,
+                articulation_agreement,
+            ]
+        )
+    )
+    return {
+        "spatial_topology_reference_node_count": int(source_signature["node_count"]),
+        "spatial_topology_reference_edge_count": int(source_signature["edge_count"]),
+        "spatial_topology_reference_component_count": int(source_signature["component_count"]),
+        "spatial_topology_reference_cycle_rank": int(source_signature["cycle_rank"]),
+        "spatial_topology_reference_branch_node_count": int(len(source_signature["branch_nodes"])),
+        "spatial_topology_reference_articulation_count": int(len(source_signature["articulation_nodes"])),
+        "spatial_topology_realized_node_count": int(realized_signature["node_count"]),
+        "spatial_topology_realized_edge_count": int(realized_signature["edge_count"]),
+        "spatial_topology_realized_component_count": int(realized_signature["component_count"]),
+        "spatial_topology_realized_cycle_rank": int(realized_signature["cycle_rank"]),
+        "spatial_topology_realized_branch_node_count": int(len(realized_signature["branch_nodes"])),
+        "spatial_topology_realized_articulation_count": int(len(realized_signature["articulation_nodes"])),
+        "spatial_topology_edge_recall": edge_recall,
+        "spatial_topology_cycle_rank_agreement": cycle_agreement,
+        "spatial_topology_component_agreement": component_agreement,
+        "spatial_topology_branch_jaccard": branch_agreement,
+        "spatial_topology_articulation_jaccard": articulation_agreement,
+        "spatial_topology_invariant_preservation_score": invariant_score,
+        "spatial_topology_scope": "flat_undirected_spatial_edges_only",
+    }
+
+
 def _connector_tiles(
     edge_data: Optional[Dict[str, Any]],
     has_reverse_edge: bool,
@@ -747,8 +968,14 @@ def carve_room_connection_between_bboxes(
     fill_tile: int = 0,
     diagnostic_callback: Optional[DiagnosticCallback] = None,
     connector_tile_resolver: Optional[ConnectorTileResolver] = None,
-) -> None:
-    """Carve a connection between two stitched room bounding boxes."""
+    connection_trace_callback: Optional[ConnectionTraceCallback] = None,
+) -> Optional[str]:
+    """Carve a connection and return its realization mode, if any.
+
+    ``adjacent`` denotes a shared-boundary doorway, ``routed`` an A*-routed
+    corridor, and ``fallback`` the bounded orthogonal carve used after a
+    routing failure. ``None`` means that no geometric connection was possible.
+    """
     floor_id = int(SEMANTIC_PALETTE.get("FLOOR", 1))
     apron_replace_tiles = {
         int(fill_tile),
@@ -819,7 +1046,15 @@ def carve_room_connection_between_bboxes(
                 global_grid[row, dst_boundary] = dst_tile
                 _open_apron_cell(row, src_apron)
                 _open_apron_cell(row, dst_apron)
-            return
+            if connection_trace_callback is not None:
+                connection_trace_callback(
+                    "adjacent",
+                    [(row, src_boundary) for row in rows]
+                    + [(row, dst_boundary) for row in rows]
+                    + [(row, src_apron) for row in rows]
+                    + [(row, dst_apron) for row in rows],
+                )
+            return "adjacent"
 
     if src_y_max + 1 == dst_y_min or dst_y_max + 1 == src_y_min:
         col_low = max(src_x_min + 1, dst_x_min + 1)
@@ -845,7 +1080,15 @@ def carve_room_connection_between_bboxes(
                 global_grid[dst_boundary, col] = dst_tile
                 _open_apron_cell(src_apron, col)
                 _open_apron_cell(dst_apron, col)
-            return
+            if connection_trace_callback is not None:
+                connection_trace_callback(
+                    "adjacent",
+                    [(src_boundary, col) for col in cols]
+                    + [(dst_boundary, col) for col in cols]
+                    + [(src_apron, col) for col in cols]
+                    + [(dst_apron, col) for col in cols],
+                )
+            return "adjacent"
 
     src_r, src_c = _bbox_center_row_col(src_bbox)
     dst_r, dst_c = _bbox_center_row_col(dst_bbox)
@@ -864,7 +1107,7 @@ def carve_room_connection_between_bboxes(
 
     H, W = global_grid.shape
     if not (0 <= start[0] < H and 0 <= start[1] < W and 0 <= goal[0] < H and 0 <= goal[1] < W):
-        return
+        return None
 
     global_grid[src_anchor[0], src_anchor[1]] = src_tile
     global_grid[dst_anchor[0], dst_anchor[1]] = dst_tile
@@ -929,7 +1172,14 @@ def carve_room_connection_between_bboxes(
             carved_cells,
             fill_tile=int(fill_tile),
         )
-        return
+        if connection_trace_callback is not None:
+            connection_trace_callback(
+                "routed",
+                [(int(src_anchor[0]), int(src_anchor[1]))]
+                + [(int(row), int(col)) for row, col in path]
+                + [(int(dst_anchor[0]), int(dst_anchor[1]))],
+            )
+        return "routed"
 
     if expansions >= max_expansions and diagnostic_callback is not None:
         diagnostic_callback("corridor_astar_iteration_cap")
@@ -944,21 +1194,79 @@ def carve_room_connection_between_bboxes(
     sr, sc = start
     tr, tc = goal
     step_c = 1 if tc >= sc else -1
-    carved_cells: List[Tuple[int, int]] = []
-    for col in range(sc, tc + step_c, step_c):
-        if 0 <= sr < H and 0 <= col < W and global_grid[sr, col] == int(fill_tile):
-            global_grid[sr, col] = floor_id
-            carved_cells.append((int(sr), int(col)))
+    fallback_path = [(int(sr), int(col)) for col in range(sc, tc + step_c, step_c)]
     step_r = 1 if tr >= sr else -1
-    for row in range(sr, tr + step_r, step_r):
-        if 0 <= row < H and 0 <= tc < W and global_grid[row, tc] == int(fill_tile):
-            global_grid[row, tc] = floor_id
-            carved_cells.append((int(row), int(tc)))
+    fallback_path.extend(
+        (int(row), int(tc)) for row in range(sr + step_r, tr + step_r, step_r)
+    )
+
+    # The fallback is allowed to use only the blank canvas between rooms.  The
+    # old best-effort loop skipped occupied cells but still claimed success,
+    # which could make a broken physical connection look preserved in the
+    # graph-to-grid topology metrics.  Refuse it atomically instead of carving
+    # a partial corridor through an unrelated room or obstacle.
+    if any(
+        not (0 <= row < H and 0 <= col < W)
+        or int(global_grid[row, col]) != int(fill_tile)
+        for row, col in fallback_path
+    ):
+        if diagnostic_callback is not None:
+            diagnostic_callback("corridor_fallback_blocked")
+        logger.warning(
+            "Fallback corridor is blocked between %s and %s; leaving the edge uncarved.",
+            str(src_bbox),
+            str(dst_bbox),
+        )
+        return None
+
+    carved_cells: List[Tuple[int, int]] = []
+    for row, col in fallback_path:
+        global_grid[row, col] = floor_id
+        carved_cells.append((int(row), int(col)))
     _wall_off_corridor_path(
         global_grid,
         carved_cells,
         fill_tile=int(fill_tile),
     )
+    if connection_trace_callback is not None:
+        connection_trace_callback(
+            "fallback",
+            [(int(src_anchor[0]), int(src_anchor[1]))]
+            + list(fallback_path)
+            + [(int(dst_anchor[0]), int(dst_anchor[1]))],
+        )
+    return "fallback"
+
+
+def validate_connection_realizations(
+    grid: np.ndarray,
+    realizations: Mapping[Tuple[Any, Any], Mapping[str, Any]],
+) -> Dict[str, Any]:
+    """Check that later stages did not seal cells created by the stitcher.
+
+    This is intentionally a structural integrity check, not a replacement for
+    the stateful oracle: locked doors and conditional hazard tiles remain valid
+    edge cells, while VOID, walls, and blocks invalidate a recorded passage.
+    """
+    sealed_ids = {int(TileID.VOID), int(TileID.WALL), int(TileID.BLOCK)}
+    broken: List[Tuple[Any, Any]] = []
+    height, width = np.asarray(grid).shape
+    for edge, record in realizations.items():
+        cells = list(record.get("cells", []) or [])
+        if not cells or any(
+            not (0 <= int(row) < height and 0 <= int(col) < width)
+            or int(grid[int(row), int(col)]) in sealed_ids
+            for row, col in cells
+        ):
+            broken.append(edge)
+    total = len(realizations)
+    return {
+        "final_spatial_edge_records": int(total),
+        "final_spatial_edge_records_intact": int(total - len(broken)),
+        "final_spatial_edge_records_broken": int(len(broken)),
+        "final_spatial_edge_integrity_rate": float((total - len(broken)) / total) if total else 1.0,
+        "final_spatial_edge_integrity_failures": [tuple(edge) for edge in broken],
+    }
 
 
 def seal_boundary_walls(
@@ -1057,6 +1365,8 @@ def build_stitched_room_layout(
         fill_tile=int(fill_tile),
     )
 
+    carved_edge_modes: Dict[Tuple[Any, Any], str] = {}
+    connection_realizations: Dict[Tuple[Any, Any], Dict[str, Any]] = {}
     if carve_connections:
         for u, v, edge_data in graph.edges(data=True):
             if not _is_spatial_room_edge(graph, u, v, edge_data):
@@ -1064,7 +1374,13 @@ def build_stitched_room_layout(
                     diagnostic_callback("non_spatial_graph_edge_not_carved")
                 continue
             if u in stitched.layout_map and v in stitched.layout_map:
-                carve_room_connection_between_bboxes(
+                recorded_cells: List[Tuple[int, int]] = []
+
+                def _record_connection(mode: str, cells: List[Tuple[int, int]]) -> None:
+                    nonlocal recorded_cells
+                    recorded_cells = [(int(row), int(col)) for row, col in cells]
+
+                mode = carve_room_connection_between_bboxes(
                     stitched.dungeon_grid,
                     stitched.layout_map[u],
                     stitched.layout_map[v],
@@ -1072,7 +1388,23 @@ def build_stitched_room_layout(
                     has_reverse_edge=bool(graph.has_edge(v, u)),
                     fill_tile=int(fill_tile),
                     diagnostic_callback=diagnostic_callback,
+                    connection_trace_callback=_record_connection,
                 )
+                if mode is not None:
+                    carved_edge_modes[(u, v)] = str(mode)
+                    connection_realizations[(u, v)] = {
+                        "mode": str(mode),
+                        "cells": recorded_cells,
+                    }
+
+    stitched.realization_metrics = compute_graph_edge_realization_metrics(
+        graph,
+        stitched.slot_positions,
+        stitched.layout_map,
+        carve_connections=bool(carve_connections),
+        carved_edge_modes=carved_edge_modes,
+    )
+    stitched.connection_realizations = connection_realizations
 
     return stitched
 

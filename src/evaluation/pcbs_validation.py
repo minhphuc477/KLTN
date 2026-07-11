@@ -529,30 +529,50 @@ def classify_pcbs_outcome(
     }
 
 
-def _extract_validation_env_kwargs(source: Any) -> Dict[str, Any]:
-    """Best-effort extraction of stitched puzzle metadata from pipeline outputs."""
+def extract_validation_env_kwargs(source: Any) -> Dict[str, Any]:
+    """Extract graph/state metadata from pipeline and VGLC stitched artifacts."""
     graph = getattr(source, "mission_graph", None)
+    if graph is None:
+        graph = getattr(source, "graph", None)
     stitched_layout = getattr(source, "stitched_layout", None)
-    slot_positions = dict(getattr(stitched_layout, "slot_positions", {}) or {})
-    room_offsets = dict(getattr(stitched_layout, "room_offsets", {}) or {})
-    room_positions = {
-        slot_pos: tuple(room_offsets.get(room_id, ()))
-        for room_id, slot_pos in slot_positions.items()
-        if room_id in room_offsets
-    }
-    if room_positions:
-        room_to_node = {slot_pos: room_id for room_id, slot_pos in slot_positions.items()}
-        node_to_room = {room_id: slot_pos for room_id, slot_pos in slot_positions.items()}
+    if stitched_layout is not None:
+        slot_positions = dict(getattr(stitched_layout, "slot_positions", {}) or {})
+        room_offsets = dict(getattr(stitched_layout, "room_offsets", {}) or {})
+        room_positions = {
+            slot_pos: tuple(room_offsets.get(room_id, ()))
+            for room_id, slot_pos in slot_positions.items()
+            if room_id in room_offsets
+        }
+        room_to_node = (
+            {slot_pos: room_id for room_id, slot_pos in slot_positions.items()}
+            if room_positions
+            else None
+        )
+        node_to_room = (
+            {room_id: slot_pos for room_id, slot_pos in slot_positions.items()}
+            if room_positions
+            else None
+        )
     else:
-        room_to_node = None
-        node_to_room = None
+        room_positions = dict(getattr(source, "room_positions", {}) or {}) or None
+        room_to_node = dict(getattr(source, "room_to_node", {}) or {}) or None
+        node_to_room = dict(getattr(source, "node_to_room", {}) or {}) or None
     return {
         "graph": graph,
-        "room_positions": room_positions or None,
+        "room_positions": room_positions,
         "room_to_node": room_to_node,
         "node_to_room": node_to_room,
-        "room_puzzle_metadata": dict(getattr(source, "puzzle_metadata", {}) or {}) or None,
+        "room_puzzle_metadata": dict(
+            getattr(source, "puzzle_metadata", None)
+            or getattr(source, "room_puzzle_metadata", None)
+            or {}
+        ) or None,
     }
+
+
+def _extract_validation_env_kwargs(source: Any) -> Dict[str, Any]:
+    """Backward-compatible private alias."""
+    return extract_validation_env_kwargs(source)
 
 
 def evaluate_astar_vs_pcbs(
@@ -570,7 +590,7 @@ def evaluate_astar_vs_pcbs(
     start = prepared.start
     goal = prepared.goal
     manhattan = abs(int(start[0]) - int(goal[0])) + abs(int(start[1]) - int(goal[1]))
-    env_kwargs = _extract_validation_env_kwargs(source)
+    env_kwargs = extract_validation_env_kwargs(source)
     calibration_payload = _load_pcbs_calibration_payload(calibration_path)
     calibrated_config = _persona_config_from_payload(
         persona=str(persona),

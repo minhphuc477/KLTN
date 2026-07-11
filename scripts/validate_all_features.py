@@ -1,9 +1,12 @@
 ﻿"""
-Test All 9 Advanced Features
-==============================
-Validates that all 9 advanced features are correctly integrated and functional.
+Nine Feature Component Smoke Checks
+===================================
+Exercises public component APIs with synthetic fixtures.
 
-Run this before thesis defense to ensure everything works!
+This script is not an end-to-end pipeline test, a checkpoint evaluation, or
+scientific evidence. Its mock grids, graphs, and fresh LoRA layer cannot
+establish generation quality, controllability, or thesis readiness. Use the
+checkpoint-backed ablation and benchmark scripts for those claims.
 
 Usage:
     python scripts/validate_all_features.py --quick      # Fast smoke test
@@ -58,7 +61,7 @@ except ImportError as e:
 
 
 class FeatureTester:
-    """Comprehensive feature testing."""
+    """Synthetic component smoke checks; deliberately not evidence generation."""
     
     def __init__(self, quick_mode: bool = False):
         self.quick_mode = quick_mode
@@ -566,8 +569,9 @@ class FeatureTester:
     def run_all_tests(self):
         """Run all feature tests."""
         print("\n" + "="*60)
-        print("KLTN 9 Advanced Features - Comprehensive Test Suite")
+        print("KLTN 9 Advanced Features - Component Smoke Checks")
         print("="*60)
+        print("Evidence scope: synthetic component API checks only; not thesis evidence.")
         
         tests = self._select_tests_for_mode()
 
@@ -597,7 +601,8 @@ class FeatureTester:
         print(f"\nTotal: {passed}/{passed + failed} tests passed")
         
         if failed == 0:
-            print("\n[PASS] ALL FEATURES WORKING. Ready for thesis defense.")
+            print("\n[PASS] All selected component smoke checks passed.")
+            print("This does not establish end-to-end integration or scientific performance.")
             return 0
         else:
             print(f"\n[WARN] {failed} feature(s) need attention")
@@ -607,9 +612,9 @@ class FeatureTester:
 if __name__ == "__main__":
     import argparse
     
-    parser = argparse.ArgumentParser(description="Test all 9 advanced features")
-    parser.add_argument("--quick", action="store_true", help="Run quick smoke tests")
-    parser.add_argument("--thorough", action="store_true", help="Run thorough validation")
+    parser = argparse.ArgumentParser(description="Run synthetic component smoke checks")
+    parser.add_argument("--quick", action="store_true", help="Run a representative smoke subset")
+    parser.add_argument("--thorough", action="store_true", help="Run all synthetic component checks")
     args = parser.parse_args()
 
     if args.quick and args.thorough:

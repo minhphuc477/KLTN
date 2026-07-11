@@ -58,6 +58,7 @@ from .graph_types import (
 )
 from src.generation.grammar_validators import (
     validate_battery_reachability,
+    validate_exact_progression,
     validate_resource_loops,
     validate_skill_chains,
 )
@@ -157,6 +158,7 @@ class MissionGrammar:
             'skill_chains': validate_skill_chains(graph),
             'battery_reachability': validate_battery_reachability(graph),
             'resource_loops': validate_resource_loops(graph),
+            'exact_progression': validate_exact_progression(graph),
         }
         
         # Log any failures

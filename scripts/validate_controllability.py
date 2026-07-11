@@ -4,13 +4,18 @@ Measures system responsiveness to user-specified tension curves.
 
 This addresses the thesis defense concern: "How do you prove users actually control the output?"
 
-Target: Pearson r > 0.7 for "responsive" system classification.
+The script is checkpoint-backed by default. It refuses to publish-looking
+numbers from random-weight generation or a surrogate. ``--allow-surrogate-smoke``
+is available only to exercise the report schema without trained artifacts.
 
 Usage:
-    python scripts/validate_controllability.py --num-samples 20 --output results/controllability
+    python scripts/validate_controllability.py --num-samples 20 --output results/controllability \
+        --vqvae-checkpoint outputs/.../vqvae_pretrained.pth \
+        --diffusion-checkpoint outputs/.../best_model.pth
 """
 
 import argparse
+import json
 import numpy as np
 import pandas as pd
 from pathlib import Path
@@ -32,10 +37,25 @@ class ControllabilityTest:
     Tests system controllability by generating dungeons with diverse tension curves
     and measuring correlation between target and actual tension.
     
-    Target: Pearson r > 0.7 for "responsive" system classification.
+    The statistical protocol belongs in ``run_designer_controllability_proof``.
+    This legacy convenience wrapper deliberately refuses to masquerade
+    random-weight or surrogate output as model evidence.
     """
     
-    def __init__(self, output_dir: str = "results/controllability"):
+    def __init__(
+        self,
+        output_dir: str = "results/controllability",
+        *,
+        vqvae_checkpoint: Optional[str] = None,
+        diffusion_checkpoint: Optional[str] = None,
+        logic_net_checkpoint: Optional[str] = None,
+        device: str = "auto",
+        guidance_scale: float = 3.0,
+        logic_guidance_scale: float = 0.0,
+        num_diffusion_steps: int = 25,
+        responsive_correlation_threshold: float = 0.7,
+        allow_surrogate_smoke: bool = False,
+    ):
         """
         Args:
             output_dir: Directory to save controllability results
@@ -44,6 +64,16 @@ class ControllabilityTest:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self._pipeline = None
         self._pipeline_init_attempted = False
+        self.vqvae_checkpoint = Path(vqvae_checkpoint) if vqvae_checkpoint else None
+        self.diffusion_checkpoint = Path(diffusion_checkpoint) if diffusion_checkpoint else None
+        self.logic_net_checkpoint = Path(logic_net_checkpoint) if logic_net_checkpoint else None
+        self.device = str(device)
+        self.guidance_scale = float(guidance_scale)
+        self.logic_guidance_scale = float(logic_guidance_scale)
+        self.num_diffusion_steps = int(max(1, num_diffusion_steps))
+        self.responsive_correlation_threshold = float(responsive_correlation_threshold)
+        self.allow_surrogate_smoke = bool(allow_surrogate_smoke)
+        self.evidence_mode = "surrogate_smoke" if self.allow_surrogate_smoke else "checkpoint_backed"
         
         # Define test curves
         self.test_curves = {
@@ -61,20 +91,45 @@ class ControllabilityTest:
             return self._pipeline
 
         self._pipeline_init_attempted = True
+        missing = [
+            name
+            for name, path in (
+                ("vqvae_checkpoint", self.vqvae_checkpoint),
+                ("diffusion_checkpoint", self.diffusion_checkpoint),
+            )
+            if path is None or not path.is_file()
+        ]
+        if missing:
+            if self.allow_surrogate_smoke:
+                logger.warning(
+                    "Using explicitly requested surrogate smoke mode; missing trained artifacts: %s",
+                    ", ".join(missing),
+                )
+                self._pipeline = None
+                return None
+            raise FileNotFoundError(
+                "Controllability evidence requires trained checkpoints. Missing or unreadable: "
+                + ", ".join(missing)
+            )
         try:
             from src.pipeline.dungeon_pipeline import NeuralSymbolicDungeonPipeline
-            self._pipeline = NeuralSymbolicDungeonPipeline(
-                vqvae_checkpoint=None,
-                diffusion_checkpoint=None,
-                logic_net_checkpoint=None,
-                device='auto',
+            self._pipeline = NeuralSymbolicDungeonPipeline.from_legacy_kwargs(
+                vqvae_checkpoint=str(self.vqvae_checkpoint),
+                diffusion_checkpoint=str(self.diffusion_checkpoint),
+                logic_net_checkpoint=(str(self.logic_net_checkpoint) if self.logic_net_checkpoint else None),
+                device=self.device,
                 enable_logging=False,
+                strict_checkpoint_mode=True,
             )
-            logger.info("Initialized NeuralSymbolicDungeonPipeline for controllability generation")
-        except Exception:
+            logger.info("Initialized checkpoint-backed pipeline for controllability generation")
+        except (ImportError, RuntimeError, ValueError, TypeError, OSError) as exc:
+            if not self.allow_surrogate_smoke:
+                raise RuntimeError(
+                    "Could not initialize checkpoint-backed controllability pipeline"
+                ) from exc
             self._pipeline = None
             logger.warning(
-                "NeuralSymbolicDungeonPipeline unavailable; using surrogate generation for this run",
+                "Pipeline unavailable; using explicitly requested surrogate smoke mode",
                 exc_info=True,
             )
         return self._pipeline
@@ -131,7 +186,7 @@ class ControllabilityTest:
             seeds: List of random seeds to use
         
         Returns:
-            DataFrame with columns: [curve_type, seed, target_curve, actual_curve, correlation, r_squared]
+            DataFrame with paired target and observed semantic-tension curves.
         """
         if seeds is None:
             seeds = list(range(num_samples_per_curve))
@@ -156,7 +211,7 @@ class ControllabilityTest:
                         'tension_curve': target_curve,
                         'seed': seed,
                         'use_evolution': True,
-                        'use_logicnet': True
+                        'use_logicnet': self.logic_net_checkpoint is not None,
                     })
                     
                     gen_time = time.time() - start_time
@@ -165,7 +220,7 @@ class ControllabilityTest:
                         print("FAILED")
                         continue
                     
-                    # Extract actual tension curve from generated dungeon
+                    # Measure generated room semantics, never the requested target.
                     actual_curve = self._extract_actual_tension_curve(dungeon)
                     
                     # Calculate correlation
@@ -185,10 +240,12 @@ class ControllabilityTest:
                         'seed': seed,
                         'target_curve': target_curve,
                         'actual_curve': actual_curve.tolist(),
+                        'actual_curve_source': str(dungeon.get('actual_curve_source', 'unknown')),
                         'correlation': correlation,
                         'r_squared': r_squared,
                         'p_value': p_value,
-                        'gen_time': gen_time
+                        'gen_time': gen_time,
+                        'evidence_mode': self.evidence_mode,
                     })
                     
                     print(f"OK (r={correlation:.3f}, r^2={r_squared:.3f})")
@@ -202,6 +259,19 @@ class ControllabilityTest:
         # Save results
         output_file = self.output_dir / "controllability_results.csv"
         df.to_csv(output_file, index=False)
+        provenance = {
+            "evidence_mode": self.evidence_mode,
+            "vqvae_checkpoint": str(self.vqvae_checkpoint) if self.vqvae_checkpoint else None,
+            "diffusion_checkpoint": str(self.diffusion_checkpoint) if self.diffusion_checkpoint else None,
+            "logic_net_checkpoint": str(self.logic_net_checkpoint) if self.logic_net_checkpoint else None,
+            "guidance_scale": self.guidance_scale,
+            "logic_guidance_scale": self.logic_guidance_scale,
+            "num_diffusion_steps": self.num_diffusion_steps,
+            "responsive_correlation_threshold": self.responsive_correlation_threshold,
+        }
+        (self.output_dir / "controllability_evidence.json").write_text(
+            json.dumps(provenance, indent=2), encoding="utf-8"
+        )
         print(f"\nSaved results to {output_file}")
         
         return df
@@ -240,12 +310,16 @@ class ControllabilityTest:
         if math.isnan(overall_mean_r):
             overall_mean_r = 0.0
         
-        if overall_mean_r >= 0.7:
-            classification = "RESPONSIVE (r >= 0.7) [OK]"
-        elif overall_mean_r >= 0.5:
-            classification = "MODERATELY RESPONSIVE (0.5 <= r < 0.7)"
+        threshold = self.responsive_correlation_threshold
+        moderate_threshold = max(0.0, threshold - 0.2)
+        if overall_mean_r >= threshold:
+            classification = f"RESPONSIVE (r >= {threshold:.2f})"
+        elif overall_mean_r >= moderate_threshold:
+            classification = f"MODERATELY RESPONSIVE ({moderate_threshold:.2f} <= r < {threshold:.2f})"
         else:
-            classification = "UNRESPONSIVE (r < 0.5) [FAIL]"
+            classification = f"UNRESPONSIVE (r < {moderate_threshold:.2f})"
+        if self.evidence_mode != "checkpoint_backed":
+            classification = "SMOKE ONLY - NOT MODEL EVIDENCE: " + classification
         
         print(f"\n{'='*80}")
         print(f"OVERALL CONTROLLABILITY: {classification}")
@@ -272,8 +346,10 @@ class ControllabilityTest:
         ax.set_xticklabels(means.index, rotation=45, ha='right')
         ax.set_ylabel('Pearson Correlation (r)')
         ax.set_title('Controllability by Tension Curve Type')
-        ax.axhline(y=0.7, color='g', linestyle='--', label='Responsive threshold (r=0.7)')
-        ax.axhline(y=0.5, color='orange', linestyle='--', label='Moderate threshold (r=0.5)')
+        threshold = self.responsive_correlation_threshold
+        moderate_threshold = max(0.0, threshold - 0.2)
+        ax.axhline(y=threshold, color='g', linestyle='--', label=f'Responsive threshold (r={threshold:.2f})')
+        ax.axhline(y=moderate_threshold, color='orange', linestyle='--', label=f'Moderate threshold (r={moderate_threshold:.2f})')
         ax.legend()
         ax.grid(axis='y', alpha=0.3)
         ax.set_ylim(0, 1)
@@ -316,8 +392,8 @@ class ControllabilityTest:
                 bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
         
         ax.set_xlabel('Target Tension')
-        ax.set_ylabel('Actual Tension')
-        ax.set_title('Target vs Actual Tension: Room-Level Correlation')
+        ax.set_ylabel('Observed Semantic Tension')
+        ax.set_title('Target vs Observed Semantic Tension: Room-Level Correlation')
         ax.legend()
         ax.grid(alpha=0.3)
         ax.set_xlim(0, 1)
@@ -355,7 +431,7 @@ class ControllabilityTest:
             
             x = range(len(target))
             ax.plot(x, target, 'b-o', label='Target', linewidth=2, markersize=6)
-            ax.plot(x, actual, 'r--s', label='Actual', linewidth=2, markersize=5)
+            ax.plot(x, actual, 'r--s', label='Observed semantic proxy', linewidth=2, markersize=5)
             
             ax.set_title(f"{curve_type}\n(r={best_example['correlation']:.3f})")
             ax.set_xlabel('Room Index')
@@ -372,7 +448,7 @@ class ControllabilityTest:
     
     def _generate_dungeon(self, params: Dict) -> Optional[Dict]:
         """
-        Generate a dungeon using the project pipeline, with a deterministic surrogate fallback.
+        Generate a checkpoint-backed dungeon, or an explicitly labeled smoke surrogate.
         """
         pipeline = self._get_generation_pipeline()
         if pipeline is not None:
@@ -384,9 +460,9 @@ class ControllabilityTest:
                     target_curve=params.get('tension_curve'),
                     num_rooms=int(params.get('num_rooms', 8)),
                     seed=int(params.get('seed', 0)),
-                    guidance_scale=7.5,
-                    logic_guidance_scale=1.0,
-                    num_diffusion_steps=25,
+                    guidance_scale=self.guidance_scale,
+                    logic_guidance_scale=self.logic_guidance_scale,
+                    num_diffusion_steps=self.num_diffusion_steps,
                     apply_repair=True,
                 )
 
@@ -394,7 +470,7 @@ class ControllabilityTest:
                     'visual_grid': getattr(res, 'dungeon_grid', np.zeros((64, 64), dtype=int)),
                     'mission_graph': {'nodes': {}, 'edges': []},
                     'rooms': [],
-                    'tension_curve': params.get('tension_curve')
+                    'actual_curve_source': 'room_semantic_proxy',
                 }
                 try:
                     mission_graph = getattr(res, 'mission_graph', None)
@@ -404,15 +480,28 @@ class ControllabilityTest:
                             'edges': list(mission_graph.edges()),
                         }
                     for rid, room in getattr(res, 'rooms', {}).items():
-                        room_tension = float(getattr(room, 'metrics', {}).get('room_tension', 0.0))
-                        out['rooms'].append({'id': rid, 'tension': room_tension})
-                except Exception:
+                        room_grid = getattr(room, 'room_grid', None)
+                        if room_grid is None:
+                            raise RuntimeError(f"Generated room {rid!r} has no semantic room grid")
+                        out['rooms'].append({'id': rid, 'grid': np.asarray(room_grid, dtype=np.int32)})
+                    out['room_order'] = self._resolve_room_order(
+                        mission_graph,
+                        [room['id'] for room in out['rooms']],
+                    )
+                except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+                    if not self.allow_surrogate_smoke:
+                        raise RuntimeError("Could not extract generated room semantics") from exc
                     logger.debug('Could not fully unpack pipeline result', exc_info=True)
                 return out
-            except Exception:
-                logger.debug("Pipeline generation failed; falling back to surrogate", exc_info=True)
+            except (AttributeError, RuntimeError, ValueError, TypeError, OSError) as exc:
+                if not self.allow_surrogate_smoke:
+                    raise RuntimeError("Checkpoint-backed generation failed") from exc
+                logger.debug("Pipeline generation failed; using requested surrogate smoke mode", exc_info=True)
 
-        # Deterministic surrogate generation for environments without model assets.
+        if not self.allow_surrogate_smoke:
+            raise RuntimeError("No checkpoint-backed generation pipeline is available")
+
+        # Deterministic schema smoke path. Its outputs are never model evidence.
         tension_curve = params.get('tension_curve', [0.5] * params.get('num_rooms', 8))
         num_rooms = int(params.get('num_rooms', len(tension_curve)))
         seed = int(params.get('seed', 0))
@@ -424,38 +513,105 @@ class ControllabilityTest:
         return {
             'visual_grid': np.zeros((64, 64), dtype=int),
             'mission_graph': {'nodes': {i: {} for i in range(num_rooms)}, 'edges': []},
-            'rooms': [{'id': i, 'tension': float(actual_curve[i])} for i in range(num_rooms)],
-            'tension_curve': actual_curve.tolist()
+            'rooms': [{'id': i, 'synthetic_tension': float(actual_curve[i])} for i in range(num_rooms)],
+            'room_order': list(range(num_rooms)),
+            'actual_curve_source': 'surrogate_smoke',
         }
+
+    @staticmethod
+    def _resolve_room_order(mission_graph: object, room_ids: List[object]) -> List[object]:
+        """Return a deterministic start-to-goal room order when topology exposes one."""
+        available = set(room_ids)
+        try:
+            import networkx as nx
+
+            if not isinstance(mission_graph, nx.Graph):
+                raise TypeError("mission graph is not a NetworkX graph")
+            start_nodes = [
+                node_id
+                for node_id, attrs in mission_graph.nodes(data=True)
+                if str(attrs.get('type', '')).upper() == 'START'
+                or bool(attrs.get('is_start', False))
+            ]
+            goal_nodes = [
+                node_id
+                for node_id, attrs in mission_graph.nodes(data=True)
+                if str(attrs.get('type', '')).upper() in {'GOAL', 'TRIFORCE'}
+                or bool(attrs.get('is_goal', False))
+            ]
+            if start_nodes and goal_nodes:
+                start = min(start_nodes, key=str)
+                goal = min(goal_nodes, key=str)
+                try:
+                    path = nx.shortest_path(mission_graph, start, goal)
+                except nx.NetworkXNoPath:
+                    path = nx.shortest_path(mission_graph.to_undirected(), start, goal)
+                ordered = [node_id for node_id in path if node_id in available]
+                if ordered:
+                    remaining = sorted(available.difference(ordered), key=str)
+                    return ordered + remaining
+        except (ImportError, AttributeError, TypeError, ValueError):
+            pass
+        return sorted(available, key=str)
+
+    @staticmethod
+    def _room_semantic_tension(room_grid: np.ndarray) -> float:
+        """Compute a transparent room-local challenge proxy from final tile IDs."""
+        from src.core.definitions import SEMANTIC_PALETTE
+
+        grid = np.asarray(room_grid, dtype=np.int32)
+        floor = max(1, int(np.sum(grid == int(SEMANTIC_PALETTE['FLOOR']))))
+        weighted_tiles = (
+            ("ENEMY", 1.0),
+            ("BOSS", 3.0),
+            ("ELEMENT", 1.5),
+            ("DOOR_LOCKED", 0.6),
+            ("DOOR_BOMB", 0.6),
+            ("DOOR_BOSS", 0.8),
+            ("DOOR_PUZZLE", 0.6),
+            ("PUZZLE", 0.5),
+            ("BLOCK", 0.25),
+        )
+        load = 0.0
+        for tile_name, weight in weighted_tiles:
+            tile_id = SEMANTIC_PALETTE.get(tile_name)
+            if tile_id is not None:
+                load += float(weight) * float(np.sum(grid == int(tile_id)))
+        return float(load / floor)
     
     def _extract_actual_tension_curve(self, dungeon: Dict) -> np.ndarray:
         """
-        Extract actual tension experienced in generated dungeon.
+        Extract an observed semantic-tension curve from generated room grids.
         
-        Tension = weighted sum of:
-        - Enemy count (normalized)
-        - Room distance from start (progress)
-        - Path difficulty (detours, backtracking)
+        This is a transparent structural proxy, not a human-experience metric.
+        It intentionally never reads the requested tension target.
         """
-        # Try to use actual validator
-        try:
-            from src.simulation.validator import extract_actual_tension_curve
-            return extract_actual_tension_curve(dungeon)
-        except ImportError:
-            # Fallback: use mock result (already in dungeon)
-            if 'tension_curve' in dungeon:
-                return np.array(dungeon['tension_curve'])
-            
-            # Calculate from rooms
-            rooms = dungeon.get('rooms', [])
-            tension_values = []
-            
-            for room in rooms:
-                # Mock calculation
-                tension = room.get('tension', 0.5)
-                tension_values.append(tension)
-            
-            return np.array(tension_values) if tension_values else np.array([0.5] * 8)
+        rooms_by_id = {
+            room.get('id'): room
+            for room in list(dungeon.get('rooms', []) or [])
+            if isinstance(room, dict) and 'id' in room
+        }
+        order = list(dungeon.get('room_order', []) or [])
+        if str(dungeon.get('actual_curve_source', '')) == 'surrogate_smoke':
+            if not self.allow_surrogate_smoke:
+                raise RuntimeError('Surrogate curve is not allowed in checkpoint-backed evidence mode')
+            values = [
+                float(rooms_by_id[room_id]['synthetic_tension'])
+                for room_id in order
+                if room_id in rooms_by_id and 'synthetic_tension' in rooms_by_id[room_id]
+            ]
+            return np.asarray(values, dtype=np.float64)
+
+        values = [
+            self._room_semantic_tension(np.asarray(rooms_by_id[room_id]['grid']))
+            for room_id in order
+            if room_id in rooms_by_id and 'grid' in rooms_by_id[room_id]
+        ]
+        if not values:
+            raise RuntimeError('No generated room grids available for observed semantic tension')
+        curve = np.asarray(values, dtype=np.float64)
+        maximum = float(curve.max(initial=0.0))
+        return curve / maximum if maximum > 0.0 else curve
 
 
 def main():
@@ -464,9 +620,37 @@ def main():
     parser.add_argument('--num-samples', type=int, default=20, help='Number of dungeons per curve type')
     parser.add_argument('--output', type=str, default='results/controllability', help='Output directory')
     parser.add_argument('--curve', type=str, default=None, help='Test specific curve (flat, linear_rising, etc.)')
+    parser.add_argument('--vqvae-checkpoint', type=str, default=None, help='Trained VQ-VAE checkpoint required for evidence mode.')
+    parser.add_argument('--diffusion-checkpoint', type=str, default=None, help='Trained diffusion checkpoint required for evidence mode.')
+    parser.add_argument('--logic-net-checkpoint', type=str, default=None, help='Optional trained LogicNet checkpoint.')
+    parser.add_argument('--device', type=str, default='auto')
+    parser.add_argument('--guidance-scale', type=float, default=3.0)
+    parser.add_argument('--logic-guidance-scale', type=float, default=0.0)
+    parser.add_argument('--num-diffusion-steps', type=int, default=25)
+    parser.add_argument('--responsive-correlation-threshold', type=float, default=0.7)
+    parser.add_argument(
+        '--allow-surrogate-smoke',
+        action='store_true',
+        help='Permit deterministic surrogate output for schema smoke tests only; output is labeled non-evidence.',
+    )
     parser.add_argument('--verbose', action='store_true', help='Enable verbose logging')
     
     args = parser.parse_args()
+    if not bool(args.allow_surrogate_smoke):
+        missing = [
+            flag
+            for flag, value in (
+                ("--vqvae-checkpoint", args.vqvae_checkpoint),
+                ("--diffusion-checkpoint", args.diffusion_checkpoint),
+            )
+            if not value or not Path(value).is_file()
+        ]
+        if missing:
+            parser.error(
+                "Scientific controllability execution requires readable trained checkpoints: "
+                + ", ".join(missing)
+                + ". Use --allow-surrogate-smoke only for non-evidence schema smoke tests."
+            )
     
     # Setup logging
     log_level = logging.DEBUG if args.verbose else logging.INFO
@@ -476,7 +660,18 @@ def main():
     )
     
     # Create test
-    test = ControllabilityTest(output_dir=args.output)
+    test = ControllabilityTest(
+        output_dir=args.output,
+        vqvae_checkpoint=args.vqvae_checkpoint,
+        diffusion_checkpoint=args.diffusion_checkpoint,
+        logic_net_checkpoint=args.logic_net_checkpoint,
+        device=args.device,
+        guidance_scale=args.guidance_scale,
+        logic_guidance_scale=args.logic_guidance_scale,
+        num_diffusion_steps=args.num_diffusion_steps,
+        responsive_correlation_threshold=args.responsive_correlation_threshold,
+        allow_surrogate_smoke=bool(args.allow_surrogate_smoke),
+    )
     
     # Run test
     if args.curve:

@@ -4,8 +4,10 @@ import numpy as np
 from src.core.definitions import ROOM_HEIGHT, ROOM_WIDTH, SEMANTIC_PALETTE
 from src.pipeline.spatial_utils import carve_room_connection
 from src.pipeline.room_stitching import (
+    build_stitched_room_layout,
     build_room_canvas_from_slots,
     carve_room_connection_between_bboxes,
+    compute_graph_edge_realization_metrics,
     compute_layout_quality_metrics,
     compute_graph_aware_room_slots,
 )
@@ -158,7 +160,7 @@ def test_adjacent_bbox_connector_opens_interior_aprons():
     grid[ROOM_HEIGHT + 1, :] = wall
     grid[ROOM_HEIGHT + 1, start_col] = start
 
-    carve_room_connection_between_bboxes(
+    mode = carve_room_connection_between_bboxes(
         grid,
         (0, 0, ROOM_WIDTH - 1, ROOM_HEIGHT - 1),
         (0, ROOM_HEIGHT, ROOM_WIDTH - 1, ROOM_HEIGHT * 2 - 1),
@@ -166,6 +168,7 @@ def test_adjacent_bbox_connector_opens_interior_aprons():
         fill_tile=int(SEMANTIC_PALETTE["VOID"]),
     )
 
+    assert mode == "adjacent"
     boundary_cols = np.where(grid[ROOM_HEIGHT - 1, :] == door_open)[0]
     assert len(boundary_cols) > 0
     assert np.all(grid[ROOM_HEIGHT, boundary_cols] == door_open)
@@ -312,3 +315,87 @@ def test_layout_quality_metrics_do_not_rely_on_exact_graph_slot_matches_for_nois
     assert metrics["graph_edge_slot_mean_excess_distance"] == 0.0
     assert metrics["graph_preferred_position_duplicate_rate"] is not None
     assert metrics["graph_preferred_position_duplicate_rate"] > 0.0
+
+
+def test_stitched_layout_reports_spatial_and_nonspatial_edge_realization_separately():
+    graph = nx.DiGraph()
+    graph.add_node("start", position=(0, 0, 0))
+    graph.add_node("room", position=(0, 1, 0))
+    graph.add_node("upper", position=(0, 1, 1))
+    graph.add_edge("start", "room", edge_type="path")
+    graph.add_edge("room", "upper", edge_type="stairs")
+    rooms = {
+        node_id: np.full(
+            (ROOM_HEIGHT, ROOM_WIDTH),
+            int(SEMANTIC_PALETTE["FLOOR"]),
+            dtype=np.int32,
+        )
+        for node_id in graph.nodes
+    }
+
+    stitched = build_stitched_room_layout(rooms, graph)
+    metrics = stitched.realization_metrics
+
+    assert metrics["spatial_graph_edge_count"] == 1
+    assert metrics["non_spatial_graph_edge_count"] == 1
+    assert metrics["non_spatial_graph_edges_intentionally_not_carved"] == 1
+    assert metrics["spatial_graph_edges_carved"] == 1
+    assert metrics["spatial_graph_edge_carve_rate"] == 1.0
+
+
+def test_spatial_topology_metrics_detect_lost_cycle_after_partial_carving():
+    graph = nx.Graph()
+    graph.add_edges_from(
+        [
+            ("a", "b", {"edge_type": "path"}),
+            ("b", "c", {"edge_type": "path"}),
+            ("c", "d", {"edge_type": "path"}),
+            ("d", "a", {"edge_type": "path"}),
+        ]
+    )
+    slots = {"a": (0, 0), "b": (0, 1), "c": (1, 1), "d": (1, 0)}
+    layout = {
+        room_id: (idx * ROOM_WIDTH, 0, ((idx + 1) * ROOM_WIDTH) - 1, ROOM_HEIGHT - 1)
+        for idx, room_id in enumerate(graph.nodes)
+    }
+
+    partial = compute_graph_edge_realization_metrics(
+        graph,
+        slots,
+        layout,
+        carve_connections=True,
+        carved_edge_modes={("a", "b"): "adjacent", ("b", "c"): "adjacent", ("c", "d"): "adjacent"},
+    )
+    complete = compute_graph_edge_realization_metrics(
+        graph,
+        slots,
+        layout,
+        carve_connections=True,
+        carved_edge_modes={tuple(edge): "adjacent" for edge in graph.edges},
+    )
+
+    assert partial["spatial_topology_reference_cycle_rank"] == 1
+    assert partial["spatial_topology_realized_cycle_rank"] == 0
+    assert partial["spatial_topology_cycle_rank_agreement"] == 0.0
+    assert partial["spatial_topology_invariant_preservation_score"] < 1.0
+    assert complete["spatial_topology_realized_cycle_rank"] == 1
+    assert complete["spatial_topology_invariant_preservation_score"] == 1.0
+
+
+def test_fallback_corridor_does_not_claim_a_blocked_connection():
+    """A fallback corridor must not partially carve through an occupied room."""
+    grid = np.zeros((7, 15), dtype=np.int32)
+    src_bbox = (1, 2, 3, 4)
+    dst_bbox = (11, 2, 13, 4)
+    wall_id = int(SEMANTIC_PALETTE["WALL"])
+    grid[:, 7] = wall_id
+
+    mode = carve_room_connection_between_bboxes(
+        grid,
+        src_bbox,
+        dst_bbox,
+        fill_tile=0,
+    )
+
+    assert mode is None
+    assert np.all(grid[:, 7] == wall_id)

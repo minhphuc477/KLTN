@@ -213,6 +213,16 @@ Validation roles are now explicit.
 - stricter stress probe: monolithic stitched tile-state `A*`
 - comparison solvers: BFS, Dijkstra, Greedy, D* Lite, DFS/IDDFS, Bidirectional A*
 - behavioral probe: `P-CBS` / `CognitiveBoundedSearch`
+- optional learned-policy probe: per-level tabular RL playtesters in
+  `run_pcbs_persona_map_sweep.py --include-rl-ablation`; these are ablations,
+  never hard solvability oracles
+- VGLC benchmark handoff preserves the stitched mission graph and room/node
+  mappings. Grid-only evaluation is reserved for artifacts with no graph
+  transitions; the cardinal-only tabular RL arm explicitly skips certified
+  paths that require stairs or warps.
+- A* and its Dijkstra safeguard consume one shared state-expansion budget and
+  report aggregate work. MAP-Elites archive sampling uses checkpointed,
+  instance-local RNG state for reproducible resumed runs.
 - excluded from canonical export comparison: `parallel_astar`, `multi_goal`,
   `key_economy_validator`, and `solver_comparison`
 

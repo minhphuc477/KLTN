@@ -170,30 +170,16 @@ Thesis rule:
 
 ### 4.3 Training-time puzzle-control branch
 
-```powershell
-python main.py train --config configs\zelda_hmolqd.yaml --stage diffusion --output-dir outputs\zelda_hmolqd_downstream_puzzle_structure_control_v2 --diffusion-vqvae-checkpoint outputs\vqvae_ablation_codebook512_v2\checkpoints\vqvae\vqvae_pretrained.pth --diffusion-puzzle-structure-dropout-prob 0.35 --seed 42 --no-auto-resume --verbose
-
-python main.py train --config configs\zelda_hmolqd.yaml --stage fast_sampler --output-dir outputs\zelda_hmolqd_downstream_puzzle_structure_control_v2 --fast-sampler-base-diffusion-checkpoint outputs\zelda_hmolqd_downstream_puzzle_structure_control_v2\checkpoints\diffusion\best_model.pth --fast-sampler-puzzle-structure-dropout-prob 0.35 --seed 42 --no-auto-resume --verbose
-
-python main.py train --config configs\zelda_hmolqd.yaml --stage masked_room --output-dir outputs\zelda_hmolqd_downstream_puzzle_structure_control_v2 --masked-room-puzzle-structure-dropout-prob 0.35 --seed 42 --no-auto-resume --verbose
-```
+Do not run the historical structure-dropout branch. Its augmentation removed
+BLOCK tiles while retaining the original staged puzzle plan, creating
+contradictory labels. The production default is `0.0`. Re-enable this axis
+only after a solver-validated counterfactual compiler updates the room grid,
+stage plan, controlled doors, and oracle proof together.
 
 ### 4.4 Puzzle cookbook sweep
 
-```powershell
-python main.py train --config configs\zelda_hmolqd.yaml --stage diffusion --output-dir outputs\zelda_hmolqd_puzzlecookbook_pdrop015_v1 --diffusion-vqvae-checkpoint outputs\vqvae_ablation_codebook512_v2\checkpoints\vqvae\vqvae_pretrained.pth --diffusion-puzzle-structure-dropout-prob 0.15 --seed 42 --no-auto-resume --verbose
-python main.py train --config configs\zelda_hmolqd.yaml --stage diffusion --output-dir outputs\zelda_hmolqd_puzzlecookbook_pdrop035_v1 --diffusion-vqvae-checkpoint outputs\vqvae_ablation_codebook512_v2\checkpoints\vqvae\vqvae_pretrained.pth --diffusion-puzzle-structure-dropout-prob 0.35 --seed 42 --no-auto-resume --verbose
-python main.py train --config configs\zelda_hmolqd.yaml --stage diffusion --output-dir outputs\zelda_hmolqd_puzzlecookbook_pdrop055_v1 --diffusion-vqvae-checkpoint outputs\vqvae_ablation_codebook512_v2\checkpoints\vqvae\vqvae_pretrained.pth --diffusion-puzzle-structure-dropout-prob 0.55 --seed 42 --no-auto-resume --verbose
-
-python main.py train --config configs\zelda_hmolqd.yaml --stage fast_sampler --output-dir outputs\zelda_hmolqd_puzzlecookbook_pdrop015_v1 --fast-sampler-base-diffusion-checkpoint outputs\zelda_hmolqd_puzzlecookbook_pdrop015_v1\checkpoints\diffusion\best_model.pth --fast-sampler-puzzle-structure-dropout-prob 0.15 --seed 42 --no-auto-resume --verbose
-python main.py train --config configs\zelda_hmolqd.yaml --stage masked_room --output-dir outputs\zelda_hmolqd_puzzlecookbook_pdrop015_v1 --masked-room-puzzle-structure-dropout-prob 0.15 --seed 42 --no-auto-resume --verbose
-
-python main.py train --config configs\zelda_hmolqd.yaml --stage fast_sampler --output-dir outputs\zelda_hmolqd_puzzlecookbook_pdrop035_v1 --fast-sampler-base-diffusion-checkpoint outputs\zelda_hmolqd_puzzlecookbook_pdrop035_v1\checkpoints\diffusion\best_model.pth --fast-sampler-puzzle-structure-dropout-prob 0.35 --seed 42 --no-auto-resume --verbose
-python main.py train --config configs\zelda_hmolqd.yaml --stage masked_room --output-dir outputs\zelda_hmolqd_puzzlecookbook_pdrop035_v1 --masked-room-puzzle-structure-dropout-prob 0.35 --seed 42 --no-auto-resume --verbose
-
-python main.py train --config configs\zelda_hmolqd.yaml --stage fast_sampler --output-dir outputs\zelda_hmolqd_puzzlecookbook_pdrop055_v1 --fast-sampler-base-diffusion-checkpoint outputs\zelda_hmolqd_puzzlecookbook_pdrop055_v1\checkpoints\diffusion\best_model.pth --fast-sampler-puzzle-structure-dropout-prob 0.55 --seed 42 --no-auto-resume --verbose
-python main.py train --config configs\zelda_hmolqd.yaml --stage masked_room --output-dir outputs\zelda_hmolqd_puzzlecookbook_pdrop055_v1 --masked-room-puzzle-structure-dropout-prob 0.55 --seed 42 --no-auto-resume --verbose
-```
+This sweep is retired for the same label-consistency reason. It is not an
+evidence-producing ablation until the counterfactual compiler exists.
 
 ### 4.5 Learned staged-puzzle branch with explicit semantic supervision
 
@@ -222,23 +208,23 @@ Recommended full-loss setting:
 - `puzzle_stage_semantics_max_sequence_length = 6`
 
 ```powershell
-python main.py train --config configs\zelda_hmolqd.yaml --stage diffusion --output-dir outputs\zelda_hmolqd_downstream_stageconditioned_semantics_v2 --diffusion-vqvae-checkpoint outputs\vqvae_ablation_codebook512_v2\checkpoints\vqvae\vqvae_pretrained.pth --diffusion-puzzle-structure-dropout-prob 0.35 --diffusion-puzzle-stage-conditioning-enabled --diffusion-puzzle-stage-token-scale 0.20 --diffusion-puzzle-stage-topology-enabled --diffusion-puzzle-stage-trace-decay 0.75 --diffusion-puzzle-stage-semantics-loss-weight 0.25 --diffusion-puzzle-stage-semantics-hidden-dim 96 --diffusion-puzzle-stage-semantics-max-sequence-length 6 --seed 42 --no-auto-resume --verbose
+python main.py train --config configs\zelda_hmolqd.yaml --stage diffusion --output-dir outputs\zelda_hmolqd_downstream_stageconditioned_semantics_v2 --diffusion-vqvae-checkpoint outputs\vqvae_ablation_codebook512_v2\checkpoints\vqvae\vqvae_pretrained.pth --diffusion-puzzle-stage-conditioning-enabled --diffusion-puzzle-stage-token-scale 0.20 --diffusion-puzzle-stage-topology-enabled --diffusion-puzzle-stage-trace-decay 0.75 --diffusion-puzzle-stage-semantics-loss-weight 0.25 --diffusion-puzzle-stage-semantics-hidden-dim 96 --diffusion-puzzle-stage-semantics-max-sequence-length 6 --seed 42 --no-auto-resume --verbose
 
-python main.py train --config configs\zelda_hmolqd.yaml --stage fast_sampler --output-dir outputs\zelda_hmolqd_downstream_stageconditioned_semantics_v2 --fast-sampler-base-diffusion-checkpoint outputs\zelda_hmolqd_downstream_stageconditioned_semantics_v2\checkpoints\diffusion\best_model.pth --fast-sampler-puzzle-structure-dropout-prob 0.35 --fast-sampler-puzzle-stage-conditioning-enabled --fast-sampler-puzzle-stage-token-scale 0.20 --fast-sampler-puzzle-stage-topology-enabled --fast-sampler-puzzle-stage-trace-decay 0.75 --fast-sampler-puzzle-stage-semantics-loss-weight 0.25 --fast-sampler-puzzle-stage-semantics-hidden-dim 96 --fast-sampler-puzzle-stage-semantics-max-sequence-length 6 --seed 42 --no-auto-resume --verbose
+python main.py train --config configs\zelda_hmolqd.yaml --stage fast_sampler --output-dir outputs\zelda_hmolqd_downstream_stageconditioned_semantics_v2 --fast-sampler-base-diffusion-checkpoint outputs\zelda_hmolqd_downstream_stageconditioned_semantics_v2\checkpoints\diffusion\best_model.pth --fast-sampler-puzzle-stage-conditioning-enabled --fast-sampler-puzzle-stage-token-scale 0.20 --fast-sampler-puzzle-stage-topology-enabled --fast-sampler-puzzle-stage-trace-decay 0.75 --fast-sampler-puzzle-stage-semantics-loss-weight 0.25 --fast-sampler-puzzle-stage-semantics-hidden-dim 96 --fast-sampler-puzzle-stage-semantics-max-sequence-length 6 --seed 42 --no-auto-resume --verbose
 
-python main.py train --config configs\zelda_hmolqd.yaml --stage masked_room --output-dir outputs\zelda_hmolqd_downstream_stageconditioned_semantics_v2 --masked-room-puzzle-structure-dropout-prob 0.35 --masked-room-puzzle-stage-conditioning-enabled --masked-room-puzzle-stage-token-scale 0.20 --masked-room-puzzle-stage-topology-enabled --masked-room-puzzle-stage-trace-decay 0.75 --masked-room-puzzle-stage-semantics-loss-weight 0.25 --masked-room-puzzle-stage-semantics-hidden-dim 96 --masked-room-puzzle-stage-semantics-max-sequence-length 6 --seed 42 --no-auto-resume --verbose
+python main.py train --config configs\zelda_hmolqd.yaml --stage masked_room --output-dir outputs\zelda_hmolqd_downstream_stageconditioned_semantics_v2 --masked-room-puzzle-stage-conditioning-enabled --masked-room-puzzle-stage-token-scale 0.20 --masked-room-puzzle-stage-topology-enabled --masked-room-puzzle-stage-trace-decay 0.75 --masked-room-puzzle-stage-semantics-loss-weight 0.25 --masked-room-puzzle-stage-semantics-hidden-dim 96 --masked-room-puzzle-stage-semantics-max-sequence-length 6 --seed 42 --no-auto-resume --verbose
 ```
 
 Recommended ablation around the new branch:
 
 ```powershell
-python main.py train --config configs\zelda_hmolqd.yaml --stage diffusion --output-dir outputs\zelda_hmolqd_downstream_stageconditioned_semantics_tokens_only_v2 --diffusion-vqvae-checkpoint outputs\vqvae_ablation_codebook512_v2\checkpoints\vqvae\vqvae_pretrained.pth --diffusion-puzzle-structure-dropout-prob 0.35 --diffusion-puzzle-stage-conditioning-enabled --diffusion-puzzle-stage-token-scale 0.20 --no-diffusion-puzzle-stage-topology-enabled --diffusion-puzzle-stage-semantics-loss-weight 0.25 --diffusion-puzzle-stage-semantics-hidden-dim 96 --diffusion-puzzle-stage-semantics-max-sequence-length 6 --seed 42 --no-auto-resume --verbose
+python main.py train --config configs\zelda_hmolqd.yaml --stage diffusion --output-dir outputs\zelda_hmolqd_downstream_stageconditioned_semantics_tokens_only_v2 --diffusion-vqvae-checkpoint outputs\vqvae_ablation_codebook512_v2\checkpoints\vqvae\vqvae_pretrained.pth --diffusion-puzzle-stage-conditioning-enabled --diffusion-puzzle-stage-token-scale 0.20 --no-diffusion-puzzle-stage-topology-enabled --diffusion-puzzle-stage-semantics-loss-weight 0.25 --diffusion-puzzle-stage-semantics-hidden-dim 96 --diffusion-puzzle-stage-semantics-max-sequence-length 6 --seed 42 --no-auto-resume --verbose
 
-python main.py train --config configs\zelda_hmolqd.yaml --stage diffusion --output-dir outputs\zelda_hmolqd_downstream_stageconditioned_semantics_trace_only_v2 --diffusion-vqvae-checkpoint outputs\vqvae_ablation_codebook512_v2\checkpoints\vqvae\vqvae_pretrained.pth --diffusion-puzzle-structure-dropout-prob 0.35 --no-diffusion-puzzle-stage-conditioning-enabled --diffusion-puzzle-stage-topology-enabled --diffusion-puzzle-stage-trace-decay 0.75 --diffusion-puzzle-stage-semantics-loss-weight 0.25 --diffusion-puzzle-stage-semantics-hidden-dim 96 --diffusion-puzzle-stage-semantics-max-sequence-length 6 --seed 42 --no-auto-resume --verbose
+python main.py train --config configs\zelda_hmolqd.yaml --stage diffusion --output-dir outputs\zelda_hmolqd_downstream_stageconditioned_semantics_trace_only_v2 --diffusion-vqvae-checkpoint outputs\vqvae_ablation_codebook512_v2\checkpoints\vqvae\vqvae_pretrained.pth --no-diffusion-puzzle-stage-conditioning-enabled --diffusion-puzzle-stage-topology-enabled --diffusion-puzzle-stage-trace-decay 0.75 --diffusion-puzzle-stage-semantics-loss-weight 0.25 --diffusion-puzzle-stage-semantics-hidden-dim 96 --diffusion-puzzle-stage-semantics-max-sequence-length 6 --seed 42 --no-auto-resume --verbose
 
-python main.py train --config configs\zelda_hmolqd.yaml --stage diffusion --output-dir outputs\zelda_hmolqd_downstream_stageconditioned_semantics_loss010_v2 --diffusion-vqvae-checkpoint outputs\vqvae_ablation_codebook512_v2\checkpoints\vqvae\vqvae_pretrained.pth --diffusion-puzzle-structure-dropout-prob 0.35 --diffusion-puzzle-stage-conditioning-enabled --diffusion-puzzle-stage-token-scale 0.20 --diffusion-puzzle-stage-topology-enabled --diffusion-puzzle-stage-trace-decay 0.75 --diffusion-puzzle-stage-semantics-loss-weight 0.10 --diffusion-puzzle-stage-semantics-hidden-dim 96 --diffusion-puzzle-stage-semantics-max-sequence-length 6 --seed 42 --no-auto-resume --verbose
+python main.py train --config configs\zelda_hmolqd.yaml --stage diffusion --output-dir outputs\zelda_hmolqd_downstream_stageconditioned_semantics_loss010_v2 --diffusion-vqvae-checkpoint outputs\vqvae_ablation_codebook512_v2\checkpoints\vqvae\vqvae_pretrained.pth --diffusion-puzzle-stage-conditioning-enabled --diffusion-puzzle-stage-token-scale 0.20 --diffusion-puzzle-stage-topology-enabled --diffusion-puzzle-stage-trace-decay 0.75 --diffusion-puzzle-stage-semantics-loss-weight 0.10 --diffusion-puzzle-stage-semantics-hidden-dim 96 --diffusion-puzzle-stage-semantics-max-sequence-length 6 --seed 42 --no-auto-resume --verbose
 
-python main.py train --config configs\zelda_hmolqd.yaml --stage diffusion --output-dir outputs\zelda_hmolqd_downstream_stageconditioned_semantics_loss050_v2 --diffusion-vqvae-checkpoint outputs\vqvae_ablation_codebook512_v2\checkpoints\vqvae\vqvae_pretrained.pth --diffusion-puzzle-structure-dropout-prob 0.35 --diffusion-puzzle-stage-conditioning-enabled --diffusion-puzzle-stage-token-scale 0.20 --diffusion-puzzle-stage-topology-enabled --diffusion-puzzle-stage-trace-decay 0.75 --diffusion-puzzle-stage-semantics-loss-weight 0.50 --diffusion-puzzle-stage-semantics-hidden-dim 96 --diffusion-puzzle-stage-semantics-max-sequence-length 6 --seed 42 --no-auto-resume --verbose
+python main.py train --config configs\zelda_hmolqd.yaml --stage diffusion --output-dir outputs\zelda_hmolqd_downstream_stageconditioned_semantics_loss050_v2 --diffusion-puzzle-stage-conditioning-enabled --diffusion-puzzle-stage-token-scale 0.20 --diffusion-puzzle-stage-topology-enabled --diffusion-puzzle-stage-trace-decay 0.75 --diffusion-puzzle-stage-semantics-loss-weight 0.50 --diffusion-puzzle-stage-semantics-hidden-dim 96 --diffusion-puzzle-stage-semantics-max-sequence-length 6 --seed 42 --no-auto-resume --verbose
 ```
 
 Interpretation:

@@ -1,10 +1,11 @@
 """A/B benchmark for StateSpaceAStar priority modes using VGLC dungeons."""
 
 import csv
+import copy
 import time
 from pathlib import Path
 
-from src.evaluation.pcbs_validation import prepare_dungeon_grid_for_validation
+from src.evaluation.pcbs_validation import extract_validation_env_kwargs, prepare_dungeon_grid_for_validation
 from src.evaluation.search_benchmark_utils import path_transition_count
 from src.simulation import StateSpaceAStar
 from src.simulation.validator import ZeldaLogicEnv
@@ -32,6 +33,7 @@ def main() -> None:
         dungeon = adapter.load_dungeon(dungeon_num, variant=VARIANT)
         stitched = adapter.stitch_dungeon(dungeon)
         grid = prepare_dungeon_grid_for_validation(stitched).grid
+        env_kwargs = extract_validation_env_kwargs(stitched)
 
         modes = (
             ("baseline", {}),
@@ -39,7 +41,11 @@ def main() -> None:
             ("priority_key_boost", {"key_boost": True}),
         )
         for mode_name, options in modes:
-            env = ZeldaLogicEnv(semantic_grid=grid.copy(), render_mode=False)
+            env = ZeldaLogicEnv(
+                semantic_grid=grid.copy(),
+                render_mode=False,
+                **copy.deepcopy(env_kwargs),
+            )
             solver = StateSpaceAStar(env, timeout=200000, priority_options=options)
             started = time.perf_counter()
             success, path, states = solver.solve()

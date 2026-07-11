@@ -37,6 +37,8 @@ class RLAblationMetrics:
     navigation_entropy: float
     cognitive_load: float
     linearity_ratio: float
+    combat_engagements: int
+    pickups_collected: int
     path: List[GridPos] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -52,6 +54,8 @@ class RLAblationMetrics:
             "navigation_entropy": round(float(self.navigation_entropy), 4),
             "cognitive_load": round(float(self.cognitive_load), 4),
             "linearity_ratio": round(float(self.linearity_ratio), 4),
+            "combat_engagements": int(self.combat_engagements),
+            "pickups_collected": int(self.pickups_collected),
             "path": list(self.path),
         }
 
@@ -175,6 +179,7 @@ def train_belief_state_q_agent(
         episodes=int(max(1, episodes)),
         success_rate=float(successes) / float(max(1, episodes)),
         final_success=bool(final_success),
+        semantic_grid=semantic_grid,
     )
 
 
@@ -182,7 +187,7 @@ def run_pcbs_rl_alignment_ablation(
     grid: np.ndarray,
     *,
     personas: Sequence[str] = ("speedrunner", "explorer", "cautious", "forgetful", "novice", "greedy"),
-    reward_variants: Sequence[str] = ("goal", "explore", "safe", "memory"),
+    reward_variants: Sequence[str] = ("goal", "explore", "safe", "memory", "combat"),
     memory_capacities: Sequence[int] = (4, 7, 10),
     episodes: int = 50,
     timeout_pcbs: int = 5000,
@@ -302,9 +307,14 @@ def _run_q_episode(
         valid_actions = env.get_valid_actions()
         action = agent.choose_action(state_key, valid_actions, greedy=greedy)
         prev_dist = _manhattan(current_pos, env.goal_pos)
-        visited_before = agent.visited_counts[current_pos] > 1
         next_state, _env_reward, done, _info = env.step(int(action))
         next_pos = (int(next_state.position[0]), int(next_state.position[1]))
+        visited_before = agent.visited_counts[next_pos] > 0
+        target_tile = int(env.original_grid[next_pos[0], next_pos[1]])
+        enemy_engagement = (
+            target_tile in {int(SEMANTIC_PALETTE["ENEMY"]), int(SEMANTIC_PALETTE["BOSS"])}
+            and not visited_before
+        )
         agent.observe(next_pos)
         path.append(next_pos)
         reward = _reward(
@@ -315,6 +325,7 @@ def _run_q_episode(
             prev_dist=prev_dist,
             solved=bool(done and env.won),
             visited_before=visited_before,
+            enemy_engagement=bool(enemy_engagement),
             memory_load=float(len(agent.memory)) / float(max(1, agent.memory_capacity)),
         )
         next_key = agent.state(next_pos, env.goal_pos)
@@ -334,6 +345,7 @@ def _reward(
     prev_dist: int,
     solved: bool,
     visited_before: bool,
+    enemy_engagement: bool,
     memory_load: float,
 ) -> float:
     if solved:
@@ -347,6 +359,8 @@ def _reward(
         return step_cost + progress - 2.0 * _enemy_proximity(env.original_grid, new_pos)
     if key in {"memory", "forgetful", "r_memory"}:
         return step_cost + progress - (0.3 if visited_before else 0.0) - 0.15 * float(memory_load)
+    if key in {"combat", "combatant", "r_combat"}:
+        return step_cost + 0.2 * progress + (0.75 if enemy_engagement else 0.0)
     return step_cost + 0.3 * progress
 
 
@@ -360,6 +374,7 @@ def _metrics_from_path(
     episodes: int,
     success_rate: float,
     final_success: bool,
+    semantic_grid: np.ndarray,
 ) -> RLAblationMetrics:
     trajectory_visits = len(path)
     total_steps = max(0, trajectory_visits - 1)
@@ -377,6 +392,25 @@ def _metrics_from_path(
     if start is not None and goal is not None:
         lower_bound = max(1, _manhattan(start, goal))
     cognitive_load = min(1.0, float(unique_tiles) / float(max(1, memory_capacity * 3)))
+    grid = np.asarray(semantic_grid, dtype=np.int64)
+    enemy_ids = {int(SEMANTIC_PALETTE["ENEMY"]), int(SEMANTIC_PALETTE["BOSS"])}
+    pickup_ids = {
+        int(SEMANTIC_PALETTE["KEY_SMALL"]),
+        int(SEMANTIC_PALETTE["KEY_BOSS"]),
+        int(SEMANTIC_PALETTE["KEY_ITEM"]),
+        int(SEMANTIC_PALETTE["ITEM_MINOR"]),
+    }
+    visited_in_bounds = {
+        (int(row), int(col))
+        for row, col in path
+        if 0 <= int(row) < int(grid.shape[0]) and 0 <= int(col) < int(grid.shape[1])
+    }
+    combat_engagements = sum(
+        int(int(grid[row, col]) in enemy_ids) for row, col in visited_in_bounds
+    )
+    pickups_collected = sum(
+        int(int(grid[row, col]) in pickup_ids) for row, col in visited_in_bounds
+    )
     return RLAblationMetrics(
         reward_variant=str(reward_variant),
         memory_capacity=int(memory_capacity),
@@ -389,6 +423,8 @@ def _metrics_from_path(
         navigation_entropy=float(entropy),
         cognitive_load=float(cognitive_load),
         linearity_ratio=float(total_steps) / float(lower_bound),
+        combat_engagements=int(combat_engagements),
+        pickups_collected=int(pickups_collected),
         path=list(path),
     )
 

@@ -1,7 +1,9 @@
 # H-MOLQD Block I/O Reference
 
-> **Complete input/output specification for Block 0 and all 7 architecture blocks.**
-> Generated after integration audit and verification (all blocks tested end-to-end).
+> **Input/output specification for Block 0 and the seven H-MOLQD blocks.**
+> This is an interface reference, not evidence that every optional block is
+> trained, enabled, or validated in a particular run. Consult the publication
+> guidance and experiment artifacts for execution status.
 > Verified against source code (all class names, signatures, and shapes confirmed).
 
 ---
@@ -107,7 +109,7 @@ Fields:
   global_semantic: Optional[np.ndarray] - Stitched semantic grid (if computed)
   tpe_vectors    : np.ndarray [N, 8]    - Topological Positional Encoding
   p_matrix       : np.ndarray [N, N, 3] - Dependency matrix
-  node_features  : np.ndarray [N, 5]    - Node feature vectors
+  node_features  : np.ndarray [N, 14]   - Canonical node feature vectors
   node_to_room   : Dict[int, (row,col)]
 
 Methods:
@@ -249,7 +251,7 @@ z_q, indices = vqvae.encode(x_onehot)
 
 #### `encode_global_only` Parameters (most-used path)
 ```
-node_features : Tensor [N, 5]           - Per-node features
+node_features : Tensor [N, 14]          - Canonical per-node features
 edge_index    : Tensor [2, E]           - Edge connectivity
 edge_features : Tensor [E, edge_dim]    - (Optional) Edge type features (Phase 3A: GATv2Conv)
 tpe           : Tensor [N, 8]           - (Optional) Topological Positional Encoding
@@ -262,7 +264,7 @@ Returns: Tensor [N, output_dim]
 neighbor_latents     : Dict[str, Optional[Tensor]]  - N/S/E/W neighbor codes
 boundary_constraints : Tensor [B, 8]    - Door requirements
 position             : Tensor [B, 2]    - Grid position
-node_features        : Tensor [N, 5]    - Graph node features
+node_features        : Tensor [N, 14]   - Canonical graph node features
 edge_index           : Tensor [2, E]    - Graph edges
 edge_features        : Tensor [E, F] or None   - Edge type encodings
 tpe                  : Tensor [N, 8] or None   - Topological PE

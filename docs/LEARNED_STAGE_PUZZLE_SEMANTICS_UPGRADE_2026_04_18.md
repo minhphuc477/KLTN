@@ -6,6 +6,14 @@ This note records the code-side upgrade that moves multi-step puzzle semantics
 from a runtime-only hybrid scaffold into an explicit train/runtime conditioning
 and semantic-supervision path.
 
+Important update: the implementation now grounds training anchors in observed
+room markers when available and sends the globalized stage plan to the final
+tile-state oracle. `puzzle_structure_dropout_prob` is disabled by default:
+stripping blocks without recompiling a solver-validated counterfactual plan is
+contradictory supervision, not a valid puzzle-control example. See
+`docs/PUZZLE_ROOM_GENERATION_RESEARCH_AND_PROTOCOL.md` for the current
+acceptance rule and ablation protocol.
+
 ## What Changed
 
 The repo now has a shared `puzzle_stage_condition` contract.

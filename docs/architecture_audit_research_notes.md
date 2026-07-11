@@ -979,3 +979,152 @@ Still empirical, not code-complete evidence:
   seeds, trained checkpoints, timing/memory capture, and statistical analysis.
 - Human-likeness claims still require calibrated playtest telemetry; P-CBS is
   a behavioral proxy and must not be presented as a validated human model.
+
+### Evidence And Refinement Audit (2026-07-11)
+
+Implemented safeguards from a direct source audit:
+
+- `validate_controllability.py` now requires readable trained VQ-VAE and
+  diffusion checkpoints by default. It measures a room-grid semantic proxy and
+  refuses to substitute the requested tension curve as an observed result.
+  Its optional surrogate path is labeled `surrogate_smoke` and is not evidence.
+- The advanced pipeline now treats a Weighted Bayesian WFC best-effort fill as
+  a failed refinement. It either aborts under the default strict policy or
+  returns the original neural room only when WFC refinement failure is
+  explicitly allowed. Both attempted WFC fallbacks and rejected refinements are
+  exported in pipeline stats.
+- `random_baseline.py` now retains all fixed-budget grammar draws in candidate
+  quality and solvability statistics. Archive-only metrics remain conditional
+  on valid graph candidates, and the report exposes the random generation
+  success rate instead of silently dropping failed draws.
+- `validate_all_features.py` is labeled as a synthetic component smoke harness.
+  It is not a checkpoint evaluation or a thesis-readiness signal.
+
+Verification in this pass covered the WFC fallback boundary, the
+controllability observation contract, and fixed-budget random-baseline
+accounting. These checks establish code behavior only; they do not replace
+matched-seed checkpoint experiments or human calibration.
+
+### Topology Preservation Decision (2026-07-11)
+
+The flat graph-to-grid layer now exports a topology-invariant realization
+report and the advanced pipeline rejects a stitched artifact when its configured
+flat-spatial invariant score is below the required threshold. The report compares
+only spatial edges that the 2D renderer is responsible for and records edge
+recall, connected components, cycle rank, branch-node identity, and articulation
+point identity before and after carving. Stairs, warps, cross-floor links,
+directionality, and resource gates are deliberately excluded from this projection;
+they remain the responsibility of the typed graph and full state-space oracle.
+
+Persistent homology is a future **offline ablation**, not a default training
+loss. It can measure multi-scale geometry of an unlocked walkability mask using a
+distance-transform filtration and compare H0/H1 persistence summaries before and
+after repair. It cannot establish Zelda progression semantics: two maps with equal
+Betti numbers can differ in one-way traversal, key consumption, switch order, or
+hazard affordances. A publishable PH ablation must therefore compare it against
+the exact realization metrics and tile oracle, report compute cost, and show an
+incremental gain over those cheaper domain-aligned baselines before it is added to
+the training objective.
+
+### Training-Contract Audit (2026-07-11)
+
+- The diffusion configuration now carries all registered puzzle-stage controls
+  into `DiffusionTrainingConfig`. When the semantic-loss ablation is enabled,
+  the trainer creates the corresponding prediction head, includes it in the
+  optimizer, AMP/gradient checks, distributed averaging, and resume checkpoint,
+  and computes the loss from denoised predicted room logits rather than ground
+  truth grids. The data loader also receives the stage-trace topology controls.
+  These fields are no longer inert YAML keys.
+- The shared `CheckpointManager` now optionally persists and restores an AMP
+  `GradScaler`; the diffusion trainer already did so in its specialized resume
+  payload. Resume continuity is therefore available to callers of either
+  checkpoint API.
+- The LCM-LoRA configuration exposes whether validation uses the EMA target,
+  and the registered model-selection choices now include its puzzle-stage
+  semantic metric. Its time-zero target now observes the teacher ODE endpoint
+  (`x_previous`), which is the consistency identity boundary, rather than the
+  inaccessible clean training latent. Gradient-finiteness and clipping cover
+  the optional puzzle-stage head as well as LoRA parameters.
+- Masked-room normalization is fixed to categorical IDs by contract. It is no
+  longer read from an unregistered configuration field that suggested a
+  supported but unsafe normalization mode.
+
+Verified false alarms retained as audit outcomes:
+
+- `ExternalValidator.validate()` returns `ValidationResult`, not a dictionary;
+  `result.is_solvable` in the robust-pipeline graph validator is therefore the
+  correct access path.
+- `ModelContextContractError` inherits directly from `Exception` and carries
+  `retryable = False`; the robust block executor terminates the attempt instead
+  of retrying it under its `ValueError` handling.
+- Distributed gradient synchronization first reduces an all-rank gradient
+  presence flag and then supplies zero gradients on ranks where a parameter was
+  inactive. The dynamic-parameter deadlock report does not apply to the current
+  implementation. This still needs a real multi-rank run before it is claimed
+  as empirical scalability evidence.
+
+### Phase III Expansion Decision (2026-07-12)
+
+The proposed expansion is useful only after correcting three overstatements.
+
+- Full-state A* is the mechanical oracle, not a human-player model. Removing it
+  would make learned-policy failure indistinguishable from true unsolvability.
+  Human-like behavior remains a separate P-CBS/RL/human-telemetry question.
+  RL playtesting literature likewise treats learned play styles as automated
+  testing behavior, not a proof of reachability:
+  [Le Pelletier de Woillemont et al., 2022](https://ojs.aaai.org/index.php/AIIDE/article/view/21958).
+- The architecture is not wholly 2D. Mission nodes already carry `(row, col,
+  floor)`, the grammar has `STAIRS_UP`, `STAIRS_DOWN`, and `EdgeType.STAIRS`,
+  and the validator traverses explicit stair graph edges. The actual limitation
+  is the final renderer: it exports one flat atlas and records cross-floor links
+  as non-spatial rather than producing a floor-indexed artifact.
+- The model is not in a complete semantic vacuum. It has explicit style/theme
+  IDs and room-role conditioning. It does lack generated lore and dialogue.
+  LLM narrative is therefore a separate content modality, not a repair for
+  spatial solvability. Existing narrative systems require their own alignment
+  and validation layer:
+  [Buongiorno et al., 2024](https://ojs.aaai.org/index.php/AIIDE/article/view/31876).
+
+Implemented first expansion:
+
+- `run_pcbs_persona_map_sweep.py --include-rl-ablation` now evaluates optional
+  goal, exploration, safety, and combat tabular policies only on maps certified
+  by the hard oracle. It exports completion, traversal, combat, pickup,
+  confusion, and entropy metrics. These results are never used as hard
+  feasibility labels. This follows the broader requirement to evaluate a
+  generator across expressive behavior rather than a single cherry-picked
+  structural score:
+  [Summerville, 2018](https://ojs.aaai.org/index.php/AIIDE/article/view/13012).
+- The VGLC validation handoff now preserves `StitchedDungeon.graph`, room/node
+  mappings, and puzzle metadata. Earlier grid-only benchmark runners silently
+  removed stair/warp transitions: for example, `D1_v1` changed from an oracle
+  failure to a 28-transition certified path once the actual graph context was
+  supplied. The canonical A* fallback now shares one state budget across A*
+  and Dijkstra and reports aggregate work, rather than spending and hiding a
+  second full budget.
+- The current tabular RL policy has four cardinal actions. Maps whose certified
+  oracle path uses stairs or warps are therefore exported as explicit
+  `rl_playtester_skips.csv` rows, not counted as policy failures. A graph-action
+  RL arm is a future ablation and must define transition actions in its MDP.
+- Grid MAP-Elites selection now uses a seeded archive-local RNG and persists
+  its RNG state in archive checkpoints. Resumed runs therefore continue the
+  same stochastic process instead of depending on unrelated global Python RNG
+  calls.
+
+Required verticality ablations, in order:
+
+1. `M0`: current flat atlas with an explicit non-spatial stair ledger.
+2. `M1`: floor-partitioned artifact `Dict[floor_id, grid]` with verified paired
+   stair anchors and a cross-floor state-space oracle. Reuse the trained 2D room
+   generator unchanged.
+3. `M2`: shared 2D room model plus explicit floor/layer conditioning and
+   floor-level QD descriptors. Compare against `M1` under identical graphs.
+4. `M3`: volumetric latent generation only after acquiring or constructing a
+   justified multi-floor training corpus. Without that data, a 3D DiT is an
+   untrained shape change rather than a scientific upgrade.
+
+Narrative remains an optional downstream ablation. Any future module must emit
+schema-validated, cached JSON linked to immutable mission-node IDs; it must not
+modify locks, keys, puzzle stages, or solvability after validation. Evaluation
+requires blinded human ratings of coherence, controllability, and repetition,
+plus a no-narrative control. It is not part of the current mechanical claim.

@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from collections import deque
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
+import heapq
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
 import numpy as np
 import torch
@@ -142,6 +143,20 @@ _PUZZLE_STAGE_GATE_FAMILY_IDS = {
     "toggle": 4,
     "bombable": 5,
     "combat": 6,
+}
+
+_SEMANTIC_ANCHOR_TILE_IDS: Dict[str, Set[int]] = {
+    "start": {int(SEMANTIC_PALETTE["START"])},
+    "goal": {int(SEMANTIC_PALETTE["TRIFORCE"])},
+    "key": {int(SEMANTIC_PALETTE["KEY_SMALL"]), int(SEMANTIC_PALETTE["KEY_BOSS"])},
+    "item": {
+        int(SEMANTIC_PALETTE["KEY_ITEM"]),
+        int(SEMANTIC_PALETTE["ITEM_MINOR"]),
+        int(SEMANTIC_PALETTE["STAIR"]),
+    },
+    "enemy": {int(SEMANTIC_PALETTE["ENEMY"])},
+    "boss": {int(SEMANTIC_PALETTE["BOSS"])},
+    "puzzle": {int(SEMANTIC_PALETTE["PUZZLE"])},
 }
 
 # Public aliases for shared supervision / reporting modules.
@@ -1023,6 +1038,7 @@ def _state_key(state: GameState) -> Tuple[
     frozenset,
     frozenset,
     frozenset,
+    frozenset,
     int,
 ]:
     return (
@@ -1037,8 +1053,33 @@ def _state_key(state: GameState) -> Tuple[
         frozenset(getattr(state, "filled_block_origins", set())),
         frozenset(getattr(state, "bridged_tiles", set())),
         frozenset(state.defeated_enemies),
+        frozenset(getattr(state, "completed_puzzle_stages", set())),
         int(getattr(state, "current_floor", 0)),
     )
+
+
+def _nearest_observed_semantic_anchor(
+    room_grid: np.ndarray,
+    tile_ids: Set[int],
+    *,
+    preferred: Optional[Tuple[int, int]] = None,
+) -> Optional[Tuple[int, int]]:
+    """Return a deterministic observed marker nearest to its planned anchor."""
+    grid = np.asarray(room_grid, dtype=np.int32)
+    if grid.ndim != 2 or not tile_ids:
+        return None
+    positions = np.argwhere(np.isin(grid, np.asarray(sorted(tile_ids), dtype=np.int32)))
+    if positions.size == 0:
+        return None
+
+    if preferred is None:
+        order = np.lexsort((positions[:, 1], positions[:, 0]))
+    else:
+        pref_r, pref_c = int(preferred[0]), int(preferred[1])
+        distances = np.abs(positions[:, 0] - pref_r) + np.abs(positions[:, 1] - pref_c)
+        order = np.lexsort((positions[:, 1], positions[:, 0], distances))
+    chosen = positions[int(order[0])]
+    return (int(chosen[0]), int(chosen[1]))
 
 
 def _room_local_state_search(
@@ -1047,20 +1088,36 @@ def _room_local_state_search(
     goal_pos: Tuple[int, int],
     *,
     max_states: int = DEFAULT_VALIDATOR_PLAN_MAX_STATES,
+    goal_predicate: Optional[Callable[[GameState], bool]] = None,
 ) -> Optional[Tuple[List[Tuple[int, int]], GameState]]:
-    """Plan a room-local path using validator transition rules."""
+    """Plan a room-local path using validator transition rules.
+
+    Most stages complete when the player reaches an anchor. Stateful stages
+    may instead complete through a transition whose player position differs
+    from the semantic anchor, such as pushing a block onto a switch.
+    """
     goal = (int(goal_pos[0]), int(goal_pos[1]))
     state_budget = max(1, int(max_states))
     start_copy = start_state.copy()
     start_key = _state_key(start_copy)
-    queue = deque([start_copy])
     parents: Dict[Tuple, Optional[Tuple]] = {start_key: None}
     states: Dict[Tuple, GameState] = {start_key: start_copy}
+    best_cost: Dict[Tuple, int] = {start_key: 0}
+    tie_break = 0
 
-    while queue:
-        current = queue.popleft()
-        current_key = _state_key(current)
-        if current.position == goal:
+    def _heuristic(state: GameState) -> int:
+        # Four-connected movement has a unit cost in this room-local oracle,
+        # so Manhattan distance remains admissible even with inventory state.
+        return abs(int(state.position[0]) - goal[0]) + abs(int(state.position[1]) - goal[1])
+
+    frontier: List[Tuple[int, int, int, Tuple]] = [(_heuristic(start_copy), 0, tie_break, start_key)]
+
+    while frontier:
+        _f_score, path_cost, _tie, current_key = heapq.heappop(frontier)
+        if path_cost != best_cost.get(current_key):
+            continue
+        current = states[current_key]
+        if (goal_predicate(current) if goal_predicate is not None else current.position == goal):
             path = [current.position]
             prev_key = parents[current_key]
             while prev_key is not None:
@@ -1081,13 +1138,19 @@ def _room_local_state_search(
             if not can_move:
                 continue
             next_key = _state_key(next_state)
-            if next_key in states:
+            next_cost = int(path_cost) + 1
+            if next_cost >= best_cost.get(next_key, float("inf")):
                 continue
             if len(states) >= state_budget:
                 continue
             states[next_key] = next_state
             parents[next_key] = current_key
-            queue.append(next_state)
+            best_cost[next_key] = next_cost
+            tie_break += 1
+            heapq.heappush(
+                frontier,
+                (next_cost + _heuristic(next_state), next_cost, tie_break, next_key),
+            )
     return None
 
 
@@ -1136,6 +1199,7 @@ def build_validator_room_plan_trace_mask(
         for direction, tokens in dict(edge_constraint_tokens or {}).items()
     }
     role_flags = {str(key): bool(value) for key, value in dict(room_role_flags or {}).items()}
+    gate_family = _classify_puzzle_stage_gate_family(normalized_tokens, role_flags)
 
     sequences = _build_validator_sequences(
         anchors=anchors,
@@ -1162,11 +1226,19 @@ def build_validator_room_plan_trace_mask(
             if goal_anchor is None:
                 sequence_ok = False
                 break
+            stage_kind = _sequence_anchor_to_stage_kind(str(anchor_name), gate_family)
+            goal_predicate = None
+            if stage_kind == "push_block_to_switch":
+                goal_predicate = lambda candidate_state, anchor=goal_anchor: any(
+                    tuple(destination) == tuple(anchor)
+                    for _origin, destination in candidate_state.pushed_blocks
+                )
             result = _room_local_state_search(
                 env,
                 state,
                 goal_anchor,
                 max_states=int(validator_plan_max_states),
+                goal_predicate=goal_predicate,
             )
             if result is None:
                 sequence_ok = False
@@ -1174,6 +1246,8 @@ def build_validator_room_plan_trace_mask(
             path, state = result
             for r, c in path:
                 sequence_trace[int(r), int(c)] = 1.0
+            if stage_kind == "push_block_to_switch":
+                sequence_trace[int(goal_anchor[0]), int(goal_anchor[1])] = 1.0
 
         if sequence_ok and np.any(sequence_trace > 0):
             trace = np.maximum(trace, sequence_trace)
@@ -1271,29 +1345,27 @@ def build_semantic_room_plan_trace(
             anchors[f"door:{direction}"] = snapped
 
     tile_anchor_specs = {
-        "start": ({int(SEMANTIC_PALETTE["START"])}, bool(start is not None) or role_flags.get("is_start", False)),
-        "goal": ({int(SEMANTIC_PALETTE["TRIFORCE"])}, bool(goal is not None) or role_flags.get("has_goal", False)),
-        "key": ({int(SEMANTIC_PALETTE["KEY_SMALL"]), int(SEMANTIC_PALETTE["KEY_BOSS"])}, role_flags.get("has_key", False)),
-        "item": ({int(SEMANTIC_PALETTE["KEY_ITEM"]), int(SEMANTIC_PALETTE["ITEM_MINOR"])}, role_flags.get("has_item", False)),
-        "enemy": ({int(SEMANTIC_PALETTE["ENEMY"])}, role_flags.get("has_enemy", False)),
-        "boss": ({int(SEMANTIC_PALETTE["BOSS"])}, role_flags.get("has_boss", False)),
-        "puzzle": ({int(SEMANTIC_PALETTE["PUZZLE"])}, role_flags.get("has_puzzle", False)),
+        "start": (bool(start is not None) or role_flags.get("is_start", False)),
+        "goal": (bool(goal is not None) or role_flags.get("has_goal", False)),
+        "key": role_flags.get("has_key", False),
+        "item": role_flags.get("has_item", False),
+        "enemy": role_flags.get("has_enemy", False),
+        "boss": role_flags.get("has_boss", False),
+        "puzzle": role_flags.get("has_puzzle", False),
     }
 
-    def _first_tile(tile_ids: Set[int]) -> Optional[Tuple[int, int]]:
-        for tile_id in tile_ids:
-            hits = np.argwhere(room_grid == int(tile_id))
-            if hits.size > 0:
-                return (int(hits[0][0]), int(hits[0][1]))
-        return None
-
-    for anchor_name, (tile_ids, enabled) in tile_anchor_specs.items():
+    for anchor_name, enabled in tile_anchor_specs.items():
         if not enabled:
             continue
         explicit_point = heuristic_anchors.get(anchor_name) or {"start": start, "goal": goal}.get(anchor_name)
+        observed_point = _nearest_observed_semantic_anchor(
+            room_grid,
+            _SEMANTIC_ANCHOR_TILE_IDS[anchor_name],
+            preferred=explicit_point,
+        )
         snapped = nearest_walkable_point(
             room_grid,
-            explicit_point or _first_tile(tile_ids) or (room_grid.shape[0] // 2, room_grid.shape[1] // 2),
+            observed_point or explicit_point or (room_grid.shape[0] // 2, room_grid.shape[1] // 2),
         )
         if snapped is not None:
             anchors[anchor_name] = snapped
@@ -1390,6 +1462,9 @@ def build_puzzle_stage_condition_metadata(
         str(name): _clamp_point(point, (h, w))
         for name, point in dict(anchors or {}).items()
     }
+    anchor_sources: Dict[str, str] = {
+        str(name): "provided" for name in semantic_anchors
+    }
     if not semantic_anchors:
         semantic_anchors = build_room_semantic_anchor_points(
             room_shape=(h, w),
@@ -1401,11 +1476,29 @@ def build_puzzle_stage_condition_metadata(
             room_role_flags=role_flags,
             semantic_puzzle_offset=int(max(0, semantic_puzzle_offset)),
         )
+        anchor_sources = {str(name): "heuristic" for name in semantic_anchors}
     else:
         if start is not None:
             semantic_anchors.setdefault("start", _clamp_point(start, (h, w)))
+            anchor_sources.setdefault("start", "provided")
         if goal is not None:
             semantic_anchors.setdefault("goal", _clamp_point(goal, (h, w)))
+            anchor_sources.setdefault("goal", "provided")
+
+    if room_grid is not None:
+        observed_grid = np.asarray(room_grid, dtype=np.int32)
+        for anchor_name, preferred in list(semantic_anchors.items()):
+            tile_ids = _SEMANTIC_ANCHOR_TILE_IDS.get(str(anchor_name))
+            if tile_ids is None:
+                continue
+            observed = _nearest_observed_semantic_anchor(
+                observed_grid,
+                tile_ids,
+                preferred=preferred,
+            )
+            if observed is not None:
+                semantic_anchors[str(anchor_name)] = observed
+                anchor_sources[str(anchor_name)] = "observed"
 
     sequences = _build_validator_sequences(
         anchors=semantic_anchors,
@@ -1448,6 +1541,8 @@ def build_puzzle_stage_condition_metadata(
                 "name": str(name),
                 "kind": _sequence_anchor_to_stage_kind(str(name), gate_family),
                 "local_anchor": [int(anchor[0]), int(anchor[1])],
+                "anchor_source": str(anchor_sources.get(str(name), "heuristic")),
+                "anchor_grounded": bool(anchor_sources.get(str(name)) == "observed"),
             }
         )
 
@@ -1462,6 +1557,8 @@ def build_puzzle_stage_condition_metadata(
     )
 
     stage_trace_mask = np.zeros((h, w), dtype=np.float32)
+    completed_stage_count = 0
+    failed_stage_index: Optional[int] = None
     if stage_sequence:
         trace_grid = np.asarray(room_grid, dtype=np.int32) if room_grid is not None else _build_synthetic_topology_trace_grid(
             room_shape=(h, w),
@@ -1476,14 +1573,31 @@ def build_puzzle_stage_condition_metadata(
             decay = float(max(0.05, min(1.0, stage_trace_decay)))
             for stage in stage_sequence:
                 goal_anchor = tuple(stage["local_anchor"])
+                stage_kind = str(stage.get("kind", "step_on_puzzle")).strip().lower()
+
+                # A successful block push leaves the player at the block's
+                # old position, not on the switch. Searching for the marker
+                # position mistakes an ordinary walk onto the marker for the
+                # state transition that opens a switch door.
+                goal_predicate = None
+                if stage_kind == "push_block_to_switch":
+                    goal_predicate = lambda candidate_state, anchor=goal_anchor: any(
+                        tuple(destination) == tuple(anchor)
+                        for _origin, destination in candidate_state.pushed_blocks
+                    )
                 result = _room_local_state_search(
                     env,
                     state,
                     goal_anchor,
                     max_states=int(validator_plan_max_states),
+                    goal_predicate=goal_predicate,
                 )
                 if result is None:
-                    continue
+                    failed_stage_index = int(stage["stage_index"])
+                    # Later stages are conditional on this one. Continuing
+                    # from an older state fabricates a trace for an
+                    # impossible puzzle sequence.
+                    break
                 path, state = result
                 weight = float(decay ** int(stage["stage_index"]))
                 for row, col in path:
@@ -1491,6 +1605,13 @@ def build_puzzle_stage_condition_metadata(
                         float(stage_trace_mask[int(row), int(col)]),
                         weight,
                     )
+                # Mark the semantic target even when the interaction ends
+                # adjacent to it (e.g. a block occupying a switch).
+                stage_trace_mask[int(goal_anchor[0]), int(goal_anchor[1])] = max(
+                    float(stage_trace_mask[int(goal_anchor[0]), int(goal_anchor[1])]),
+                    weight,
+                )
+                completed_stage_count += 1
 
     return {
         "gate_family": str(gate_family),
@@ -1499,7 +1620,16 @@ def build_puzzle_stage_condition_metadata(
         "canonical_sequence": [str(name) for name in canonical_sequence],
         "stage_sequence": stage_sequence,
         "stage_trace_mask": stage_trace_mask,
+        "stage_trace_completed_count": int(completed_stage_count),
+        "stage_trace_failed_stage_index": failed_stage_index,
+        "stage_trace_complete": bool(
+            bool(stage_sequence) and completed_stage_count == len(stage_sequence)
+        ),
         "sequence_count": int(len(sequences)),
+        "anchor_sources": dict(anchor_sources),
+        "grounded_stage_count": int(
+            sum(1 for stage in stage_sequence if bool(stage.get("anchor_grounded", False)))
+        ),
     }
 
 

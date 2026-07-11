@@ -289,7 +289,8 @@ def render_sidebar_status_message_metrics_controls(
     screen.blit(steps_surf, (sidebar_x + 15, y_pos))
     y_pos += 16
 
-    speed_color = (100, 255, 100) if gui.speed_multiplier == 1.0 else (255, 200, 100)
+    is_normal_speed = math_module.isclose(gui.speed_multiplier, 1.0, rel_tol=1e-5)
+    speed_color = (100, 255, 100) if is_normal_speed else (255, 200, 100)
     speed_text = f"Speed: {gui.speed_multiplier}x"
     speed_surf = gui.small_font.render(speed_text, True, speed_color)
     screen.blit(speed_surf, (sidebar_x + 15, y_pos))

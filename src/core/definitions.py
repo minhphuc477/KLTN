@@ -430,6 +430,7 @@ EDGE_LABEL_ALIASES: Dict[str, List[str]] = {
     'switch_locked': ['switch'],
     'switch': ['switch'],
     'stairs_warp': ['stair'],
+    'stairs': ['stair'],
     'stair': ['stair'],
     'warp': ['stair'],
     'item_locked': ['item_locked'],
@@ -547,6 +548,13 @@ def _expand_edge_fragment(fragment: str) -> List[str]:
     frag = str(fragment or '').strip()
     if frag == '':
         return ['open']
+    # NetworkX payloads may retain serialized enum names such as
+    # ``EdgeType.STAIRS``. Normalize the member name at this boundary instead
+    # of requiring every graph producer to know the validator's token format.
+    if '.' in frag:
+        enum_member = frag.rsplit('.', 1)[-1].strip()
+        if enum_member and enum_member != frag:
+            return _expand_edge_fragment(enum_member)
     if frag in EDGE_TYPE_MAP:
         return [EDGE_TYPE_MAP[frag]]
     if frag in EDGE_TYPE_MAP.values():

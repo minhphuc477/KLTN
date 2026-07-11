@@ -1,5 +1,7 @@
+import numpy as np
 import torch
 
+from src.core import ROOM_HEIGHT, ROOM_WIDTH, SEMANTIC_PALETTE
 from src.core.puzzle_stage_semantics import (
     DEFAULT_PUZZLE_STAGE_MAX_SEQUENCE_LENGTH,
     PuzzleStageSemanticsHead,
@@ -8,6 +10,7 @@ from src.core.puzzle_stage_semantics import (
 from src.pipeline.room_topology_conditioning import (
     PUZZLE_STAGE_GATE_FAMILY_IDS,
     PUZZLE_STAGE_KIND_IDS,
+    build_puzzle_stage_condition_metadata,
 )
 
 
@@ -104,3 +107,43 @@ def test_puzzle_stage_semantics_head_handles_batches_without_sequence_slots():
     assert torch.isfinite(loss)
     assert metrics["puzzle_stage_slot_loss"] == 0.0
     assert metrics["puzzle_stage_slot_acc"] == 1.0
+
+
+def test_switch_stage_trace_requires_a_real_block_push():
+    floor = int(SEMANTIC_PALETTE["FLOOR"])
+    wall = int(SEMANTIC_PALETTE["WALL"])
+    switch = (8, 5)
+    start = (10, 5)
+    goal = (1, 5)
+
+    def _metadata(grid: np.ndarray):
+        return build_puzzle_stage_condition_metadata(
+            room_grid=grid,
+            start=start,
+            goal=goal,
+            required_doors={"N": True, "S": False, "E": False, "W": False},
+            incoming_dirs=set(),
+            outgoing_dirs={"N"},
+            edge_constraint_tokens={"N": {"switch_locked"}},
+            room_role_flags={"has_puzzle": True},
+            anchors={"start": start, "puzzle": switch, "goal": goal},
+        )
+
+    push_grid = np.full((ROOM_HEIGHT, ROOM_WIDTH), wall, dtype=np.int32)
+    push_grid[1:-1, 1:-1] = floor
+    push_grid[switch] = int(SEMANTIC_PALETTE["PUZZLE"])
+    push_grid[9, 5] = int(SEMANTIC_PALETTE["BLOCK"])
+    push_metadata = _metadata(push_grid)
+
+    assert push_metadata["stage_trace_complete"] is True
+    assert push_metadata["stage_trace_completed_count"] == 2
+    assert push_metadata["stage_trace_failed_stage_index"] is None
+    assert float(push_metadata["stage_trace_mask"][switch]) > 0.0
+
+    walk_only_grid = push_grid.copy()
+    walk_only_grid[9, 5] = floor
+    walk_only_metadata = _metadata(walk_only_grid)
+
+    assert walk_only_metadata["stage_trace_complete"] is False
+    assert walk_only_metadata["stage_trace_completed_count"] == 0
+    assert walk_only_metadata["stage_trace_failed_stage_index"] == 0

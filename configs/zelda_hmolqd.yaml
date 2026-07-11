@@ -141,7 +141,7 @@ diffusion:
   spatial_graph_gate_init: -2.0  # type=float, default=-2.0
   spatial_topology_gate_init: -2.0  # type=float, default=-2.0
   use_teacher_forced_neighbor_latents: true  # type=bool, default=true, valid={true,false}; enables real-neighbor local conditioning during room-level training
-  puzzle_structure_dropout_prob: 0.35  # type=float, default=0.35, valid=0..1; train-only paired augmentation rate for puzzle rooms so the teacher learns explicit puzzle-on / puzzle-off control without changing VQ-VAE
+  puzzle_structure_dropout_prob: 0.0  # type=float, default=0.0, valid=0..1; disabled until a solver-validated counterfactual compiler rewrites both grid and stage plan consistently
   puzzle_stage_conditioning_enabled: false  # type=bool, default=false, valid={true,false}; enable only for the staged-puzzle retrain because it appends ordered multi-step puzzle tokens to conditioning
   puzzle_stage_token_scale: 0.20  # type=float, default=0.20, valid=0..2; deterministic token amplitude for ordered puzzle-stage conditioning
   puzzle_stage_topology_enabled: false  # type=bool, default=false, valid={true,false}; inject ordered stage traces into room_topology_map during staged-puzzle training
@@ -293,7 +293,7 @@ fast_sampler:
   prediction_loss_weight: 0.25  # type=float, default=0.25, valid>=0
   decode_alignment_weight: 0.25  # type=float, default=0.25, valid>=0; add decoded-room CE supervision so few-step latent matching stays aligned with actual tile outputs
   topology_alignment_weight: 0.25  # type=float, default=0.25, valid>=0; extra CE pressure on topology-critical pixels so fast-sampler distillation cares about anchors, doors, gates, and puzzle-route structure
-  puzzle_structure_dropout_prob: 0.35  # type=float, default=0.35, valid=0..1; train-only paired augmentation rate for puzzle rooms so the student learns the explicit puzzle-room-structure control instead of inheriting only the teacher prior
+  puzzle_structure_dropout_prob: 0.0  # type=float, default=0.0, valid=0..1; disabled until a solver-validated counterfactual compiler rewrites both grid and stage plan consistently
   puzzle_stage_conditioning_enabled: false  # type=bool, default=false, valid={true,false}; expect ordered stage tokens only when distilling from a diffusion teacher retrained with staged puzzle semantics
   puzzle_stage_token_scale: 0.20  # type=float, default=0.20, valid=0..2; deterministic ordered stage token amplitude during fast-sampler distillation
   puzzle_stage_topology_enabled: false  # type=bool, default=false, valid={true,false}; inject ordered stage traces into topology priors for the staged-puzzle fast-sampler branch
@@ -360,7 +360,7 @@ masked_room:
   logic_grid_pathfinder: bellman_ford  # type=str, default=bellman_ford, valid={bellman_ford,conv,cnn,vin,learnable,perturb_and_map}
   logic_full_coverage: true  # type=bool, default=true; false is the truncated Bellman-planning ablation
   num_logic_iterations: 30  # type=int, default=30, valid>=1
-  puzzle_structure_dropout_prob: 0.35  # type=float, default=0.35, valid=0..1; train-only paired augmentation rate for puzzle rooms so masked-room learns puzzle-on / puzzle-off room structure explicitly
+  puzzle_structure_dropout_prob: 0.0  # type=float, default=0.0, valid=0..1; disabled until a solver-validated counterfactual compiler rewrites both grid and stage plan consistently
   puzzle_stage_conditioning_enabled: false  # type=bool, default=false, valid={true,false}; append ordered puzzle-stage tokens to masked-room conditioning for the staged-puzzle retrain only
   puzzle_stage_token_scale: 0.20  # type=float, default=0.20, valid=0..2; deterministic ordered stage token amplitude during masked-room training
   puzzle_stage_topology_enabled: false  # type=bool, default=false, valid={true,false}; inject ordered stage traces into topology priors for masked-room staged-puzzle training

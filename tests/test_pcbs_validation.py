@@ -1,15 +1,38 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
+import networkx as nx
 import numpy as np
 
 from src.core.definitions import TileID
 from src.evaluation.pcbs_validation import (
     build_ieee_markdown_table,
     evaluate_astar_vs_pcbs,
+    extract_validation_env_kwargs,
     prepare_dungeon_grid_for_validation,
 )
+
+
+def test_validation_context_preserves_direct_stitched_dungeon_metadata() -> None:
+    graph = nx.DiGraph()
+    graph.add_edge(0, 1, edge_type="STAIRS")
+    source = SimpleNamespace(
+        graph=graph,
+        room_positions={(0, 0): (0, 0), (0, 1): (0, 11)},
+        room_to_node={(0, 0): 0, (0, 1): 1},
+        node_to_room={0: (0, 0), 1: (0, 1)},
+        room_puzzle_metadata={"plans": {"room_1": {"stages": []}}},
+    )
+
+    context = extract_validation_env_kwargs(source)
+
+    assert context["graph"] is graph
+    assert context["room_positions"] == source.room_positions
+    assert context["room_to_node"] == source.room_to_node
+    assert context["node_to_room"] == source.node_to_room
+    assert context["room_puzzle_metadata"] == source.room_puzzle_metadata
 
 
 def test_prepare_dungeon_grid_for_validation_fixes_invalid_and_enclosed_void() -> None:

@@ -39,13 +39,15 @@ def test_belief_state_q_agent_returns_finite_release_metrics():
     assert math.isfinite(payload["navigation_entropy"])
     assert math.isfinite(payload["cognitive_load"])
     assert math.isfinite(payload["linearity_ratio"])
+    assert payload["combat_engagements"] >= 0
+    assert payload["pickups_collected"] >= 0
 
 
 def test_pcbs_rl_alignment_ablation_matches_rl_to_persona_profile():
     result = run_pcbs_rl_alignment_ablation(
         _tiny_level(),
         personas=("speedrunner", "explorer"),
-        reward_variants=("goal",),
+        reward_variants=("goal", "combat"),
         memory_capacities=(4,),
         episodes=3,
         timeout_pcbs=100,
@@ -53,10 +55,11 @@ def test_pcbs_rl_alignment_ablation_matches_rl_to_persona_profile():
     )
 
     assert set(result["persona_metrics"]) == {"speedrunner", "explorer"}
-    assert len(result["rl_results"]) == 1
-    rl_row = result["rl_results"][0]
-    assert rl_row["closest_persona"] in {"speedrunner", "explorer"}
-    assert 0.0 <= rl_row["alignment_score"] <= 1.0
+    assert len(result["rl_results"]) == 2
+    for rl_row in result["rl_results"]:
+        assert rl_row["closest_persona"] in {"speedrunner", "explorer"}
+        assert 0.0 <= rl_row["alignment_score"] <= 1.0
+    assert {row["reward_variant"] for row in result["rl_results"]} == {"goal", "combat"}
     assert 0.0 <= result["cross_persona_agreement_rate"] <= 1.0
     assert result["persona_divergence"] >= 0.0
 

@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import logging
-import time
 from typing import Any, Dict, List, Optional, Tuple
 
 import networkx as nx
 import numpy as np
 import torch
 
-from src.core import ROOM_HEIGHT, ROOM_WIDTH, SEMANTIC_PALETTE
+from src.core import SEMANTIC_PALETTE
 from src.evaluation.tile_distribution import compare_tile_pattern_distributions
 from src.pipeline.spatial_utils import coerce_bool, fit_room_grid
 from src.pipeline.types import DungeonGenerationResult, MissingPipelineComponentError, RoomGenerationResult
@@ -112,6 +111,7 @@ def evaluate_generated_dungeon(
     mission_graph_physical: nx.Graph,
     *,
     enable_map_elites: bool = True,
+    room_puzzle_metadata: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Evaluate a stitched dungeon grid with MAP-Elites when available.
@@ -125,9 +125,13 @@ def evaluate_generated_dungeon(
         return None
     validator_fn = getattr(pipeline, "_validate_dungeon", None)
     solver_result = (
-        validator_fn(dungeon_grid)
+        validator_fn(dungeon_grid, room_puzzle_metadata=room_puzzle_metadata)
         if callable(validator_fn)
-        else _validate_dungeon(pipeline, dungeon_grid)
+        else _validate_dungeon(
+            pipeline,
+            dungeon_grid,
+            room_puzzle_metadata=room_puzzle_metadata,
+        )
     )
     map_elites_score: Dict[str, Any] = dict(solver_result or {})
     if map_elites_available:
@@ -483,11 +487,18 @@ def repair_and_stitch_dungeon(
         dungeon_grid,
         mission_graph,
         enable_map_elites=enable_map_elites,
+        room_puzzle_metadata=puzzle_metadata,
     )
     hard_validation = (
         dict(map_elites_score)
         if isinstance(map_elites_score, dict) and bool(map_elites_score.get("is_exact", False))
-        else dict(pipeline._validate_dungeon(dungeon_grid) or {})
+        else dict(
+            pipeline._validate_dungeon(
+                dungeon_grid,
+                room_puzzle_metadata=puzzle_metadata,
+            )
+            or {}
+        )
     )
     hard_verdict = _hard_oracle_verdict(hard_validation)
     try:
@@ -524,6 +535,7 @@ def repair_and_stitch_dungeon(
             logic_solvability,
             hard_validation,
         ),
+        **dict(getattr(stitched_layout, "realization_metrics", {}) or {}),
     }
     return DungeonGenerationResult(
         dungeon_grid=dungeon_grid,
@@ -537,7 +549,12 @@ def repair_and_stitch_dungeon(
     )
 
 
-def _validate_dungeon(pipeline, dungeon_grid: np.ndarray) -> Optional[Dict[str, Any]]:
+def _validate_dungeon(
+    pipeline,
+    dungeon_grid: np.ndarray,
+    *,
+    room_puzzle_metadata: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
     """
     Validate dungeon solvability and compute MAP-Elites descriptors.
 
@@ -568,6 +585,7 @@ def _validate_dungeon(pipeline, dungeon_grid: np.ndarray) -> Optional[Dict[str, 
         result = validator.validate_single(
             dungeon_grid,
             solver_timeout=int(max(1, int(getattr(pipeline, "tile_oracle_max_states", 200_000)))),
+            room_puzzle_metadata=room_puzzle_metadata,
         )
 
         path_length = int(result.path_length) if result.is_solvable else 0

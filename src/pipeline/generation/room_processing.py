@@ -876,7 +876,69 @@ def _build_puzzle_room_route_template(
                 max(1, seq_c - 1): min(ROOM_WIDTH - 1, seq_c + 2),
             ] = True
 
+    if gate_family in {"switch", "toggle"}:
+        # A push puzzle has a temporal route, not one permanently walkable
+        # corridor: the block's initial cell is occupied before the push and
+        # becomes traversable afterwards. Do not reserve that cell as a
+        # static path. The scaffold uses the same witnesses when placing the
+        # block, so its geometry cannot contradict this route contract.
+        for block_cell, player_cell, target_cell in _switch_push_witnesses(
+            target_anchor=puzzle,
+            source_anchor=source,
+        ):
+            block_r, block_c = block_cell
+            player_r, player_c = player_cell
+            target_r, target_c = target_cell
+            mask[block_r, block_c] = False
+            mask[player_r, player_c] = True
+            mask[target_r, target_c] = True
+
     return mask
+
+
+def _switch_push_witnesses(
+    *,
+    target_anchor: Tuple[int, int],
+    source_anchor: Tuple[int, int],
+) -> List[Tuple[Tuple[int, int], Tuple[int, int], Tuple[int, int]]]:
+    """Return valid one-push block/player/target arrangements for a marker.
+
+    Each witness is ``(block_origin, player_staging, target)``. Ordering is
+    deterministic and favours the staging position closest to the entry. This
+    is deliberately geometry-only: callers still verify floor availability
+    and actual reachability on the rendered candidate grid.
+    """
+    target_r, target_c = int(target_anchor[0]), int(target_anchor[1])
+    source_r, source_c = int(source_anchor[0]), int(source_anchor[1])
+    witnesses: List[
+        Tuple[int, int, Tuple[int, int], Tuple[int, int], Tuple[int, int]]
+    ] = []
+    for order, (delta_r, delta_c) in enumerate(((0, 1), (1, 0), (0, -1), (-1, 0))):
+        block_r = target_r - int(delta_r)
+        block_c = target_c - int(delta_c)
+        player_r = block_r - int(delta_r)
+        player_c = block_c - int(delta_c)
+        if not (
+            2 <= target_r <= ROOM_HEIGHT - 3
+            and 2 <= target_c <= ROOM_WIDTH - 3
+            and 2 <= block_r <= ROOM_HEIGHT - 3
+            and 2 <= block_c <= ROOM_WIDTH - 3
+            and 1 <= player_r < ROOM_HEIGHT - 1
+            and 1 <= player_c < ROOM_WIDTH - 1
+        ):
+            continue
+        source_distance = abs(player_r - source_r) + abs(player_c - source_c)
+        witnesses.append(
+            (
+                int(source_distance),
+                int(order),
+                (int(block_r), int(block_c)),
+                (int(player_r), int(player_c)),
+                (int(target_r), int(target_c)),
+            )
+        )
+    witnesses.sort(key=lambda item: (item[0], item[1]))
+    return [(block, player, target) for _distance, _order, block, player, target in witnesses]
 
 
 def _resolve_puzzle_interaction_sequence(
@@ -1494,6 +1556,7 @@ def _evaluate_puzzle_candidate_contract(
 
     path_exists = int(route_quality.get("path_exists", 0) or 0)
     stateful_distance = route_quality.get("stateful_distance_to_path", None)
+    stateful_via_path_length = route_quality.get("stateful_via_path_length", None)
     stateful_branch_gain = float(route_quality.get("stateful_branch_gain", 0.0) or 0.0)
 
     failure_reasons: List[str] = []
@@ -1510,8 +1573,8 @@ def _evaluate_puzzle_candidate_contract(
             min_frame_blocks = 2 if gate_family == "combat" else 4
             if frame_block_tiles < min_frame_blocks:
                 failure_reasons.append("weak_local_structure")
-        if stateful_distance is None or int(stateful_distance) > 3:
-            failure_reasons.append("stateful_anchor_too_far")
+        if stateful_via_path_length is None:
+            failure_reasons.append("stateful_anchor_unreachable")
         if gate_family in {"key"} and stateful_branch_gain < 1.0:
             failure_reasons.append("missing_stateful_detour")
 
@@ -1521,8 +1584,8 @@ def _evaluate_puzzle_candidate_contract(
     contract_score += 0.35 * float(min(1.0, pocket_floor_tiles / 6.0))
     contract_score += 0.35 * float(min(1.0, frame_block_tiles / 6.0))
     contract_score += 0.20 * float(min(1.0, anchor_adjacent_walkable / 2.0))
-    if stateful_distance is not None:
-        contract_score += 0.25 * float(max(0.0, 1.0 - (float(stateful_distance) / 4.0)))
+    if stateful_via_path_length is not None:
+        contract_score += 0.25
     if gate_family in {"item_unlock", "key", "bombable"}:
         contract_score += 0.25 * float(min(1.0, stateful_branch_gain / 2.0))
     valid = int(len(failure_reasons) == 0)
@@ -1543,6 +1606,10 @@ def _evaluate_puzzle_candidate_contract(
         "anchor_adjacent_walkable": int(anchor_adjacent_walkable),
         "stateful_distance_to_path": (
             int(stateful_distance) if stateful_distance is not None else None
+        ),
+        "stateful_via_path_length": (
+            int(stateful_via_path_length)
+            if stateful_via_path_length is not None else None
         ),
         "stateful_branch_gain": float(stateful_branch_gain),
     }
@@ -1592,6 +1659,7 @@ def _evaluate_puzzle_candidate_interaction_geometry(
                 else None
             ),
             "push_slot_count": 0,
+            "targeted_push_slot_count": 0,
             "anchor_openings": 0,
             "local_block_tiles": 0,
             "barrier_axis_tiles": 0,
@@ -1607,6 +1675,7 @@ def _evaluate_puzzle_candidate_interaction_geometry(
             "required": 1,
             "projected_stateful_anchor": None,
             "push_slot_count": 0,
+            "targeted_push_slot_count": 0,
             "anchor_openings": 0,
             "local_block_tiles": 0,
             "barrier_axis_tiles": 0,
@@ -1647,11 +1716,14 @@ def _evaluate_puzzle_candidate_interaction_geometry(
                 barrier_axis_tiles += 1
 
     push_slot_count = 0
+    targeted_push_slot_count = 0
     seen_push_blocks: Set[Tuple[int, int]] = set()
     for row in range(max(1, anchor_r - 3), min(ROOM_HEIGHT - 1, anchor_r + 4)):
         for col in range(max(1, anchor_c - 3), min(ROOM_WIDTH - 1, anchor_c + 4)):
             if int(grid[row, col]) != int(TileID.BLOCK):
                 continue
+            block_has_valid_push = False
+            block_targets_anchor = False
             for d_r, d_c in ((1, 0), (-1, 0), (0, 1), (0, -1)):
                 push_dest_r = row + d_r
                 push_dest_c = col + d_c
@@ -1668,14 +1740,24 @@ def _evaluate_puzzle_candidate_interaction_geometry(
                     continue
                 if not bool(walkable[player_r, player_c]):
                     continue
+                if (int(push_dest_r), int(push_dest_c)) == (int(anchor_r), int(anchor_c)):
+                    if pipeline._shortest_room_path(
+                        walkable,
+                        source_anchor,
+                        (int(player_r), int(player_c)),
+                    ):
+                        block_targets_anchor = True
                 route_r0 = max(0, min(player_r, push_dest_r) - 1)
                 route_r1 = min(ROOM_HEIGHT, max(player_r, push_dest_r) + 2)
                 route_c0 = max(0, min(player_c, push_dest_c) - 1)
                 route_c1 = min(ROOM_WIDTH, max(player_c, push_dest_c) + 2)
                 if not bool(np.any(route_arr[route_r0:route_r1, route_c0:route_c1])):
                     continue
+                block_has_valid_push = True
+            if block_has_valid_push:
                 seen_push_blocks.add((int(row), int(col)))
-                break
+            if block_targets_anchor:
+                targeted_push_slot_count += 1
     push_slot_count = int(len(seen_push_blocks))
 
     route_overlap_ratio = float(route_quality.get("route_overlap_ratio", 1.0) or 1.0)
@@ -1688,8 +1770,11 @@ def _evaluate_puzzle_candidate_interaction_geometry(
 
     if gate_family in {"switch", "toggle"}:
         score += 0.70 * float(min(1.0, push_slot_count / 1.0))
+        score += 0.45 * float(min(1.0, targeted_push_slot_count / 1.0))
         if push_slot_count < 1:
             failure_reasons.append("missing_push_interaction")
+        if targeted_push_slot_count < 1:
+            failure_reasons.append("missing_targeted_push_interaction")
         if local_block_tiles < 3:
             failure_reasons.append("weak_interaction_geometry")
         if gate_family == "toggle":
@@ -1719,6 +1804,7 @@ def _evaluate_puzzle_candidate_interaction_geometry(
         "required": 1,
         "projected_stateful_anchor": [int(anchor_r), int(anchor_c)],
         "push_slot_count": int(push_slot_count),
+        "targeted_push_slot_count": int(targeted_push_slot_count),
         "anchor_openings": int(anchor_openings),
         "local_block_tiles": int(local_block_tiles),
         "barrier_axis_tiles": int(barrier_axis_tiles),
@@ -2552,6 +2638,26 @@ def _apply_puzzle_room_scaffold(
                 else pipeline._clamp_room_coord(puzzle_anchor)
             )
             puzzle_r, puzzle_c = pipeline._clamp_room_coord(puzzle_anchor)
+
+            # A staged switch only completes when a block reaches the puzzle
+            # marker. Prefer a one-push witness for that exact destination
+            # over an arbitrary movable block somewhere else in the room.
+            if gate_family in {"switch", "toggle"}:
+                for (block_r, block_c), (player_r, player_c), (target_r, target_c) in _switch_push_witnesses(
+                    target_anchor=(puzzle_r, puzzle_c),
+                    source_anchor=source_anchor,
+                ):
+                    if (
+                        int(candidate_grid[target_r, target_c])
+                        not in {floor_id, int(TileID.PUZZLE)}
+                        or int(candidate_grid[block_r, block_c]) != floor_id
+                        or int(candidate_grid[player_r, player_c]) != floor_id
+                    ):
+                        continue
+                    candidate_grid[block_r, block_c] = block_id
+                    budget_remaining -= 1
+                    return 1
+
             candidate_slots: List[Tuple[int, int]] = []
             if flow_is_horizontal:
                 candidate_slots.extend(
@@ -2803,6 +2909,9 @@ def _apply_puzzle_room_scaffold(
         candidate_stats["interaction_push_slot_count"] = int(
             interaction.get("push_slot_count", 0) or 0
         )
+        candidate_stats["interaction_targeted_push_slot_count"] = int(
+            interaction.get("targeted_push_slot_count", 0) or 0
+        )
         candidate_stats["interaction_anchor_openings"] = int(
             interaction.get("anchor_openings", 0) or 0
         )
@@ -2953,6 +3062,9 @@ def _apply_puzzle_room_scaffold(
     )
     selected_stats["interaction_push_slot_count"] = int(
         baseline_interaction.get("push_slot_count", 0) or 0
+    )
+    selected_stats["interaction_targeted_push_slot_count"] = int(
+        baseline_interaction.get("targeted_push_slot_count", 0) or 0
     )
     selected_stats["interaction_anchor_openings"] = int(
         baseline_interaction.get("anchor_openings", 0) or 0
@@ -3729,7 +3841,22 @@ def _build_room_puzzle_metadata(
             candidates = []
         for tile_id in candidates:
             if marker_slots.get(int(tile_id)):
-                return marker_slots[int(tile_id)][0], int(tile_id)
+                planned_slot = marker_slots[int(tile_id)][0]
+                planned_row, planned_col = pipeline._clamp_room_coord(planned_slot)
+                if int(room_grid[planned_row, planned_col]) == int(tile_id):
+                    return (int(planned_row), int(planned_col)), int(tile_id)
+        # Symbolic-only and legacy callers do not have the pre-overlay marker
+        # plan. Prefer the final artifact's observed marker over a synthetic
+        # anchor so the validator enforces the puzzle the player can see.
+        fallback_row, fallback_col = pipeline._clamp_room_coord(fallback)
+        observed: List[Tuple[int, int, int, int]] = []
+        for tile_id in candidates:
+            for row, col in np.argwhere(room_grid == int(tile_id)):
+                distance = abs(int(row) - int(fallback_row)) + abs(int(col) - int(fallback_col))
+                observed.append((int(distance), int(row), int(col), int(tile_id)))
+        if observed:
+            _distance, row, col, tile_id = min(observed)
+            return (int(row), int(col)), int(tile_id)
         return pipeline._clamp_room_coord(fallback), None
 
     def _stage_kind(name: str) -> str:

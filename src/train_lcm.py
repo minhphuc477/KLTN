@@ -96,7 +96,7 @@ class FastSamplerTrainingConfig:
         topology_supervision_mode: str = "runtime_aligned",
         semantic_role_prior_strength: float = DEFAULT_SEMANTIC_ROLE_PRIOR_STRENGTH,
         semantic_puzzle_offset: int = DEFAULT_SEMANTIC_PUZZLE_OFFSET,
-        puzzle_structure_dropout_prob: float = 0.35,
+        puzzle_structure_dropout_prob: float = 0.0,
         puzzle_stage_conditioning_enabled: bool = False,
         puzzle_stage_token_scale: float = DEFAULT_PUZZLE_STAGE_TOKEN_SCALE,
         puzzle_stage_topology_enabled: bool = False,
@@ -242,7 +242,7 @@ def fast_sampler_training_kwargs_from_resolved_config(config: Dict[str, Any]) ->
         "topology_supervision_mode": dataset["topology_supervision_mode"],
         "semantic_role_prior_strength": config["generation"]["semantic_role_prior_strength"],
         "semantic_puzzle_offset": config["generation"]["semantic_puzzle_offset"],
-        "puzzle_structure_dropout_prob": stage.get("puzzle_structure_dropout_prob", 0.35),
+        "puzzle_structure_dropout_prob": stage.get("puzzle_structure_dropout_prob", 0.0),
         "puzzle_stage_conditioning_enabled": stage.get("puzzle_stage_conditioning_enabled", False),
         "puzzle_stage_token_scale": stage.get("puzzle_stage_token_scale", DEFAULT_PUZZLE_STAGE_TOKEN_SCALE),
         "puzzle_stage_topology_enabled": stage.get("puzzle_stage_topology_enabled", False),
@@ -262,6 +262,7 @@ def fast_sampler_training_kwargs_from_resolved_config(config: Dict[str, Any]) ->
         "grad_clip_norm": stage["grad_clip_norm"],
         "num_inference_steps": stage["num_inference_steps"],
         "ema_decay": stage.get("ema_decay", 0.95),
+        "validate_ema_target": stage.get("validate_ema_target", True),
         "lora_rank": stage["lora_rank"],
         "lora_alpha": stage["lora_alpha"],
         "prediction_loss_weight": stage["prediction_loss_weight"],
@@ -659,7 +660,10 @@ class ConsistencyLoRATrainer:
             )
             teacher_x0 = torch.clamp(teacher_x0, -1.0, 1.0)
             t0_mask = (t_previous == 0).view(batch_size, *([1] * (z_0.dim() - 1)))
-            teacher_x0 = torch.where(t0_mask, torch.clamp(z_0, -1.0, 1.0), teacher_x0)
+            # Consistency models use the identity boundary f(x, 0) = x.  The
+            # relevant state is the teacher's ODE endpoint, not the clean
+            # training latent that was unavailable to the student at x_t.
+            teacher_x0 = torch.where(t0_mask, torch.clamp(x_previous, -1.0, 1.0), teacher_x0)
 
         student_pred = self.student._predict_noise_cfg(x_t, t, conditioning, graph_data=diffusion_graph_data)
         student_x0, _student_noise = self.student._convert_prediction(student_pred, x_t, t)
@@ -729,8 +733,13 @@ class ConsistencyLoRATrainer:
 
         self.optimizer.zero_grad(set_to_none=True)
         loss.backward()
-        trainable_student_params = [p for p in self.student.parameters() if p.requires_grad]
-        if not self._gradients_are_finite(trainable_student_params):
+        trainable_params = [p for p in self.student.parameters() if p.requires_grad]
+        trainable_params.extend(
+            p
+            for p in self.puzzle_stage_semantics_head.parameters()
+            if p.requires_grad
+        )
+        if not self._gradients_are_finite(trainable_params):
             self.optimizer.zero_grad(set_to_none=True)
             return {
                 "loss": float(loss.detach().item()),
@@ -743,7 +752,7 @@ class ConsistencyLoRATrainer:
             }
         if self.config.grad_clip_norm > 0:
             grad_norm = torch.nn.utils.clip_grad_norm_(
-                trainable_student_params,
+                trainable_params,
                 max_norm=self.config.grad_clip_norm,
             )
             if not self._tensor_is_finite(grad_norm):
@@ -870,7 +879,7 @@ class ConsistencyLoRATrainer:
         teacher_x0, _ = self.teacher._convert_prediction(teacher_pred, x_previous, t_previous)
         teacher_x0 = torch.clamp(teacher_x0, -1.0, 1.0)
         t0_mask = (t_previous == 0).view(batch_size, *([1] * (z_0.dim() - 1)))
-        teacher_x0 = torch.where(t0_mask, torch.clamp(z_0, -1.0, 1.0), teacher_x0)
+        teacher_x0 = torch.where(t0_mask, torch.clamp(x_previous, -1.0, 1.0), teacher_x0)
 
         eval_model = self.teacher if bool(getattr(self.config, "validate_ema_target", True)) else self.student
         student_pred = eval_model._predict_noise_cfg(x_t, t, conditioning, graph_data=diffusion_graph_data)

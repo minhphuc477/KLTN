@@ -34,6 +34,7 @@ from .advanced_rules import (
 from .mission_grammar import MissionGrammar, graph_to_gnn_input
 from src.generation.grammar_validators import (
     validate_battery_reachability,
+    validate_exact_progression,
     validate_resource_loops,
     validate_skill_chains,
 )
@@ -50,6 +51,6 @@ __all__ = [
     'SoftGateRule', 'SplitRoomRule', 'AddSkillChainRule', 'AddPacingBreakerRule',
     'AddResourceLoopRule', 'AddGatekeeperRule', 'AddMultiLockRule',
     'AddItemShortcutRule', 'PruneDeadEndRule',
-    'validate_skill_chains', 'validate_battery_reachability',
+    'validate_skill_chains', 'validate_battery_reachability', 'validate_exact_progression',
     'validate_resource_loops',
 ]

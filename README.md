@@ -1,15 +1,15 @@
 # KLTN: Neural-Symbolic Dungeon Generation
 
-**Research implementation of advanced procedural content generation for Legend of Zelda dungeons using evolutionary algorithms and neural-symbolic AI.**
+**Research implementation for Zelda-like dungeon PCG using evolutionary search and neural-symbolic generation.**
 
 ## Overview
 
-KLTN implements a complete research pipeline for generating Legend of Zelda-like dungeon topologies and layouts using cutting-edge AI techniques. The system combines evolutionary search, neural networks, and symbolic reasoning to create playable, solvable dungeons that match target difficulty curves.
+KLTN is a research codebase for generating and evaluating Zelda-like dungeon topologies and layouts. It combines evolutionary search, neural models, symbolic repair, and stateful validation. Individual blocks and ablations are configurable; a successful run is not evidence that every optional block was active or that a result is scientifically validated.
 
 ## Key Features
 
 - **Evolutionary Topology Generation**: Search-based procedural content generation using genetic algorithms to evolve dungeon graphs that match tension curves
-- **Neural-Symbolic Pipeline**: Complete 7-block H-MOLQD architecture integrating VQ-VAE, latent diffusion, LogicNet guidance, and symbolic repair - with full Block I integration for automatic topology generation
+- **Neural-Symbolic Pipeline**: H-MOLQD components for VQ-VAE, graph conditioning, room generation, LogicNet guidance, symbolic repair, and stateful validation
 - **VGLC Compliance**: Full compliance with Video Game Level Corpus standards for Zelda dungeon structure validation, including composite node labels, Boss-Goal subgraph validation, and centralized graph utilities
 - **Interactive GUI**: Real-time visualization and validation environment for dungeon exploration with route export/loading and multi-algorithm pathfinding
 - **Comprehensive Testing**: 490+ test functions covering major components and VGLC compliance requirements
@@ -32,7 +32,9 @@ KLTN implements a complete research pipeline for generating Legend of Zelda-like
 - **Block VI**: Symbolic WaveFunctionCollapse repair for broken paths
 - **Block VII**: MAP-Elites quality-diversity evaluation
 
-All 7 blocks are now fully integrated and work seamlessly together.
+The canonical generation path records which optional blocks, fallbacks, repairs,
+and validation outcomes were actually used. Publication-facing comparisons must
+use checkpoint-backed, fixed-seed evidence rather than random-weight or smoke runs.
 
 See [ARCHITECTURE_DIAGRAMS.md](ARCHITECTURE_DIAGRAMS.md) for detailed ASCII diagrams of the system flow.
 

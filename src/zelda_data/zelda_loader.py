@@ -846,6 +846,11 @@ class ZeldaDungeonDataset(Dataset):
                     graph = None
                     if self.load_graphs and self.graphs is not None and not self.lazy_vglc:
                         graph = self._extract_graph(dungeon)
+                        if graph is None:
+                            raise RuntimeError(
+                                "Graph extraction returned no graph for a graph-conditioned "
+                                f"sample (dungeon={dungeon_num}, variant={variant})."
+                            )
                     self._vglc_index.append((int(dungeon_num), int(variant)))
                     if self.samples is not None:
                         self.samples.append(grid.astype(np.float32))
@@ -1112,6 +1117,11 @@ class ZeldaRoomDataset(Dataset):
                         edge_feature_dim=self.edge_feature_dim,
                         allow_spatial_fallback=self.allow_spatial_graph_fallback,
                     ) if load_graphs else None
+                    if load_graphs and dungeon_graph is None:
+                        raise RuntimeError(
+                            "Graph extraction returned no graph for a graph-conditioned "
+                            f"room dataset (dungeon={dungeon_num}, variant={variant})."
+                        )
                     for coord, room in dungeon.rooms.items():
                         grid = getattr(room, 'semantic_grid', None)
                         if grid is None:
@@ -1130,6 +1140,11 @@ class ZeldaRoomDataset(Dataset):
                                     puzzle_stage_topology_enabled=self.puzzle_stage_topology_enabled,
                                     puzzle_stage_trace_decay=self.puzzle_stage_trace_decay,
                                 )
+                                if room_graph is None:
+                                    raise RuntimeError(
+                                        "Room graph extraction returned no graph for a graph-conditioned "
+                                        f"sample (dungeon={dungeon_num}, variant={variant}, coord={coord})."
+                                    )
                             self.rooms.append(grid.astype(np.float32))
                             self.sample_metadata.append(
                                 {

@@ -677,6 +677,35 @@ class TestMAPElites:
         
         assert len(diverse_set) <= 3
 
+    def test_map_elites_sampling_is_seeded_and_resume_continuous(self, tmp_path):
+        """Archive selection must be reproducible before and after resume."""
+        from src.evaluation.map_elites import MAPElites, LinearityLeniencyExtractor
+
+        def build(seed):
+            archive = MAPElites(
+                feature_extractor=LinearityLeniencyExtractor(),
+                fitness_fn=lambda _graph: 1.0,
+                cells_per_dim=10,
+                seed=seed,
+            )
+            for index in range(5):
+                archive.add(
+                    nx.DiGraph(),
+                    precomputed_features=(index * 0.2, index * 0.1),
+                )
+            return archive
+
+        left = build(123)
+        right = build(123)
+        assert left.archive.get_random_elite().cell == right.archive.get_random_elite().cell
+
+        archive_path = tmp_path / "seeded_archive.pkl"
+        left.save_archive(str(archive_path))
+        expected_next = left.archive.get_random_elite().cell
+        resumed = build(999)
+        resumed.load_archive(str(archive_path))
+        assert resumed.archive.get_random_elite().cell == expected_next
+
 
 class TestDiversityMetrics:
     """Tests for diversity metrics."""

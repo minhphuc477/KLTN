@@ -322,3 +322,37 @@ def validate_resource_loops(graph: Any) -> bool:
             return False
 
     return True
+
+
+def validate_exact_progression(graph: Any, *, max_states: int = 100_000) -> bool:
+    """Validate a grammar graph with the canonical consumable-state oracle.
+
+    The local grammar checks deliberately provide actionable diagnostics for a
+    specific rule (for example, a missing resource provider). They are not a
+    substitute for a search state that spends small keys, bombs, and tokens.
+    Keep this final gate aligned with the evaluator and pipeline so a graph is
+    never accepted by grammar generation only to be rejected later for an
+    inventory progression that the prefilter approximated optimistically.
+    """
+    try:
+        from src.evaluation.validator import ExternalValidator
+        from src.generation.evolutionary_director.converters import (
+            mission_graph_to_networkx,
+        )
+
+        graph.sanitize()
+        networkx_graph = mission_graph_to_networkx(graph, directed=True)
+        result = ExternalValidator(mode="full").validate(
+            networkx_graph,
+            max_states=int(max(1, max_states)),
+        )
+        if not result.is_solvable:
+            logger.warning(
+                "Exact progression validation failed: status=%s reason=%s",
+                result.termination_status,
+                result.failure_reason,
+            )
+        return bool(result.is_solvable)
+    except (AttributeError, ImportError, RuntimeError, TypeError, ValueError) as exc:
+        logger.exception("Exact progression validation could not run: %s", exc)
+        return False

@@ -383,6 +383,7 @@ class CheckpointManager:
         scheduler: Optional[Any] = None,
         extra_state: Optional[Dict[str, Any]] = None,
         filename: Optional[str] = None,
+        scaler: Optional[Any] = None,
     ) -> Optional[Path]:
         """
         Save a checkpoint.
@@ -395,6 +396,7 @@ class CheckpointManager:
             scheduler: Optional learning rate scheduler
             extra_state: Any additional state to save
             filename: Custom filename (default: checkpoint_epoch_{epoch}.pth)
+            scaler: Optional AMP GradScaler whose dynamic scale must survive resume
             
         Returns:
             Path to saved checkpoint, or None if not saved
@@ -451,6 +453,9 @@ class CheckpointManager:
         
         if scheduler is not None:
             checkpoint['scheduler_state_dict'] = scheduler.state_dict()
+
+        if scaler is not None and callable(getattr(scaler, "state_dict", None)):
+            checkpoint['grad_scaler_state_dict'] = scaler.state_dict()
         
         if extra_state is not None:
             checkpoint['extra_state'] = extra_state
@@ -494,6 +499,7 @@ class CheckpointManager:
         scheduler: Optional[Any] = None,
         filename: str = "checkpoint_latest.pth",
         device: Optional[torch.device] = None,
+        scaler: Optional[Any] = None,
     ) -> int:
         """
         Load a checkpoint.
@@ -504,6 +510,7 @@ class CheckpointManager:
             scheduler: Optional scheduler to load state into
             filename: Checkpoint filename to load
             device: Device to map tensors to
+            scaler: Optional AMP GradScaler to restore when checkpointed
             
         Returns:
             Epoch number from checkpoint (0 if no checkpoint found)
@@ -531,6 +538,13 @@ class CheckpointManager:
         if scheduler is not None and 'scheduler_state_dict' in checkpoint:
             scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
             logger.info("Loaded scheduler state")
+
+        if scaler is not None and 'grad_scaler_state_dict' in checkpoint:
+            try:
+                scaler.load_state_dict(checkpoint['grad_scaler_state_dict'])
+                logger.info("Loaded AMP GradScaler state")
+            except (RuntimeError, ValueError, TypeError) as exc:
+                logger.warning("Skipping incompatible AMP GradScaler state: %s", exc)
         
         return checkpoint['epoch']
     

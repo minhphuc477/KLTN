@@ -619,7 +619,11 @@ class ZeldaLogicEnv:
             keys=self.solver_options.start_keys,
             bomb_count=self.solver_options.start_bombs,
             has_boss_key=self.solver_options.start_boss_key,
-            has_item=self.solver_options.start_item
+            has_item=self.solver_options.start_item,
+            current_floor=self.floor_for_position(
+                self.start_pos if self.start_pos else (0, 0),
+                default=0,
+            ),
         )
         self.done = False
         self.won = False
@@ -637,6 +641,43 @@ class ZeldaLogicEnv:
     # Public wrappers used by solver helpers (keeps internals encapsulated for linting)
     def find_all_positions(self, target_id: int) -> List[Tuple[int, int]]:
         return self._find_all_positions(target_id)
+
+    def floor_for_position(self, position: Tuple[int, int], *, default: int = 0) -> int:
+        """Resolve a stitched-grid position to its mission-node floor."""
+        if not self.room_positions or not self.room_to_node or self.graph is None:
+            return int(default)
+
+        row, col = int(position[0]), int(position[1])
+        room_key = None
+        for candidate, (row_offset, col_offset) in self.room_positions.items():
+            if (
+                int(row_offset) <= row < int(row_offset) + ROOM_HEIGHT
+                and int(col_offset) <= col < int(col_offset) + ROOM_WIDTH
+            ):
+                room_key = candidate
+                break
+        if room_key is None:
+            return int(default)
+
+        node_id = self.room_to_node.get(room_key)
+        if node_id is None or node_id not in self.graph:
+            return int(default)
+        attrs = self.graph.nodes[node_id]
+        for key in ("floor", "floor_id", "z", "level"):
+            value = attrs.get(key)
+            if value is not None:
+                try:
+                    return int(value)
+                except (TypeError, ValueError):
+                    continue
+
+        position_value = attrs.get("position", attrs.get("pos"))
+        if isinstance(position_value, (tuple, list)) and len(position_value) >= 3:
+            try:
+                return int(position_value[2])
+            except (TypeError, ValueError):
+                pass
+        return int(default)
 
     def get_room_for_position(self, pos: Tuple[int, int]) -> Optional[Tuple[int, int]]:
         return self._get_room_for_position(pos)
@@ -900,7 +941,11 @@ class ZeldaLogicEnv:
             keys=self.solver_options.start_keys,
             bomb_count=self.solver_options.start_bombs,
             has_boss_key=self.solver_options.start_boss_key,
-            has_item=self.solver_options.start_item
+            has_item=self.solver_options.start_item,
+            current_floor=self.floor_for_position(
+                self.start_pos if self.start_pos else (0, 0),
+                default=0,
+            ),
         )
         self.done = False
         self.won = False
@@ -3340,6 +3385,11 @@ class StateSpaceAStar:
                 
                 if not can_move:
                     continue
+
+                new_state.current_floor = self.env.floor_for_position(
+                    target_pos,
+                    default=current_state.current_floor,
+                )
                 
                 new_key = self._state_key(new_state)
                 
@@ -3565,6 +3615,7 @@ class StateSpaceAStar:
                         'has_bomb': current_state.has_bomb,
                         'has_boss_key': current_state.has_boss_key,
                         'has_item': current_state.has_item,
+                        'current_floor': current_state.current_floor,
                         'doors_opened': len(current_state.opened_doors),
                         'items_collected': len(current_state.collected_items),
                     },
@@ -3667,6 +3718,11 @@ class StateSpaceAStar:
                 can_move, new_state = self._try_move_pure(transition_state, target_pos, target_tile)
                 if not can_move:
                     continue
+
+                new_state.current_floor = self.env.floor_for_position(
+                    target_pos,
+                    default=current_state.current_floor,
+                )
                 
                 new_key = self._state_key(new_state)
                 if new_key in closed_set:
@@ -3730,6 +3786,7 @@ class StateSpaceAStar:
                 'has_bomb': final_state.has_bomb if final_state else False,
                 'has_boss_key': final_state.has_boss_key if final_state else False,
                 'has_item': final_state.has_item if final_state else False,
+                'current_floor': final_state.current_floor if final_state else 0,
                 'doors_opened': len(final_state.opened_doors) if final_state else 0,
                 'items_collected': len(final_state.collected_items) if final_state else 0,
             } if final_state else None,

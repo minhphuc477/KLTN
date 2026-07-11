@@ -1,5 +1,6 @@
 """Bottom panel rendering helpers extracted from gui_runner."""
 
+import math
 from typing import Any
 
 
@@ -203,7 +204,8 @@ def render_metrics_section(gui: Any, x: int, y: int, width: int, height: int) ->
     gui.screen.blit(steps_surf, (x, y_offset))
     y_offset += line_height
 
-    speed_color = (100, 255, 100) if gui.speed_multiplier == 1.0 else (255, 200, 100)
+    is_normal_speed = math.isclose(gui.speed_multiplier, 1.0, rel_tol=1e-5)
+    speed_color = (100, 255, 100) if is_normal_speed else (255, 200, 100)
     speed_surf = gui.small_font.render(f"Speed: {gui.speed_multiplier}x", True, speed_color)
     gui.screen.blit(speed_surf, (x, y_offset))
     y_offset += line_height

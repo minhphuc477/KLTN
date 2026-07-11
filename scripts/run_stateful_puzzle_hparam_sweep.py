@@ -106,10 +106,18 @@ def _json_sanitize(value: Any) -> Any:
     return value
 
 
+def _puzzle_validity_rate(runtime: Mapping[str, Any], name: str) -> float | None:
+    valid = max(0.0, float(runtime.get(f"puzzle_room_{name}_valid", 0.0) or 0.0))
+    invalid = max(0.0, float(runtime.get(f"puzzle_room_{name}_invalid", 0.0) or 0.0))
+    total = valid + invalid
+    return (valid / total) if total > 0.0 else None
+
+
 def _profile_score(summary: Mapping[str, Any]) -> float:
     metrics = summary.get("metrics", {}) if isinstance(summary, Mapping) else {}
     validation = summary.get("validation", {}) if isinstance(summary, Mapping) else {}
-    runtime = summary.get("runtime_diagnostics", {}) if isinstance(summary, Mapping) else {}
+    runtime_raw = summary.get("runtime_diagnostics", {}) if isinstance(summary, Mapping) else {}
+    runtime = runtime_raw if isinstance(runtime_raw, Mapping) else {}
     astar = validation.get("astar_grid", {}) if isinstance(validation, Mapping) else {}
     mechanical_contract = validation.get("mechanical_contract", {}) if isinstance(validation, Mapping) else {}
     softlock = validation.get("softlock_check", {}) if isinstance(validation, Mapping) else {}
@@ -131,11 +139,9 @@ def _profile_score(summary: Mapping[str, Any]) -> float:
     confusion_index = float(pcbs.get("confusion_index", 0.0) or 0.0)
     cognitive_load = float(pcbs.get("cognitive_load", 0.0) or 0.0)
     peak_frustration = float(pcbs.get("peak_frustration", 0.0) or 0.0)
-    contract_valid = float(runtime.get("puzzle_room_contract_valid", 0.0) or 0.0)
-    interaction_valid = float(runtime.get("puzzle_room_interaction_valid", 0.0) or 0.0)
-    sequence_valid = float(runtime.get("puzzle_room_sequence_valid", 0.0) or 0.0)
-    contract_invalid = float(runtime.get("puzzle_room_contract_invalid", 0.0) or 0.0)
-    interaction_invalid = float(runtime.get("puzzle_room_interaction_invalid", 0.0) or 0.0)
+    contract_rate = _puzzle_validity_rate(runtime, "contract")
+    interaction_rate = _puzzle_validity_rate(runtime, "interaction")
+    sequence_rate = _puzzle_validity_rate(runtime, "sequence")
     quality_gate_skipped = float(runtime.get("puzzle_room_quality_gate_skipped", 0.0) or 0.0)
 
     score = 0.0
@@ -146,7 +152,9 @@ def _profile_score(summary: Mapping[str, Any]) -> float:
         score -= 6.0
     else:
         score -= 12.0
-    score += 20.0 * float(metrics.get("repair_rate", 0.0) or 0.0)
+    # A branch that requires more repair has weaker standalone generation.
+    # Repair success is reported separately; it must not improve this ranking.
+    score -= 20.0 * float(metrics.get("repair_rate", 0.0) or 0.0)
     score -= 30.0 * float(metrics.get("avg_final_graph_marker_overwrite_rate", 0.0) or 0.0)
     score -= 2.0 * float(metrics.get("avg_final_post_overlay_semantic_anchor_error", 0.0) or 0.0)
     score -= 0.05 * float(metrics.get("generation_time_sec", 0.0) or 0.0)
@@ -154,14 +162,14 @@ def _profile_score(summary: Mapping[str, Any]) -> float:
     score -= 0.20 * confusion_index
     score -= 1.50 * cognitive_load
     score -= 4.0 * peak_frustration
-    score += 0.5 * float(metrics.get("puzzle_stage_count", 0.0) or 0.0)
-    score += 0.25 * float(metrics.get("puzzle_plan_count", 0.0) or 0.0)
-    score += 4.0 * contract_valid
-    score += 6.0 * interaction_valid
-    score += 3.0 * sequence_valid
-    score -= 5.0 * contract_invalid
-    score -= 4.0 * interaction_invalid
-    score -= 2.0 * quality_gate_skipped
+    for rate, weight in (
+        (contract_rate, 4.0),
+        (interaction_rate, 6.0),
+        (sequence_rate, 3.0),
+    ):
+        if rate is not None:
+            score += weight * ((2.0 * float(rate)) - 1.0)
+    score -= 2.0 * min(1.0, max(0.0, quality_gate_skipped))
     return float(score)
 
 
@@ -169,8 +177,8 @@ def _build_report(rows: List[Dict[str, Any]]) -> str:
     lines = [
         "# Stateful Puzzle Hyperparameter Sweep",
         "",
-        "| Rank | Profile | Score | Hard Oracle | P-CBS | Repair | Overwrite | Anchor Error | Time (s) | Plans | Stages |",
-        "| --- | --- | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "| Rank | Profile | Score | Hard Oracle | P-CBS | Repair | Contract | Interaction | Sequence | Time (s) | Plans | Stages |",
+        "| --- | --- | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for idx, row in enumerate(rows, start=1):
         lines.append(
@@ -183,8 +191,9 @@ def _build_report(rows: List[Dict[str, Any]]) -> str:
                     "pass" if bool(row["hard_oracle"]) else "fail",
                     "pass" if bool(row["pcbs_success"]) else "fail",
                     f"{float(row['repair_rate']):.3f}",
-                    f"{float(row['overwrite_rate']):.3f}",
-                    f"{float(row['anchor_error']):.3f}",
+                    f"{float(row['contract_rate']):.3f}" if row["contract_rate"] is not None else "n/a",
+                    f"{float(row['interaction_rate']):.3f}" if row["interaction_rate"] is not None else "n/a",
+                    f"{float(row['sequence_rate']):.3f}" if row["sequence_rate"] is not None else "n/a",
                     f"{float(row['generation_time_sec']):.2f}",
                     str(int(row["puzzle_plan_count"])),
                     str(int(row["puzzle_stage_count"])),
@@ -244,6 +253,8 @@ def main() -> None:
 
         metrics = summary.get("metrics", {})
         validation = summary.get("validation", {})
+        runtime_raw = summary.get("runtime_diagnostics", {})
+        runtime = runtime_raw if isinstance(runtime_raw, Mapping) else {}
         row = {
             "profile": profile_name,
             "score": _profile_score(summary),
@@ -260,6 +271,9 @@ def main() -> None:
             "generation_time_sec": float(metrics.get("generation_time_sec", 0.0) or 0.0),
             "puzzle_plan_count": int(metrics.get("puzzle_plan_count", 0) or 0),
             "puzzle_stage_count": int(metrics.get("puzzle_stage_count", 0) or 0),
+            "contract_rate": _puzzle_validity_rate(runtime, "contract"),
+            "interaction_rate": _puzzle_validity_rate(runtime, "interaction"),
+            "sequence_rate": _puzzle_validity_rate(runtime, "sequence"),
             "generation_overrides": dict(summary.get("generation_overrides_applied", {}) or {}),
         }
         rows.append(row)

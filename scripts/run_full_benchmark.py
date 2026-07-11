@@ -20,11 +20,12 @@ Usage:
 
 import sys
 import argparse
+import copy
 import logging
 import random
 import time
 from pathlib import Path
-from typing import Dict, List, Tuple, Any
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -44,7 +45,7 @@ from src.evaluation.search_benchmark_utils import (
     path_efficiency_ratio,
     run_astar_oracle,
 )
-from src.evaluation.pcbs_validation import prepare_dungeon_grid_for_validation
+from src.evaluation.pcbs_validation import extract_validation_env_kwargs, prepare_dungeon_grid_for_validation
 
 logger = logging.getLogger(__name__)
 
@@ -285,7 +286,7 @@ def generate_bsp_dungeon(height: int = 32, width: int = 32, min_room_size: int =
 # NINTENDO ZELDA LOADER
 # =============================================================================
 
-def load_nintendo_levels(data_dir: str = None) -> List[Tuple[str, np.ndarray]]:
+def load_nintendo_levels(data_dir: str = None) -> List[Tuple[str, np.ndarray, Dict[str, Any]]]:
     """
     Load all Nintendo Zelda dungeons (1-9, both quests).
     
@@ -308,7 +309,7 @@ def load_nintendo_levels(data_dir: str = None) -> List[Tuple[str, np.ndarray]]:
                     prepared = prepare_dungeon_grid_for_validation(stitched)
                     grid = prepared.grid.astype(np.int32, copy=False)
                     map_id = f"tloz{dungeon_num}_{variant}"
-                    levels.append((map_id, grid))
+                    levels.append((map_id, grid, extract_validation_env_kwargs(stitched)))
                     logger.info(f"Loaded {map_id}: {grid.shape}")
                 except (AttributeError, RuntimeError, ValueError, TypeError) as e:
                     logger.warning(f"Failed to load dungeon {dungeon_num}_{variant}: {e}")
@@ -365,7 +366,8 @@ def run_solver(
     solver_type: str,
     persona: str = None,
     timeout: int = 100000,
-    seed: int = 42
+    seed: int = 42,
+    env_kwargs: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Run a solver on a grid and return results.
@@ -399,7 +401,10 @@ def run_solver(
     }
     
     try:
-        env = ZeldaLogicEnv(semantic_grid=grid)
+        env = ZeldaLogicEnv(
+            semantic_grid=grid,
+            **copy.deepcopy(dict(env_kwargs or {})),
+        )
         
         if env.goal_pos is None or env.start_pos is None:
             logger.warning("Grid has no start or goal position")
@@ -496,18 +501,32 @@ def run_benchmarks(
     
     results = []
     
-    for map_id, grid in levels:
+    for level in levels:
+        if len(level) == 3:
+            map_id, grid, env_kwargs = level
+        else:
+            map_id, grid = level
+            env_kwargs = {}
         logger.info(f"Testing {dataset_type}/{map_id}...")
         
         # Run A*
-        astar_result = run_solver(grid, 'astar', timeout=astar_timeout, seed=seed)
+        astar_result = run_solver(
+            grid, 'astar', timeout=astar_timeout, seed=seed, env_kwargs=env_kwargs
+        )
         astar_result['dataset_type'] = dataset_type
         astar_result['map_id'] = map_id
         results.append(astar_result)
         
         # Run CBS with each persona
         for persona in personas:
-            cbs_result = run_solver(grid, 'cbs', persona=persona, timeout=cbs_timeout, seed=seed)
+            cbs_result = run_solver(
+                grid,
+                'cbs',
+                persona=persona,
+                timeout=cbs_timeout,
+                seed=seed,
+                env_kwargs=env_kwargs,
+            )
             cbs_result['dataset_type'] = dataset_type
             cbs_result['map_id'] = map_id
             results.append(cbs_result)

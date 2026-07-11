@@ -112,6 +112,38 @@ def test_graph_transition_does_not_bypass_protected_hazard():
     assert allowed is True
 
 
+def test_stair_transition_updates_the_floor_state_from_mission_metadata():
+    wall = int(SEMANTIC_PALETTE["WALL"])
+    floor = int(SEMANTIC_PALETTE["FLOOR"])
+    stair = int(SEMANTIC_PALETTE["STAIR"])
+    grid = np.full((16, 22), wall, dtype=np.int64)
+    grid[1:15, 1:10] = floor
+    grid[1:15, 12:21] = floor
+    grid[7, 5] = int(SEMANTIC_PALETTE["START"])
+    grid[7, 9] = stair
+    grid[7, 12] = stair
+    grid[7, 17] = int(SEMANTIC_PALETTE["TRIFORCE"])
+
+    graph = nx.DiGraph()
+    graph.add_node(0, position=(0, 0, 0))
+    graph.add_node(1, position=(0, 1, 1))
+    graph.add_edge(0, 1, edge_type="STAIRS")
+    env = ZeldaLogicEnv(
+        grid,
+        graph=graph,
+        room_positions={(0, 0): (0, 0), (0, 1): (0, 11)},
+        room_to_node={(0, 0): 0, (0, 1): 1},
+        node_to_room={0: (0, 0), 1: (0, 1)},
+    )
+    assert env.reset().current_floor == 0
+
+    solved, path, diagnostics = StateSpaceAStar(env, timeout=5000).solve_with_diagnostics()
+
+    assert solved is True
+    assert (7, 12) in path
+    assert diagnostics.final_inventory["current_floor"] == 1
+
+
 def test_spatial_pipeline_rejects_multiple_unrepresentable_protection_identities():
     graph = nx.DiGraph()
     graph.add_edges_from(
@@ -308,6 +340,66 @@ def test_weighted_wfc_priors_are_loaded_from_empirical_grids(tmp_path):
     assert pipeline._wfc_prior_source == str(source.resolve())
     assert pipeline._wfc_prior_grid_count == 3
     assert len(pipeline._wfc_prior_sha256) == 64
+
+
+def test_advanced_pipeline_rejects_best_effort_wfc_output_when_fallback_is_allowed(monkeypatch):
+    """A partial WFC collapse must be reported and return the unmodified neural room."""
+    neural_room = np.full((4, 4), SEMANTIC_PALETTE["FLOOR"], dtype=np.int32)
+
+    class _RoomResult:
+        room_grid = neural_room
+        neural_probs = None
+
+    class _NeuralPipeline:
+        default_guidance_scale = 3.0
+        default_logic_guidance_scale = 0.0
+        default_apply_repair = False
+        default_start_goal_coords = None
+
+        @staticmethod
+        def generate_room(**_kwargs):
+            return _RoomResult()
+
+    class _FallbackWFC:
+        def __init__(self, **_kwargs):
+            pass
+
+        @staticmethod
+        def generate(**_kwargs):
+            return np.full((4, 4), SEMANTIC_PALETTE["WALL"], dtype=np.int32)
+
+        @staticmethod
+        def get_diagnostics():
+            return {"required_fallback": True, "fallback_fills": 3}
+
+    pipeline = object.__new__(AdvancedNeuralSymbolicPipeline)
+    pipeline.config = AdvancedPipelineConfig(
+        enable_weighted_wfc_refinement=True,
+        allow_wfc_refinement_failure=True,
+        enable_explainability=False,
+    )
+    pipeline.neural_pipeline = _NeuralPipeline()
+    pipeline.wfc_tile_priors = {SEMANTIC_PALETTE["FLOOR"]: object()}
+    pipeline.fast_sampling_active = False
+    pipeline.explainability_mgr = None
+    pipeline._wfc_refinement_failures = 0
+    pipeline._wfc_refinement_fallbacks = 0
+    pipeline._room_generation_fallbacks = 0
+    monkeypatch.setattr(advanced_pipeline_module, "WeightedBayesianWFC", _FallbackWFC)
+
+    graph = nx.DiGraph()
+    graph.add_node(0)
+    room = pipeline._generate_single_room_with_ml(
+        node_id=0,
+        mission_graph=graph,
+        graph_context={},
+        neighbor_latents={},
+        theme=ThemeType.ZELDA_CLASSIC,
+    )
+
+    assert np.array_equal(room, neural_room)
+    assert pipeline._wfc_refinement_fallbacks == 1
+    assert pipeline._wfc_refinement_failures == 1
 
 
 def test_advanced_pipeline_fun_evaluation_resolves_graph_route_not_insertion_order():

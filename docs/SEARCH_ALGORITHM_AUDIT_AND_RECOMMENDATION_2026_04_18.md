@@ -1,6 +1,6 @@
 # Search Algorithm Audit And Recommendation
 
-Last updated: 2026-07-02.
+Last updated: 2026-07-10.
 
 This note answers which pathfinding algorithms should be used in H-MOLQD and
 which algorithms should remain diagnostics or ablations. It is intentionally
@@ -144,6 +144,23 @@ Current fixes applied:
   adjacency metrics and are not carved as ordinary doors. This prevents the
   2D renderer from corrupting multi-floor graph semantics, but it is not yet a
   full overlapping-floor renderer.
+- Every stitched layout now carries a graph-to-grid realization ledger. It
+  reports spatial versus deliberately non-spatial edges, missing endpoints,
+  slot adjacency, actual carve rate, routed corridors, and fallback carves.
+  Final generation metrics export this ledger, so graph validity cannot be
+  conflated with physical realization in a result table.
+- Evolutionary rule traces are now exported as a compact final-artifact
+  telemetry summary: per-rule outcome counts, skip reasons, constraint
+  rejections, lock/key-cap skips, and candidate-repair counts. This enables a
+  rule-survival funnel from grammar selection through final tile-oracle
+  validation without duplicating the full replay trace in every result row.
+- Puzzle rooms are state-space planning problems. Ordered puzzle-stage metadata
+  is conditioned per room, lifted to global stitched coordinates, and tracked
+  in `GameState.completed_puzzle_stages`. A generic puzzle tile alone is not
+  evidence of a solvable staged puzzle. Existing checkpoints trained before
+  stage conditioning must not be used to claim learned multi-step semantics;
+  evaluate retrained stage-conditioned models with raw/pre-repair and repaired
+  full-state-oracle rates.
 - Frustration backtracking in `fun_analyzers.py` is depth-aware: repeated
   local dithering is a weak signal, while returning from deep graph layers to
   earlier rooms is the intended Metroidvania-style signal. Empty dead-end
@@ -164,6 +181,14 @@ Current fixes applied:
 - P-CBS telemetry calibration artifacts now include calibration provenance:
   hard oracle = full-state A*, bounded agent = P-CBS, and bidirectional /
   replanning diagnostics are excluded as persona anchors.
+- A* is retained as the exact mechanical oracle; it is not presented as a
+  model of human play or fun. The persona/map sweep can optionally run
+  tabular RL playtesters with goal, exploration, safety, and combat rewards
+  using `--include-rl-ablation`. RL completion, exploration, combat, pickup,
+  entropy, and confusion metrics are reported only after the hard oracle has
+  certified the map. This keeps learned-policy failure from being mislabeled
+  as mechanical unsolvability and keeps online RL variance out of the default
+  MAP-Elites feasibility gate.
 - P-CBS working memory now has explicit ablation parameters for spatial recall
   error (`spatial_memory_error_rate` and `spatial_memory_error_radius`). The
   weaker `Novice` and `Forgetful` personas use nonzero spatial confusion by

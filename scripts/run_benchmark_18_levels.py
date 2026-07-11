@@ -18,6 +18,7 @@ Usage:
 """
 
 import sys
+import copy
 import csv
 import argparse
 import logging
@@ -44,7 +45,7 @@ from src.evaluation.search_benchmark_utils import (
     path_efficiency_ratio,
     run_astar_oracle,
 )
-from src.evaluation.pcbs_validation import prepare_dungeon_grid_for_validation
+from src.evaluation.pcbs_validation import extract_validation_env_kwargs, prepare_dungeon_grid_for_validation
 
 logger = logging.getLogger(__name__)
 
@@ -98,13 +99,14 @@ def run_full_18(
                 stitched = adapter.stitch_dungeon(dungeon)
                 prepared = prepare_dungeon_grid_for_validation(stitched)
                 grid = prepared.grid
+                env_kwargs = extract_validation_env_kwargs(stitched)
                 start = prepared.start
                 goal = prepared.goal
 
                 manhattan = abs(start[0] - goal[0]) + abs(start[1] - goal[1])
 
                 # ---- A* --------------------------------------------------
-                env_a = ZeldaLogicEnv(semantic_grid=grid)
+                env_a = ZeldaLogicEnv(semantic_grid=grid, **copy.deepcopy(env_kwargs))
                 astar_payload = run_astar_oracle(env_a, timeout=timeout_astar)
                 dt_a = float(astar_payload['time_ms']) / 1000.0
                 success_a = bool(astar_payload['success'])
@@ -136,7 +138,7 @@ def run_full_18(
                 # ---- CBS+ per persona ------------------------------------
                 for persona_name in personas:
                     t0 = time.time()
-                    env_c = ZeldaLogicEnv(semantic_grid=grid.copy())
+                    env_c = ZeldaLogicEnv(semantic_grid=grid.copy(), **copy.deepcopy(env_kwargs))
                     cbs = CognitiveBoundedSearch(
                         env_c, persona=persona_name,
                         timeout=timeout_cbs, seed=seed,

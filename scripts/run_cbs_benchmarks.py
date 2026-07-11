@@ -14,6 +14,7 @@ Usage:
     python scripts/run_cbs_benchmarks.py --quick  # Only level 1
 """
 import sys
+import copy
 import csv
 import argparse
 import json
@@ -38,7 +39,7 @@ from src.evaluation.search_benchmark_utils import (
     path_efficiency_ratio,
     run_astar_oracle,
 )
-from src.evaluation.pcbs_validation import prepare_dungeon_grid_for_validation
+from src.evaluation.pcbs_validation import extract_validation_env_kwargs, prepare_dungeon_grid_for_validation
 
 
 def _json_safe(value: Any) -> Any:
@@ -115,13 +116,14 @@ def run_bench(
                 stitched = adapter.stitch_dungeon(dungeon)
                 prepared = prepare_dungeon_grid_for_validation(stitched)
                 grid = prepared.grid
+                env_kwargs = extract_validation_env_kwargs(stitched)
                 start = prepared.start
                 goal = prepared.goal
                 
                 manhattan = abs(start[0] - goal[0]) + abs(start[1] - goal[1])
 
                 # A* solver (run once per map)
-                env_astar = ZeldaLogicEnv(semantic_grid=grid)
+                env_astar = ZeldaLogicEnv(semantic_grid=grid, **copy.deepcopy(env_kwargs))
                 astar_payload = run_astar_oracle(env_astar, timeout=timeout_astar)
                 success_a = bool(astar_payload['success'])
                 path_len_a = int(astar_payload['path_length'])
@@ -176,7 +178,7 @@ def run_bench(
                 # CBS+ solvers (run for each persona)
                 for persona_name in personas:
                     # ZeldaLogicEnv finds start/goal from grid tiles
-                    env_cbs = ZeldaLogicEnv(semantic_grid=grid)
+                    env_cbs = ZeldaLogicEnv(semantic_grid=grid, **copy.deepcopy(env_kwargs))
                     t0 = time.perf_counter()
                     cbs = CognitiveBoundedSearch(
                         env_cbs, 

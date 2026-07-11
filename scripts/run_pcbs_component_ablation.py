@@ -14,6 +14,7 @@ than a generic weighted search controller.
 from __future__ import annotations
 
 import argparse
+import copy
 import csv
 import json
 import math
@@ -32,6 +33,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from src.evaluation.pcbs_validation import (
     classify_pcbs_outcome,
     compute_pcbs_readability_metrics,
+    extract_validation_env_kwargs,
     count_pcbs_puzzle_stall_steps,
     prepare_dungeon_grid_for_validation,
 )
@@ -197,12 +199,13 @@ def run_ablation(
             stitched = adapter.stitch_dungeon(dungeon)
             prepared = prepare_dungeon_grid_for_validation(stitched)
             grid = prepared.grid
+            env_kwargs = extract_validation_env_kwargs(stitched)
 
-            oracle_env = ZeldaLogicEnv(semantic_grid=grid)
+            oracle_env = ZeldaLogicEnv(semantic_grid=grid, **copy.deepcopy(env_kwargs))
             oracle = run_astar_oracle(oracle_env, timeout=int(timeout_astar))
 
             for ablation_name in ablations:
-                env = ZeldaLogicEnv(semantic_grid=grid)
+                env = ZeldaLogicEnv(semantic_grid=grid, **copy.deepcopy(env_kwargs))
                 config = _ablation_config(persona, ablation_name)
                 started = time.perf_counter()
                 solver = CognitiveBoundedSearch(

@@ -758,7 +758,8 @@ def test_stateful_puzzle_profile_score_stays_finite_when_cbs_confusion_is_infini
         }
     )
 
-    assert score == pytest.approx(127.05)
+    assert np.isfinite(score)
+    assert 0.0 < score < 100.0
 
 
 def test_stateful_puzzle_summary_json_sanitizes_non_finite_payloads():

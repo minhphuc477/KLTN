@@ -5,20 +5,23 @@ from __future__ import annotations
 import logging
 import sys
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 import networkx as nx
 import numpy as np
 import torch
 
 from src.core import ROOM_HEIGHT, ROOM_WIDTH, SEMANTIC_PALETTE
+from src.generation.entity_spawner import materialize_entities_on_grid, spawn_all_entities
 from src.generation.evolutionary_director import EvolutionaryTopologyGenerator
+from src.generation.graph_constraint_enforcer import enforce_all_rooms
 from src.pipeline.generation.sampler import _stable_node_seed_offset
 from src.pipeline.evaluation import _hard_oracle_verdict, _logicnet_hard_agreement
 from src.pipeline.room_stitching import (
     StitchedRoomLayout,
     build_stitched_room_layout,
     carve_room_connection_between_bboxes,
+    validate_connection_realizations,
 )
 from src.pipeline.spatial_utils import stable_node_sort_key
 from src.pipeline.types import (
@@ -45,6 +48,76 @@ def _public_pipeline_hook(name: str, fallback: Any) -> Any:
 def _record_stage_time(stage_times: Dict[str, float], key: str, started_at: float) -> None:
     """Accumulate wall-clock stage timings in seconds."""
     stage_times[key] = float(stage_times.get(key, 0.0)) + float(time.perf_counter() - started_at)
+
+
+def _generation_telemetry_summary(graph: Any) -> Dict[str, Any]:
+    """Return compact rule-attempt telemetry suitable for final artifacts."""
+    raw_stats = getattr(graph, "generation_stats", None)
+    if not isinstance(raw_stats, Mapping) and isinstance(graph, nx.Graph):
+        raw_stats = graph.graph.get("generation_stats", {})
+    stats = dict(raw_stats or {}) if isinstance(raw_stats, Mapping) else {}
+    trace = stats.get("rule_trace", [])
+    trace_rows = [dict(row) for row in trace if isinstance(row, Mapping)]
+
+    status_counts: Dict[str, int] = {}
+    rule_counts: Dict[str, Dict[str, int]] = {}
+    for row in trace_rows:
+        status = str(row.get("status", "unknown") or "unknown")
+        rule_name = str(row.get("rule_name", "unknown") or "unknown")
+        status_counts[status] = int(status_counts.get(status, 0)) + 1
+        per_rule = rule_counts.setdefault(rule_name, {})
+        per_rule[status] = int(per_rule.get(status, 0)) + 1
+
+    counter_keys = (
+        "rule_applications",
+        "rule_applied",
+        "rule_skipped",
+        "generation_constraint_rejections",
+        "candidate_repairs_applied",
+        "lock_key_rule_applications",
+        "lock_key_rule_cap_skips",
+        "total_repairs",
+        "repair_rounds",
+    )
+    counters: Dict[str, int] = {}
+    for key in counter_keys:
+        try:
+            counters[key] = int(stats.get(key, 0) or 0)
+        except (TypeError, ValueError):
+            counters[key] = 0
+
+    return {
+        "generation_telemetry_available": bool(stats),
+        "generation_rule_trace_available": bool(trace_rows),
+        "generation_rule_trace_events": int(len(trace_rows)),
+        "generation_rule_status_counts": dict(sorted(status_counts.items())),
+        "generation_rule_outcomes_by_rule": {
+            rule_name: dict(sorted(outcomes.items()))
+            for rule_name, outcomes in sorted(rule_counts.items())
+        },
+        "generation_rule_counters": counters,
+    }
+
+
+def _has_compilable_graph_semantics(graph: nx.Graph) -> bool:
+    """Whether a caller supplied roles or gates that require tile compilation.
+
+    A plain NetworkX graph is a valid topology-only API input. Treating its
+    untyped PATH links as a fully specified Zelda mission graph lets the graph
+    enforcer overwrite ordinary stitched doors without any author intent. The
+    compiler therefore activates only when node roles or edge mechanics were
+    explicitly supplied; generated mission graphs always satisfy this.
+    """
+    node_fields = {
+        "type", "node_type", "label", "is_start", "is_goal", "has_goal",
+        "has_triforce", "is_triforce", "has_key", "has_item", "has_puzzle",
+    }
+    edge_fields = {
+        "edge_type", "type", "label", "key_required", "item_required",
+        "switch_id", "requires_key_count", "token_count", "token_id",
+        "protection_item_id",
+    }
+    return any(any(value not in (None, "", False) for key, value in attrs.items() if key in node_fields) for _, attrs in graph.nodes(data=True)) or any(any(value not in (None, "", False, 0) for key, value in attrs.items() if key in edge_fields) for _, _, attrs in graph.edges(data=True))
 
 
 def _validate_mission_graph_exact(pipeline, graph: nx.Graph) -> Dict[str, Any]:
@@ -984,6 +1057,56 @@ def generate_dungeon(
     dungeon_grid = np.asarray(stitched_layout.dungeon_grid, dtype=np.int32)
     _record_stage_time(stage_times, "stitch_room_layout_time_sec", stage_started_at)
 
+    # The stateful final oracle must observe the same graph-imposed doors,
+    # hazards, anchors, and entities that the user receives.  Earlier versions
+    # validated the raw neural stitch here, which allowed the canonical path to
+    # bypass the graph compiler used by the advanced pipeline.
+    stage_started_at = time.perf_counter()
+    tile_config = {
+        "wall": int(SEMANTIC_PALETTE["WALL"]),
+        "floor": int(SEMANTIC_PALETTE["FLOOR"]),
+        "door": int(SEMANTIC_PALETTE["DOOR_OPEN"]),
+        "door_locked": int(SEMANTIC_PALETTE["DOOR_LOCKED"]),
+        "door_bomb": int(SEMANTIC_PALETTE["DOOR_BOMB"]),
+        "door_puzzle": int(SEMANTIC_PALETTE["DOOR_PUZZLE"]),
+        "door_boss": int(SEMANTIC_PALETTE["DOOR_BOSS"]),
+        "door_soft": int(SEMANTIC_PALETTE["DOOR_SOFT"]),
+        "hazard": int(SEMANTIC_PALETTE["ELEMENT"]),
+        "start": int(SEMANTIC_PALETTE["START"]),
+        "goal": int(SEMANTIC_PALETTE["TRIFORCE"]),
+    }
+    physical_graph = prepared.mission_graph_physical
+    mission_graph_dict = {
+        "nodes": dict(physical_graph.nodes(data=True)),
+        "edges": list(physical_graph.edges(data=True)),
+    }
+    graph_compilation_applied = _has_compilable_graph_semantics(physical_graph)
+    entities = []
+    if graph_compilation_applied:
+        dungeon_grid = enforce_all_rooms(
+            visual_grid=dungeon_grid,
+            mission_graph=mission_graph_dict,
+            layout_map=stitched_layout.layout_map,
+            tile_config=tile_config,
+        )
+        entities = spawn_all_entities(
+            dungeon_grid=dungeon_grid,
+            mission_graph=mission_graph_dict,
+            layout_map=stitched_layout.layout_map,
+            seed=seed,
+        )
+        dungeon_grid = materialize_entities_on_grid(dungeon_grid, entities)
+    final_edge_integrity = validate_connection_realizations(
+        dungeon_grid,
+        stitched_layout.connection_realizations,
+    )
+    if int(final_edge_integrity["final_spatial_edge_records_broken"]) > 0:
+        raise RuntimeError(
+            "Graph compilation sealed recorded stitched connections: "
+            f"{final_edge_integrity['final_spatial_edge_integrity_failures']}"
+        )
+    _record_stage_time(stage_times, "compile_graph_semantics_time_sec", stage_started_at)
+
     stage_started_at = time.perf_counter()
     puzzle_metadata = pipeline._globalize_room_puzzle_metadata(
         rooms=room_set.rooms,
@@ -996,11 +1119,18 @@ def generate_dungeon(
         dungeon_grid,
         prepared.mission_graph_physical,
         enable_map_elites=enable_map_elites,
+        room_puzzle_metadata=puzzle_metadata,
     )
     hard_validation = (
         dict(map_elites_score)
         if isinstance(map_elites_score, dict) and bool(map_elites_score.get('is_exact', False))
-        else dict(pipeline._validate_dungeon(dungeon_grid) or {})
+        else dict(
+            pipeline._validate_dungeon(
+                dungeon_grid,
+                room_puzzle_metadata=puzzle_metadata,
+            )
+            or {}
+        )
     )
     hard_verdict = _hard_oracle_verdict(hard_validation)
     _record_stage_time(stage_times, "evaluate_generated_dungeon_time_sec", stage_started_at)
@@ -1026,6 +1156,7 @@ def generate_dungeon(
     graph_oracle_validation = dict(
         prepared.graph_data.get("graph_oracle_validation", {}) or {}
     )
+    generation_telemetry = _generation_telemetry_summary(prepared.mission_graph)
     stage_times["generation_total_time_sec"] = float(generation_time)
     metrics = {
         'num_rooms': num_rooms_generated,
@@ -1055,6 +1186,10 @@ def generate_dungeon(
                 for plan in dict(puzzle_metadata.get('plans', {}) or {}).values()
             )
         ),
+        'materialized_entity_count': int(len(entities)),
+        'graph_semantic_compilation_applied': bool(graph_compilation_applied),
+        **final_edge_integrity,
+        'generation_telemetry': generation_telemetry,
         'graph_oracle_solvable': graph_oracle_validation.get('solvable'),
         'graph_oracle_validation_status': str(
             graph_oracle_validation.get('termination_status', 'unknown')
@@ -1097,6 +1232,7 @@ def generate_dungeon(
             logic_solvability,
             hard_validation,
         ),
+        **dict(getattr(stitched_layout, 'realization_metrics', {}) or {}),
         **alignment_metrics,
         **masked_sampling_metrics,
     }
