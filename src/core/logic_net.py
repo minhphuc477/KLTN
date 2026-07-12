@@ -939,7 +939,7 @@ class ReachabilityScorer(nn.Module):
                 target_scores = scores * target_mask
                 num_targets = target_mask.sum() + 1e-6
                 mean_reachability = target_scores.sum() / num_targets
-                scores_out = scores
+                scores_out = mean_reachability
         else:
             mean_reachability = scores.mean()
             scores_out = scores
@@ -1913,6 +1913,125 @@ class LogicNet(nn.Module):
             terms.append(((walkability * anchor_target).sum(dim=(1, 2, 3)) / mass).clamp(0.0, 1.0))
         return torch.stack(terms, dim=0).mean(dim=0).clamp(0.0, 1.0)
 
+    def _resource_gated_rollout(
+        self,
+        *,
+        adjacency: Tensor,
+        weights: Tensor,
+        locked_edges: Tensor,
+        source_mask: Tensor,
+        key_lock_pairs: List[Tuple[int, int]],
+        dtype: torch.dtype,
+    ) -> Tuple[Tensor, Tensor, Dict[str, Any]]:
+        """Evaluate ordered key acquisition while unlocking one gate at a time."""
+        device = adjacency.device
+        zero = torch.tensor(0.0, device=device, dtype=dtype)
+        unlocked_edges = torch.zeros_like(locked_edges, dtype=torch.bool)
+        pair_losses: List[Tensor] = []
+        key_scores: List[Tensor] = []
+        lock_scores: List[Tensor] = []
+        remaining_providers_by_target: Dict[int, int] = {}
+        for _provider_idx, gated_target_idx in key_lock_pairs:
+            remaining_providers_by_target[int(gated_target_idx)] = (
+                remaining_providers_by_target.get(int(gated_target_idx), 0) + 1
+            )
+        matched_edge_count = 0
+        blocked_stage_count = 0
+
+        def _distances() -> Tensor:
+            active_locked = locked_edges & ~unlocked_edges
+            staged_adjacency = torch.where(
+                active_locked,
+                torch.zeros_like(adjacency),
+                adjacency,
+            )
+            return self.graph_pathfinder(staged_adjacency, weights, source_mask)
+
+        distances = _distances()
+        for key_idx, lock_idx in key_lock_pairs:
+            key_target = torch.zeros_like(source_mask)
+            key_target[int(key_idx)] = 1.0
+            key_score, key_loss = self.reachability(
+                distances,
+                key_target,
+                return_loss=True,
+            )
+
+            # key_lock_pairs identify the room entered through the lock. Keep
+            # unrelated and later locks closed; this is what permits valid
+            # key1 -> lock1 -> key2 -> lock2 progressions.
+            matching_edges = locked_edges & (
+                torch.arange(
+                    int(adjacency.shape[0]),
+                    device=device,
+                ).view(1, -1)
+                == int(lock_idx)
+            )
+            key_is_reachable = bool(
+                distances[int(key_idx)].detach().item()
+                < (float(self.graph_pathfinder.inf_distance) - 1e-6)
+            )
+            unlocks_target = False
+            if key_is_reachable:
+                target_key = int(lock_idx)
+                remaining_providers_by_target[target_key] = max(
+                    0,
+                    remaining_providers_by_target.get(target_key, 1) - 1,
+                )
+                unlocks_target = remaining_providers_by_target[target_key] == 0
+                if unlocks_target:
+                    matched_edge_count += int(matching_edges.sum().detach().item())
+                    unlocked_edges = unlocked_edges | matching_edges
+            else:
+                blocked_stage_count += 1
+            distances = _distances()
+
+            if unlocks_target:
+                lock_target = torch.zeros_like(source_mask)
+                lock_target[int(lock_idx)] = 1.0
+                lock_score, lock_loss = self.reachability(
+                    distances,
+                    lock_target,
+                    return_loss=True,
+                )
+                pair_losses.append(0.5 * (key_loss + lock_loss))
+                lock_scores.append(lock_score.mean())
+            else:
+                pair_losses.append(key_loss)
+            key_scores.append(key_score.mean())
+
+        pair_loss_tensor = (
+            torch.stack(pair_losses)
+            if pair_losses
+            else torch.empty(0, device=device, dtype=dtype)
+        )
+        resource_loss = pair_loss_tensor.mean() if pair_loss_tensor.numel() > 0 else zero
+        remaining_locked = locked_edges & ~unlocked_edges
+        info: Dict[str, Any] = {
+            "num_violations": (
+                int((pair_loss_tensor > 0.25).sum().detach().item())
+                if pair_loss_tensor.numel() > 0
+                else 0
+            ),
+            "total_violation": resource_loss,
+            "key_lock_mode": "resource_gated",
+            "resource_gate_ordering": "ordered",
+            "locked_edge_count": float(locked_edges.float().sum().detach().item()),
+            "matched_lock_edge_count": float(matched_edge_count),
+            "remaining_locked_edge_count": float(
+                remaining_locked.float().sum().detach().item()
+            ),
+            "resource_stage_count": float(len(key_lock_pairs)),
+            "blocked_resource_stage_count": float(blocked_stage_count),
+            "key_reach_before_lock": (
+                torch.stack(key_scores).mean() if key_scores else zero
+            ),
+            "lock_reach_after_key": (
+                torch.stack(lock_scores).mean() if lock_scores else zero
+            ),
+        }
+        return distances, resource_loss, info
+
     def _compute_one_global_graph_loss(
         self,
         *,
@@ -1989,20 +2108,8 @@ class LogicNet(nn.Module):
         source_mask[start] = 1.0
 
         distances = self.graph_pathfinder(adj, weights, source_mask)
-        target = self._infer_target_idx(node_features, target_idx, node_count=n)
-        graph_reach_loss = zero
-        graph_reach_score = torch.tensor(0.0, device=device, dtype=dtype)
-        if target is not None:
-            target_mask = torch.zeros(n, device=device, dtype=dtype)
-            target_mask[target] = 1.0
-            graph_reach_score, graph_reach_loss = self.reachability(
-                distances,
-                target_mask,
-                return_loss=True,
-            )
-            if isinstance(graph_reach_score, torch.Tensor) and graph_reach_score.numel() != 1:
-                graph_reach_score = graph_reach_score.mean()
 
+        pairs_were_supplied = key_lock_pairs is not None
         pairs: List[Tuple[int, int]] = []
         if isinstance(key_lock_pairs, (list, tuple)):
             for pair in key_lock_pairs:
@@ -2017,7 +2124,13 @@ class LogicNet(nn.Module):
                     and 0 <= lock_idx < n
                 ):
                     pairs.append((k, lock_idx))
-        if not pairs and isinstance(node_features, torch.Tensor) and node_features.dim() == 2 and node_features.shape[1] > 1:
+        if (
+            not pairs_were_supplied
+            and not pairs
+            and isinstance(node_features, torch.Tensor)
+            and node_features.dim() == 2
+            and node_features.shape[1] > 1
+        ):
             key_nodes = torch.nonzero(node_features[:n, 1] > 0.5, as_tuple=False).flatten().tolist()
             locked_targets: List[int] = []
             if isinstance(edge_features, torch.Tensor) and isinstance(edge_index, torch.Tensor) and edge_index.numel() > 0:
@@ -2036,54 +2149,37 @@ class LogicNet(nn.Module):
 
         lock_loss = zero
         lock_info: Dict[str, Any] = {}
-        if pairs:
+        if torch.any(locked_edges):
+            distances, lock_loss, lock_info = self._resource_gated_rollout(
+                adjacency=adj,
+                weights=weights,
+                locked_edges=locked_edges,
+                source_mask=source_mask,
+                key_lock_pairs=pairs,
+                dtype=dtype,
+            )
+        elif pairs:
             key_mask = torch.zeros(n, device=device, dtype=dtype)
             lock_mask = torch.zeros(n, device=device, dtype=dtype)
             for key_idx, lock_idx in pairs:
                 key_mask[key_idx] = 1.0
                 lock_mask[lock_idx] = 1.0
-            if torch.any(locked_edges):
-                blocked_adj = torch.where(locked_edges, torch.zeros_like(adj), adj)
-                blocked_distances = self.graph_pathfinder(blocked_adj, weights, source_mask)
-                pair_losses: List[Tensor] = []
-                key_scores: List[Tensor] = []
-                lock_scores: List[Tensor] = []
-                for key_idx, lock_idx in pairs:
-                    one_key = torch.zeros(n, device=device, dtype=dtype)
-                    one_key[key_idx] = 1.0
-                    key_score, key_reach_loss = self.reachability(
-                        blocked_distances,
-                        one_key,
-                        return_loss=True,
-                    )
-                    from_key_distances = self.graph_pathfinder(adj, weights, one_key)
-                    one_lock = torch.zeros(n, device=device, dtype=dtype)
-                    one_lock[lock_idx] = 1.0
-                    lock_score, lock_reach_loss = self.reachability(
-                        from_key_distances,
-                        one_lock,
-                        return_loss=True,
-                    )
-                    key_score = key_score.mean() if isinstance(key_score, torch.Tensor) and key_score.numel() != 1 else key_score
-                    lock_score = lock_score.mean() if isinstance(lock_score, torch.Tensor) and lock_score.numel() != 1 else lock_score
-                    pair_losses.append(0.5 * (key_reach_loss + lock_reach_loss))
-                    key_scores.append(key_score)
-                    lock_scores.append(lock_score)
-                pair_loss_t = torch.stack(pair_losses) if pair_losses else torch.empty(0, device=device, dtype=dtype)
-                lock_loss = pair_loss_t.mean() if pair_loss_t.numel() > 0 else zero
-                key_score_t = torch.stack(key_scores) if key_scores else torch.empty(0, device=device, dtype=dtype)
-                lock_score_t = torch.stack(lock_scores) if lock_scores else torch.empty(0, device=device, dtype=dtype)
-                lock_info = {
-                    "num_violations": int((pair_loss_t > 0.25).sum().detach().item()) if pair_loss_t.numel() > 0 else 0,
-                    "total_violation": lock_loss,
-                    "key_lock_mode": "resource_gated",
-                    "locked_edge_count": float(locked_edges.float().sum().detach().item()),
-                    "key_reach_before_lock": key_score_t.mean() if key_score_t.numel() > 0 else zero,
-                    "lock_reach_after_key": lock_score_t.mean() if lock_score_t.numel() > 0 else zero,
-                }
-            else:
-                lock_loss, lock_info = self.key_lock(distances, key_mask, lock_mask, pairs)
-                lock_info["key_lock_mode"] = "distance_ordering"
+            lock_loss, lock_info = self.key_lock(distances, key_mask, lock_mask, pairs)
+            lock_info["key_lock_mode"] = "distance_ordering"
+
+        target = self._infer_target_idx(node_features, target_idx, node_count=n)
+        graph_reach_loss = zero
+        graph_reach_score = torch.tensor(0.0, device=device, dtype=dtype)
+        if target is not None:
+            target_mask = torch.zeros(n, device=device, dtype=dtype)
+            target_mask[target] = 1.0
+            graph_reach_score, graph_reach_loss = self.reachability(
+                distances,
+                target_mask,
+                return_loss=True,
+            )
+            if isinstance(graph_reach_score, torch.Tensor) and graph_reach_score.numel() != 1:
+                graph_reach_score = graph_reach_score.mean()
 
         room_loss = (1.0 - room_pass[: current_indices.numel()].clamp(0.0, 1.0)).mean()
         total = (
@@ -2097,6 +2193,7 @@ class LogicNet(nn.Module):
             "global_room_passability": room_pass.mean(),
             "global_room_loss": room_loss,
             "global_num_key_lock_pairs": float(len(pairs)),
+            "resource_pairs_inferred": float(not pairs_were_supplied and bool(pairs)),
             **lock_info,
         }
         return total, graph_reach_loss, lock_loss, info
@@ -2139,7 +2236,7 @@ class LogicNet(nn.Module):
                 node_mask=node_mask if isinstance(node_mask, torch.Tensor) else None,
                 start_idx=graph_data.get("start_idx", graph_data.get("start_node_id", 0)),
                 target_idx=graph_data.get("target_idx"),
-                key_lock_pairs=graph_data.get("key_lock_pairs", []),
+                key_lock_pairs=graph_data.get("key_lock_pairs"),
                 current_node_idx=graph_data.get("current_node_idx"),
                 room_passability=room_passability,
                 device=device,
@@ -2181,7 +2278,7 @@ class LogicNet(nn.Module):
                 node_mask=node_mask if isinstance(node_mask, torch.Tensor) else None,
                 start_idx=graph_data.get("start_idx", graph_data.get("start_node_id", 0)),
                 target_idx=graph_data.get("target_idx"),
-                key_lock_pairs=graph_data.get("key_lock_pairs", []),
+                key_lock_pairs=graph_data.get("key_lock_pairs"),
                 current_node_idx=current_node_idx,
                 room_passability=room_passability,
                 device=device,
@@ -2216,7 +2313,7 @@ class LogicNet(nn.Module):
                 node_mask=nm_i if isinstance(nm_i, torch.Tensor) else None,
                 start_idx=self._select_batch_value(graph_data.get("start_node_id", graph_data.get("start_idx", 0)), bi),
                 target_idx=self._select_batch_value(graph_data.get("target_idx"), bi),
-                key_lock_pairs=self._select_batch_value(graph_data.get("key_lock_pairs", []), bi),
+                key_lock_pairs=self._select_batch_value(graph_data.get("key_lock_pairs"), bi),
                 current_node_idx=self._select_batch_value(graph_data.get("current_node_idx"), bi),
                 room_passability=room_passability[bi:bi + 1],
                 device=device,

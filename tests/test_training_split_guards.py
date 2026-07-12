@@ -11,6 +11,7 @@ from src.train_lcm import FastSamplerTrainingConfig
 from src.train_masked_room import MaskedRoomTrainingConfig
 from src.train_vqvae import evaluate_vqvae_loader, split_dataset_for_vqvae_validation, train_vqvae
 from src.zelda_data.splits import validate_disjoint_dungeon_splits
+from src.zelda_data.zelda_loader import validate_floor_conditioning_signal
 
 
 def test_split_validator_normalizes_and_preserves_disjoint_ids():
@@ -113,3 +114,21 @@ def test_vqvae_evaluation_restores_training_mode():
 
     assert model.training is True
     assert metrics["batches"] == 2.0
+
+
+def test_floor_conditioning_rejects_single_floor_training_data():
+    dataset = SimpleNamespace(
+        graphs=[{"node_features": torch.zeros(3, 15)}],
+    )
+
+    with pytest.raises(ValueError, match="fewer than two distinct floor labels"):
+        validate_floor_conditioning_signal(dataset, node_feature_dim=15)
+
+
+def test_floor_conditioning_accepts_observed_multi_floor_signal():
+    node_features = torch.zeros(3, 15)
+    node_features[2, 14] = 0.2
+    dataset = SimpleNamespace(graphs=[{"node_features": node_features}])
+
+    validate_floor_conditioning_signal(dataset, node_feature_dim=15)
+    validate_floor_conditioning_signal(dataset, node_feature_dim=14)

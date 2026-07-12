@@ -60,7 +60,12 @@ from src.utils.checkpoint import (
 from src.utils.data_loading import dataloader_runtime_kwargs
 from src.utils.model_capacity import count_parameters, log_capacity_guardrails
 from src.utils.optimization import adamw_decay_param_groups_for_modules
-from src.zelda_data.zelda_loader import DungeonBatchSampler, create_dataloader, graph_collate_fn
+from src.zelda_data.zelda_loader import (
+    DungeonBatchSampler,
+    create_dataloader,
+    graph_collate_fn,
+    validate_floor_conditioning_signal,
+)
 from src.zelda_data.splits import validate_disjoint_dungeon_splits
 from src.train_vqvae import split_dataset_for_vqvae_validation
 
@@ -608,6 +613,10 @@ def _create_masked_room_dataloaders(
     if base_loader_batches == 0:
         return base_loader, base_loader, "train", 0, 0
     dataset = base_loader.dataset
+    validate_floor_conditioning_signal(
+        dataset,
+        node_feature_dim=config.node_feature_dim,
+    )
     train_dataset, val_dataset = split_dataset_for_vqvae_validation(
         dataset,
         validation_fraction=config.validation_fraction,

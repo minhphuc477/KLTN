@@ -228,6 +228,55 @@ def test_key_lock_checker_uses_resource_gated_reachability_for_cyclic_graphs():
     assert blocked_lock.item() > ok_lock.item()
 
 
+def test_logicnet_resource_gating_preserves_ordered_multi_key_progression():
+    from src.core.logic_net import LogicNet
+
+    logic_net = LogicNet(latent_dim=8, hidden_dim=16, num_classes=44, num_iterations=8)
+    edge_index = torch.tensor(
+        [
+            [0, 1, 2],
+            [1, 2, 3],
+        ],
+        dtype=torch.long,
+    )
+    edge_attr = torch.tensor([0, 1, 1], dtype=torch.long)
+    common = dict(
+        node_count=4,
+        edge_index=edge_index,
+        adjacency=None,
+        edge_weights=None,
+        edge_features=None,
+        edge_attr=edge_attr,
+        node_features=None,
+        node_mask=None,
+        start_idx=0,
+        target_idx=3,
+        current_node_idx=None,
+        room_passability=torch.ones(4),
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+    )
+
+    _valid_total, valid_reach_loss, valid_lock_loss, valid_info = (
+        logic_net._compute_one_global_graph_loss(
+            key_lock_pairs=[(1, 2), (2, 3)],
+            **common,
+        )
+    )
+    _invalid_total, invalid_reach_loss, invalid_lock_loss, invalid_info = (
+        logic_net._compute_one_global_graph_loss(
+            key_lock_pairs=[(2, 3), (1, 2)],
+            **common,
+        )
+    )
+
+    assert valid_info["resource_gate_ordering"] == "ordered"
+    assert valid_info["blocked_resource_stage_count"] == pytest.approx(0.0)
+    assert invalid_info["blocked_resource_stage_count"] >= 1.0
+    assert valid_lock_loss.item() < invalid_lock_loss.item()
+    assert valid_reach_loss.item() < invalid_reach_loss.item()
+
+
 class TestLogicNet:
     """Tests for complete LogicNet module."""
     

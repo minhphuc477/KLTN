@@ -12,6 +12,7 @@ import torch
 
 from src.core.definitions import (
     GRAPH_EDGE_FEATURE_DIM,
+    GRAPH_NODE_FLOOR_FEATURE_INDEX,
     GRAPH_NODE_FEATURE_DIM,
     GRAPH_TPE_DIM,
     parse_edge_type_tokens,
@@ -29,6 +30,8 @@ def build_key_lock_pairs(
     """Pair key providers with gated destinations for LogicNet supervision."""
     small_keys: List[Any] = []
     boss_keys: List[Any] = []
+    item_providers: List[Any] = []
+    token_providers: List[Any] = []
     provider_ids: Dict[Any, Optional[str]] = {}
     for node_id, attrs in graph.nodes(data=True):
         attrs_dict = dict(attrs)
@@ -68,17 +71,52 @@ def build_key_lock_pairs(
                 )
             )
         )
-        if not (is_small_key or is_boss_key):
+        is_item_provider = (
+            not is_small_key
+            and not is_boss_key
+            and (
+                raw_type in {"ITEM", "KEY_ITEM", "MACRO_ITEM", "PROTECTION_ITEM"}
+                or bool(attrs_dict.get("has_item", False))
+                or bool(attrs_dict.get("has_macro_item", False))
+                or bool(label_tokens & {"I", "ITEM", "KEY_ITEM", "MACRO_ITEM"})
+            )
+        )
+        is_token_provider = (
+            not is_small_key
+            and not is_boss_key
+            and not is_item_provider
+            and (
+                raw_type == "TOKEN"
+                or bool(attrs_dict.get("has_token", False))
+                or bool(label_tokens & {"TOKEN", "token"})
+            )
+        )
+        if not (is_small_key or is_boss_key or is_item_provider or is_token_provider):
             continue
-        raw_key_id = attrs_dict.get("key_id")
+        raw_key_id = (
+            attrs_dict.get("token_id")
+            if is_token_provider
+            else (
+                attrs_dict.get("item_type", attrs_dict.get("required_item"))
+                if is_item_provider
+                else attrs_dict.get("key_id")
+            )
+        )
         provider_ids[node_id] = (
             str(raw_key_id).strip()
             if raw_key_id is not None and str(raw_key_id).strip()
             else None
         )
-        (boss_keys if is_boss_key else small_keys).append(node_id)
+        if is_boss_key:
+            boss_keys.append(node_id)
+        elif is_small_key:
+            small_keys.append(node_id)
+        elif is_token_provider:
+            token_providers.append(node_id)
+        else:
+            item_providers.append(node_id)
 
-    if not small_keys and not boss_keys:
+    if not small_keys and not boss_keys and not item_providers and not token_providers:
         return []
 
     try:
@@ -90,7 +128,19 @@ def build_key_lock_pairs(
     except (nx.NetworkXError, nx.NodeNotFound):
         start_distances = {}
 
-    pairs: List[Tuple[int, int]] = []
+    gate_records: List[
+        Tuple[
+            int,
+            int,
+            Tuple[str, str],
+            str,
+            Optional[str],
+            int,
+            Any,
+            Any,
+            nx.Graph,
+        ]
+    ] = []
     seen_gates: Set[Tuple[str, frozenset[Any], Optional[str]]] = set()
     for raw_source, raw_target, edge_attrs in graph.edges(data=True):
         constraints = {
@@ -102,21 +152,33 @@ def build_key_lock_pairs(
                 ),
             )
         }
-        if constraints & {"boss_locked", "boss"}:
+        if constraints & {"multi_lock"}:
+            key_kind = "token"
+        elif constraints & {"boss_locked", "boss"}:
             key_kind = "boss"
-            providers = boss_keys
+        elif constraints & {"item_locked", "item_gate"}:
+            key_kind = "item"
         elif constraints & {"key_locked", "locked", "k"}:
             key_kind = "small"
-            providers = small_keys
         else:
             continue
 
-        required_raw = edge_attrs.get("key_required")
+        required_raw = edge_attrs.get(
+            "token_id" if key_kind == "token" else (
+                "item_required" if key_kind == "item" else "key_required"
+            ),
+            edge_attrs.get("required_item") if key_kind == "item" else None,
+        )
         required_id = (
             str(required_raw).strip()
             if required_raw is not None and str(required_raw).strip()
             else None
         )
+        count_field = "token_count" if key_kind == "token" else "requires_key_count"
+        try:
+            required_count = max(1, int(edge_attrs.get(count_field, 1) or 1))
+        except (TypeError, ValueError, OverflowError):
+            required_count = 1
         gate_key = (key_kind, frozenset((raw_source, raw_target)), required_id)
         if gate_key in seen_gates:
             continue
@@ -128,42 +190,92 @@ def build_key_lock_pairs(
         if target not in node_to_idx:
             continue
 
-        candidates = [
-            provider
-            for provider in providers
-            if provider in node_to_idx
-            and (required_id is None or provider_ids.get(provider) == required_id)
-        ]
-        if not candidates:
-            continue
-
         graph_without_gate = graph.copy()
         if graph_without_gate.has_edge(raw_source, raw_target):
             graph_without_gate.remove_edge(raw_source, raw_target)
         if graph_without_gate.has_edge(raw_target, raw_source):
             graph_without_gate.remove_edge(raw_target, raw_source)
 
-        ranked: List[Tuple[int, int, Tuple[str, str], Any]] = []
+        gate_records.append(
+            (
+                int(start_distances.get(source, 10**9)),
+                int(start_distances.get(target, 10**9)),
+                (type(target).__name__, str(target)),
+                key_kind,
+                required_id,
+                required_count,
+                source,
+                target,
+                graph_without_gate,
+            )
+        )
+
+    ordered_pairs: List[Tuple[int, int]] = []
+    used_small_key_providers: Set[Any] = set()
+    used_token_providers: Set[Any] = set()
+    for (
+        _source_distance,
+        _target_distance,
+        _target_sort_key,
+        key_kind,
+        required_id,
+        required_count,
+        source,
+        target,
+        graph_without_gate,
+    ) in sorted(
+        gate_records,
+        key=lambda record: (
+            record[0],
+            record[1],
+            record[2],
+            record[3],
+            str(record[4] or ""),
+        ),
+    ):
+        if key_kind == "boss":
+            providers = boss_keys
+        elif key_kind == "item":
+            providers = item_providers
+        elif key_kind == "token":
+            providers = token_providers
+        else:
+            providers = small_keys
+        candidates = [
+            provider
+            for provider in providers
+            if provider in node_to_idx
+            and (required_id is None or provider_ids.get(provider) == required_id)
+            and (key_kind != "small" or provider not in used_small_key_providers)
+            and (key_kind != "token" or provider not in used_token_providers)
+        ]
+        ranked: List[Tuple[int, Tuple[str, str], Any]] = []
         for provider in candidates:
             try:
-                provider_to_gate = int(
-                    nx.shortest_path_length(graph_without_gate, provider, source)
-                )
+                if start_node in graph_without_gate:
+                    nx.shortest_path_length(graph_without_gate, start_node, provider)
+                    nx.shortest_path_length(graph_without_gate, start_node, source)
+                elif provider not in start_distances:
+                    continue
             except (nx.NetworkXNoPath, nx.NodeNotFound):
                 continue
             ranked.append(
                 (
-                    int(start_distances.get(provider, 10**9)),
-                    provider_to_gate,
+                    -int(start_distances.get(provider, -1)),
                     (type(provider).__name__, str(provider)),
                     provider,
                 )
             )
-        if ranked:
-            provider = min(ranked)[-1]
-            pairs.append((int(node_to_idx[provider]), int(node_to_idx[target])))
+        selected = [entry[-1] for entry in sorted(ranked)[:required_count]]
+        if len(selected) == required_count:
+            for provider in selected:
+                ordered_pairs.append((int(node_to_idx[provider]), int(node_to_idx[target])))
+                if key_kind == "small":
+                    used_small_key_providers.add(provider)
+                elif key_kind == "token":
+                    used_token_providers.add(provider)
 
-    return list(dict.fromkeys(pairs))
+    return list(dict.fromkeys(ordered_pairs))
 
 
 def condition_feature_dims(condition_encoder: Any) -> Tuple[int, int]:
@@ -556,7 +668,24 @@ def extract_node_feature_vector(
         float(is_secret),
         float(is_hub),
     ]
-    values = fit_feature_vector(base_features + extended_features, node_dim)
+    floor_value: Any = None
+    for floor_key in ("floor", "floor_id", "floor_level", "z"):
+        if floor_key in attrs and attrs.get(floor_key) is not None:
+            floor_value = attrs.get(floor_key)
+            break
+    if floor_value is None:
+        position = attrs.get("position", attrs.get("pos"))
+        if isinstance(position, (list, tuple, np.ndarray)) and len(position) > 2:
+            floor_value = position[2]
+    try:
+        normalized_floor = float(np.clip(float(floor_value or 0.0) / 5.0, -1.0, 1.0))
+    except (TypeError, ValueError, OverflowError):
+        normalized_floor = 0.0
+
+    features = base_features + extended_features
+    if int(node_dim) > int(GRAPH_NODE_FLOOR_FEATURE_INDEX):
+        features.append(normalized_floor)
+    values = fit_feature_vector(features, node_dim)
     return torch.tensor(values, device=device, dtype=torch.float32)
 
 

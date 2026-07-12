@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.core.latent_diffusion import GradientGuidance
 from src.core.definitions import (
+    GRAPH_NODE_FLOOR_FEATURE_INDEX,
     ROOM_HEIGHT,
     ROOM_TOPOLOGY_CHANNELS,
     ROOM_WIDTH,
@@ -29,8 +30,115 @@ from src.core.logic_net import (
 )
 from src.core.perturb_and_map import perturb_and_map_distance
 from src.core.symbolic_refiner import PathAnalyzer, WaveFunctionCollapse
-from src.pipeline.graph_features import extract_node_feature_vector
+from src.pipeline.graph_features import build_key_lock_pairs, extract_node_feature_vector
 from src.pipeline.spatial_utils import parse_label_tokens
+
+
+def test_key_lock_pair_builder_orders_gates_and_does_not_reuse_small_keys():
+    graph = nx.DiGraph()
+    graph.add_node(0, label="s")
+    graph.add_node(1, label="k")
+    graph.add_node(2, label="k")
+    graph.add_node(3, label="t")
+    # Deliberately insert the later gate first. Pair order must follow mission
+    # progression, not NetworkX insertion order.
+    graph.add_edge(2, 3, edge_type="key_locked")
+    graph.add_edge(1, 2, edge_type="key_locked")
+    graph.add_edge(0, 1, edge_type="open")
+
+    pairs = build_key_lock_pairs(graph, {node: node for node in graph}, start_node=0)
+
+    assert pairs == [(1, 2), (2, 3)]
+
+    graph.nodes[2]["label"] = ""
+    single_key_pairs = build_key_lock_pairs(
+        graph,
+        {node: node for node in graph},
+        start_node=0,
+    )
+    assert single_key_pairs == [(1, 2)]
+
+
+def test_key_lock_pair_builder_pairs_permanent_item_capabilities():
+    graph = nx.DiGraph()
+    graph.add_node(0, label="s,I", item_type="LADDER")
+    graph.add_node(1, label="t")
+    graph.add_edge(
+        0,
+        1,
+        edge_type="item_locked",
+        item_required="LADDER",
+    )
+
+    pairs = build_key_lock_pairs(graph, {0: 0, 1: 1}, start_node=0)
+
+    assert pairs == [(0, 1)]
+
+    graph.edges[0, 1]["item_required"] = "RAFT"
+    assert build_key_lock_pairs(graph, {0: 0, 1: 1}, start_node=0) == []
+
+
+def test_key_lock_pair_builder_requires_all_multi_lock_tokens():
+    graph = nx.DiGraph()
+    graph.add_node(0, type="START")
+    graph.add_node(1, type="ROOM")
+    graph.add_node(2, type="TOKEN", token_id="seal")
+    graph.add_node(3, type="TOKEN", token_id="seal")
+    graph.add_node(4, type="GOAL")
+    graph.add_edges_from([(0, 1), (0, 2), (0, 3)])
+    graph.add_edge(1, 4, edge_type="MULTI_LOCK", token_id="seal", token_count=2)
+
+    pairs = build_key_lock_pairs(graph, {node: node for node in graph}, start_node=0)
+
+    assert pairs == [(2, 4), (3, 4)]
+
+
+def test_logicnet_multi_lock_opens_only_after_all_provider_stages():
+    logic_net = LogicNet(
+        latent_dim=4,
+        num_tile_classes=5,
+        global_reach_weight=1.0,
+        lock_weight=1.0,
+        global_room_weight=0.0,
+    )
+    edge_index = torch.tensor([[0, 0, 0, 1], [1, 2, 3, 4]], dtype=torch.long)
+    edge_features = torch.zeros(4, 16)
+    edge_features[3, 1] = 1.0
+    graph_data = {
+        "graph_scope": "dungeon",
+        "edge_index": edge_index,
+        "edge_features": edge_features,
+        "node_features": torch.zeros(5, 14),
+        "start_node_id": 0,
+        "target_idx": 4,
+        "current_node_idx": torch.arange(5),
+        "key_lock_pairs": [(2, 4), (3, 4)],
+    }
+
+    _total, reach_loss, lock_loss, info = logic_net._compute_global_graph_losses(
+        graph_data,
+        room_passability=torch.ones(5),
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+    )
+
+    assert float(info["matched_lock_edge_count"]) == 1.0
+    assert float(info["remaining_locked_edge_count"]) == 0.0
+    assert float(info["blocked_resource_stage_count"]) == 0.0
+
+    blocked_graph = dict(graph_data)
+    blocked_graph["key_lock_pairs"] = []
+    _blocked_total, blocked_reach_loss, _blocked_lock_loss, blocked_info = (
+        logic_net._compute_global_graph_losses(
+            blocked_graph,
+            room_passability=torch.ones(5),
+            device=torch.device("cpu"),
+            dtype=torch.float32,
+        )
+    )
+    assert float(blocked_info["remaining_locked_edge_count"]) == 1.0
+    assert float(reach_loss) < float(blocked_reach_loss)
+    assert torch.isfinite(lock_loss)
 
 
 def test_logicnet_dynamic_spatial_shape_preserves_input_resolution():
@@ -629,6 +737,23 @@ def test_graph_feature_roles_include_type_fields():
 
     assert float(goal_features[3].item()) == 1.0
     assert float(start_features[11].item()) == 1.0
+
+
+def test_graph_floor_feature_is_opt_in_and_uses_mission_z_coordinate():
+    attrs = {"type": "ROOM", "position": (4, 7, 3)}
+    kwargs = {
+        "device": torch.device("cpu"),
+        "parse_label_tokens": parse_label_tokens,
+        "coerce_bool": bool,
+        "coerce_difficulty": lambda _value: 0.5,
+    }
+
+    baseline = extract_node_feature_vector(attrs, node_dim=14, **kwargs)
+    floor_conditioned = extract_node_feature_vector(attrs, node_dim=15, **kwargs)
+
+    assert tuple(baseline.shape) == (14,)
+    assert tuple(floor_conditioned.shape) == (15,)
+    assert float(floor_conditioned[GRAPH_NODE_FLOOR_FEATURE_INDEX]) == pytest.approx(3.0 / 5.0)
 
 
 if __name__ == "__main__":

@@ -88,6 +88,7 @@ Current important defaults:
 | Best-tested tokenizer by held-out VQ-VAE validation loss | `codebook256` |
 | Canonical diffusion config | `model_channels=96`, `condition_hidden_dim=192`, `condition_gnn_type=gps` |
 | Canonical masked-room config | `hidden_dim=48`, `condition_gnn_type=gcn`, `room_topology_channels=54` |
+| Graph node features | `14` baseline; optional `15`th normalized floor/z feature for labeled multi-floor ablations |
 | Generation defaults | constrained decode `on`, deterministic marker overlay `on`, repair `on`, puzzle scaffold `on`, puzzle novelty search `on` |
 | Diffusion/fast-sampler training efficiency | frozen VQ-VAE latent cache `on`, `4096` max entries |
 
@@ -121,6 +122,9 @@ The topology conditioning path now carries:
   - `item_gate` / `item_locked`
   - `switch_locked`
   - `on_off_gate` / `state_block`
+- optional explicit floor/z identity when `dataset.node_feature_dim=15`; this
+  mode requires at least two floor labels and therefore cannot be claimed from the
+  original single-floor corpus
 
 Runtime puzzle scaffolds can then specialize to those semantics instead of
 using one generic obstacle template.

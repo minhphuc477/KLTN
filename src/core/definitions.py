@@ -241,6 +241,9 @@ SLOT_WIDTH: int = 11
 
 # Shared graph-conditioning contract used by loaders, training, and runtime.
 GRAPH_NODE_FEATURE_DIM: int = 14
+# Optional multi-floor ablation appends normalized floor/z at this index.  The
+# default width remains 14 so existing checkpoints retain their exact shapes.
+GRAPH_NODE_FLOOR_FEATURE_INDEX: int = GRAPH_NODE_FEATURE_DIM
 GRAPH_EDGE_FEATURE_DIM: int = 16
 GRAPH_TPE_DIM: int = 8
 
@@ -705,6 +708,7 @@ __all__ = [
     'SLOT_HEIGHT',
     'SLOT_WIDTH',
     'GRAPH_NODE_FEATURE_DIM',
+    'GRAPH_NODE_FLOOR_FEATURE_INDEX',
     'GRAPH_EDGE_FEATURE_DIM',
     'GRAPH_TPE_DIM',
     'ROOM_TOPOLOGY_GATE_FAMILY_TOKENS',

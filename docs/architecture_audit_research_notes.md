@@ -1123,6 +1123,31 @@ Required verticality ablations, in order:
    justified multi-floor training corpus. Without that data, a 3D DiT is an
    untrained shape change rather than a scientific upgrade.
 
+Implemented M2 conditioning contract (not yet an empirical result):
+
+- `dataset.node_feature_dim=14` remains the checkpoint-compatible baseline.
+- `dataset.node_feature_dim=15` appends normalized mission-node floor/z from
+  the authoritative `(row, col, floor)` grammar position. The shared extractor
+  is used by dataset loading and runtime generation, and fast-sampler
+  distillation now preserves the configured graph dimensions.
+- Training fails before optimization when width 15 is selected without at
+  least two distinct observed floor labels. This prevents reporting a nominal floor
+  ablation on the single-floor VGLC corpus. A valid M2 run therefore requires
+  generated or curated multi-floor graphs with authoritative floor labels.
+
+LogicNet resource-semantics audit:
+
+- Global graph supervision now keeps later gates closed during ordered
+  key/item acquisition instead of deleting every locked edge at once.
+- Small keys are not reused across locks; permanent traversal items can be
+  reused; collection gates require all paired token providers before opening.
+- Explicitly unsatisfied resource pairs remain unsatisfied. Generic key/lock
+  pairing is retained only for legacy graph payloads that omit the pair field,
+  not payloads that explicitly provide an empty list.
+- These changes improve differentiable supervision but do not replace the hard
+  state-space oracle. LogicNet remains a training/guidance surrogate and its
+  ON/OFF claim still requires raw pre-repair oracle rates.
+
 Narrative remains an optional downstream ablation. Any future module must emit
 schema-validated, cached JSON linked to immutable mission-node IDs; it must not
 modify locks, keys, puzzle stages, or solvability after validation. Evaluation

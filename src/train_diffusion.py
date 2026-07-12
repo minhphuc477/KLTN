@@ -35,7 +35,13 @@ PROJECT_ROOT = Path(__file__).parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.zelda_data.zelda_loader import DungeonBatchSampler, create_dataloader, extract_start_goal, graph_collate_fn
+from src.zelda_data.zelda_loader import (
+    DungeonBatchSampler,
+    create_dataloader,
+    extract_start_goal,
+    graph_collate_fn,
+    validate_floor_conditioning_signal,
+)
 from src.zelda_data.splits import validate_disjoint_dungeon_splits
 from src.core.latent_diffusion import LatentDiffusionModel, create_latent_diffusion
 from src.core.vqvae import SemanticVQVAE as VQVAE, create_vqvae
@@ -4504,6 +4510,10 @@ def train_diffusion(config: DiffusionTrainingConfig) -> DiffusionTrainer:
             variants=config.variants,
         )
         base_dataset = base_loader.dataset
+        validate_floor_conditioning_signal(
+            base_dataset,
+            node_feature_dim=config.node_feature_dim,
+        )
         from src.train_vqvae import split_dataset_for_vqvae_validation
         train_dataset, val_dataset = split_dataset_for_vqvae_validation(
             base_dataset,

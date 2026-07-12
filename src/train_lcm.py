@@ -22,6 +22,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 
 from src.config_system import merge_config, seed_everything
+from src.core.definitions import GRAPH_EDGE_FEATURE_DIM, GRAPH_NODE_FEATURE_DIM
 from src.optimization.lcm_lora import (
     DEFAULT_LORA_TARGETS,
     extract_lora_state_dict,
@@ -59,7 +60,11 @@ from src.utils.checkpoint import (
 )
 from src.utils.data_loading import dataloader_runtime_kwargs
 from src.utils.optimization import adamw_decay_param_groups_for_modules
-from src.zelda_data.zelda_loader import create_dataloader, graph_collate_fn
+from src.zelda_data.zelda_loader import (
+    create_dataloader,
+    graph_collate_fn,
+    validate_floor_conditioning_signal,
+)
 from src.zelda_data.splits import validate_disjoint_dungeon_splits
 
 logger = logging.getLogger(__name__)
@@ -90,6 +95,8 @@ class FastSamplerTrainingConfig:
         use_vglc: bool = True,
         normalize: bool = True,
         room_level: bool = True,
+        node_feature_dim: int = GRAPH_NODE_FEATURE_DIM,
+        edge_feature_dim: int = GRAPH_EDGE_FEATURE_DIM,
         train_dungeon_ids: Optional[List[int]] = None,
         test_dungeon_ids: Optional[List[int]] = None,
         variants: Optional[List[int]] = None,
@@ -146,6 +153,8 @@ class FastSamplerTrainingConfig:
         self.use_vglc = bool(use_vglc)
         self.normalize = bool(normalize)
         self.room_level = bool(room_level)
+        self.node_feature_dim = int(max(1, node_feature_dim))
+        self.edge_feature_dim = int(max(1, edge_feature_dim))
         train_ids, test_ids = validate_disjoint_dungeon_splits(
             train_dungeon_ids if train_dungeon_ids is not None else range(1, 9),
             test_dungeon_ids if test_dungeon_ids is not None else (9,),
@@ -236,6 +245,8 @@ def fast_sampler_training_kwargs_from_resolved_config(config: Dict[str, Any]) ->
         "use_vglc": dataset["use_vglc"],
         "normalize": dataset["normalize"],
         "room_level": dataset["room_level"],
+        "node_feature_dim": dataset["node_feature_dim"],
+        "edge_feature_dim": dataset["edge_feature_dim"],
         "train_dungeon_ids": dataset.get("train_dungeons", list(range(1, 9))),
         "test_dungeon_ids": dataset.get("test_dungeons", [9]),
         "variants": dataset.get("variants", [1, 2]),
@@ -371,6 +382,26 @@ class ConsistencyLoRATrainer:
         self.config = config
         self.device = torch.device(config.device)
         self.base_bundle = self._load_base_bundle(config.base_diffusion_checkpoint)
+        base_global_encoder = getattr(
+            getattr(self.base_bundle, "condition_encoder", None),
+            "global_encoder",
+            None,
+        )
+        base_node_dim = int(
+            getattr(base_global_encoder, "node_feature_dim", config.node_feature_dim)
+        )
+        base_edge_dim = int(
+            getattr(base_global_encoder, "edge_feature_dim", config.edge_feature_dim)
+        )
+        if (
+            base_node_dim != int(config.node_feature_dim)
+            or base_edge_dim != int(config.edge_feature_dim)
+        ):
+            raise ValueError(
+                "Fast-sampler graph schema must match the base diffusion checkpoint: "
+                f"checkpoint=({base_node_dim}, {base_edge_dim}), "
+                f"configured=({config.node_feature_dim}, {config.edge_feature_dim})."
+            )
         self.ode_teacher = copy.deepcopy(self.base_bundle.ema_diffusion).to(self.device).eval()
         for param in self.ode_teacher.parameters():
             param.requires_grad = False
@@ -1097,6 +1128,8 @@ def _create_fast_sampler_dataloaders(
         normalize=config.normalize,
         room_level=config.room_level,
         load_graphs=True,
+        node_feature_dim=config.node_feature_dim,
+        edge_feature_dim=config.edge_feature_dim,
         topology_supervision_mode=config.topology_supervision_mode,
         semantic_role_prior_strength=config.semantic_role_prior_strength,
         semantic_puzzle_offset=config.semantic_puzzle_offset,
@@ -1106,6 +1139,10 @@ def _create_fast_sampler_dataloaders(
         variants=config.variants,
     )
     dataset = base_loader.dataset
+    validate_floor_conditioning_signal(
+        dataset,
+        node_feature_dim=config.node_feature_dim,
+    )
     train_dataset, val_dataset = split_dataset_for_vqvae_validation(
         dataset,
         validation_fraction=config.validation_fraction,

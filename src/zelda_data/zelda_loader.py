@@ -52,6 +52,7 @@ from .zelda_core import (
 )
 from src.core.definitions import (
     GRAPH_EDGE_FEATURE_DIM,
+    GRAPH_NODE_FLOOR_FEATURE_INDEX,
     GRAPH_NODE_FEATURE_DIM,
     GRAPH_TPE_DIM,
     ROOM_HEIGHT,
@@ -1348,6 +1349,74 @@ class DungeonBatchSampler(Sampler[List[int]]):
         if self.drop_last:
             return sum(1 for group in self.groups if group)
         return len(self.groups)
+
+
+def validate_floor_conditioning_signal(
+    dataset: Dataset,
+    *,
+    node_feature_dim: int,
+) -> None:
+    """Reject a floor-conditioning ablation without observable floor labels.
+
+    Feature widths up to the checkpoint-compatible baseline do not use floor
+    conditioning.  Wider schemas include floor/z at index 14 and therefore
+    require at least one non-zero floor label; otherwise the ablation is
+    indistinguishable from the baseline while changing checkpoint shapes.
+    """
+    floor_index = int(GRAPH_NODE_FLOOR_FEATURE_INDEX)
+    if int(node_feature_dim) <= floor_index:
+        return
+    if int(node_feature_dim) != floor_index + 1:
+        raise ValueError(
+            "The supported floor-conditioning schema has exactly "
+            f"{floor_index + 1} node features; got node_feature_dim={node_feature_dim}."
+        )
+
+    observed_floor_values: Set[float] = set()
+
+    def _inspect_graph(graph: Any) -> bool:
+        if not isinstance(graph, dict):
+            return False
+        features = graph.get("node_features")
+        if features is None:
+            return False
+        tensor = torch.as_tensor(features)
+        if tensor.dim() != 2 or int(tensor.shape[1]) <= floor_index:
+            raise ValueError(
+                "Floor conditioning requires node_features with at least "
+                f"{floor_index + 1} columns; got {tuple(tensor.shape)}."
+            )
+        observed_floor_values.update(
+            round(float(value), 8)
+            for value in tensor[:, floor_index].detach().cpu().float().tolist()
+        )
+        return True
+
+    observed_graph = False
+    stored_graphs = getattr(dataset, "graphs", None)
+    if isinstance(stored_graphs, list) and stored_graphs:
+        for graph in stored_graphs:
+            observed_graph = observed_graph or _inspect_graph(graph)
+            if len(observed_floor_values) >= 2:
+                return
+    else:
+        for sample_idx in range(len(dataset)):
+            sample = dataset[sample_idx]
+            graph = sample[1] if isinstance(sample, (tuple, list)) and len(sample) > 1 else None
+            observed_graph = observed_graph or _inspect_graph(graph)
+            if len(observed_floor_values) >= 2:
+                return
+
+    detail = (
+        f"fewer than two distinct floor labels were observed ({sorted(observed_floor_values)})"
+        if observed_graph
+        else "no graph features were observed"
+    )
+    raise ValueError(
+        "node_feature_dim enables neural floor conditioning, but "
+        f"{detail}. Use the 14-feature baseline for single-floor data or provide "
+        "authoritative multi-floor node positions before running this ablation."
+    )
 
 
 # =============================================================================
