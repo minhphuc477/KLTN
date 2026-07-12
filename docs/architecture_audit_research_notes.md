@@ -1284,3 +1284,71 @@ Still requiring real artifacts rather than more code:
   single sample per condition cannot form a scientifically valid preference.
 - Install the optional Gymnasium/SB3 experiment dependencies and train matched
   persona seeds. Human-likeness still requires human calibration data.
+
+### Topology Contract And Repair Audit (2026-07-13)
+
+Verified corrections:
+
+- `LightweightGCNLayer` and graph degree-feature extraction now flatten a
+  batch into disjoint offset index spaces and aggregate with `index_add_`.
+  This removes the Python batch loop while preserving the normalized
+  `D^-1/2 A_hat D^-1/2` operator used by the GCN baseline
+  ([Kipf and Welling, 2017](https://arxiv.org/abs/1609.02907)). Batched tests
+  cover different edge sets, invalid padded edges, masked nodes, numerical
+  parity with independent dense graphs, and gradient flow.
+- The advanced-pipeline neural failure path no longer emits a bordered blank
+  room. Its opt-in fallback invokes the canonical boundary, topology, graph
+  marker, and puzzle-scaffold contracts. It fails closed if those helpers are
+  unavailable. A production-helper probe confirms that a key room with a
+  locked outgoing edge retains one key marker and the exact locked-door strip.
+- `AddBossGauntlet` treats every incoming boss-door approach as gated when
+  selecting a pre-lock Big Key provider. `AddCollectionChallengeRule` is now
+  transactional on every failure path and cannot leave token rewards without
+  a corresponding multi-lock.
+- Symbolic WFC entropy reset cannot modify door tiles, START, TRIFORCE, or
+  STAIRS, even when a contradiction mask is dilated across them. Geometry
+  repair therefore cannot erase the room-to-room topology contract.
+
+Rejected or narrowed audit claims:
+
+- The reported two-lock deadlock bypass is stale. Mission-grammar reachability
+  resolves resources iteratively and keeps every unresolved lock closed while
+  checking a provider. A mutually locked two-key cycle is rejected. Excluding
+  every lock unconditionally would be incorrect because it would also reject
+  valid nested progressions such as key1 -> lock1 -> key2 -> lock2.
+- LogicNet is not truncated at its configured default iteration count when
+  full coverage is enabled. It runs at least `N-1` graph relaxations or `H*W`
+  grid relaxations and checkpoints larger differentiable rollouts. Exact
+  black-box shortest-path differentiation remains a separate ablation, not a
+  drop-in replacement
+  ([Vlastelica et al., 2020](https://arxiv.org/abs/1912.02175)).
+- Puzzle-stage auxiliary loss is computed from generator tile logits and is
+  included in the generator objective, so it does backpropagate into the room
+  model. Inference does not load the auxiliary classifier; it instead applies
+  the canonical deterministic interaction-sequence contract and records valid,
+  invalid, and skipped gates. The learned head should only become an inference
+  gate as a separately calibrated ablation with saved head weights and a
+  declared threshold.
+- MaskGIT is graph-conditioned: it supports concat-encoder and cross-decoder
+  context fusion, receives the explicit room-topology tensor, fixes topology
+  anchors, and applies semantic boundary logits. It does not implement the
+  diffusion model's SPADE or linear-attention ablations, and config validation
+  correctly refuses to label those unavailable variants as MaskGIT results.
+- `src/simulation/map_elites.py` and `src/evaluation/map_elites.py` are not
+  duplicate implementations. The first is the runtime grid evaluator/GUI
+  adapter; the second owns general elite archives, feature extractors, and CVT
+  support, which the runtime adapter imports.
+
+Focused verification for this audit: 29 advanced-rule tests, 31 symbolic
+refiner tests, 35 graph-grid attention tests, and 17 advanced-pipeline contract
+tests passed (112 total). The repository-wide native PyTorch crash noted above
+remains outside this focused evidence boundary.
+
+Deferred by scientific design rather than missing code:
+
+- Global-state metadata currently drives deterministic state-aware room
+  modification, but it is not a learned condition token. Adding a neural
+  global-state embedding without paired before/after room states would create
+  an untrained input branch. Implement it only with a corpus containing the
+  same room under multiple authoritative global states and report it as an
+  ablation against deterministic state compilation.

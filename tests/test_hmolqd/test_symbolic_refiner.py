@@ -503,6 +503,58 @@ class TestSymbolicRefiner:
         assert bool(refiner.wfc.seen_mask[8, 5]) is False
         assert bool(refiner.wfc.seen_mask[8, 6]) is True
 
+    def test_repair_room_excludes_topology_tiles_from_wfc_reset(self):
+        """A dilated contradiction region must not erase doors or route endpoints."""
+        from src.core.symbolic_refiner import FailurePoint, SymbolicRefiner, TileType
+
+        class _Analyzer:
+            def analyze_grid(self, *_args, **_kwargs):
+                return [
+                    FailurePoint(
+                        position=(8, 5),
+                        failure_type="disconnected",
+                        required_item=None,
+                        blocking_tiles=[],
+                    )
+                ]
+
+        class _EntropyReset:
+            def create_mask(self, shape, _failures):
+                return np.ones(shape, dtype=bool)
+
+            def expand_mask(self, mask, iterations=1):
+                _ = iterations
+                return mask
+
+        class _WFC:
+            def __init__(self):
+                self.seen_mask = None
+
+            def initialize_state(self, **kwargs):
+                self.seen_mask = np.asarray(kwargs["mask"], dtype=bool).copy()
+                return kwargs
+
+            def collapse(self, state):
+                return np.asarray(state["initial_grid"]).copy(), False
+
+        refiner = SymbolicRefiner(max_repair_attempts=1)
+        refiner.path_analyzer = _Analyzer()
+        refiner.entropy_reset = _EntropyReset()
+        refiner.wfc = _WFC()
+        refiner.refresh_learned_rules = lambda: None
+        grid = np.full((16, 11), TileType.WALL.value)
+        grid[0, 5] = TileType.DOOR_LOCKED.value
+        grid[8, 1] = TileType.START.value
+        grid[8, 9] = TileType.TRIFORCE.value
+        grid[15, 5] = TileType.STAIR.value
+
+        refiner.repair_room(grid, start=(8, 1), goal=(8, 9))
+
+        assert refiner.wfc.seen_mask is not None
+        for position in ((0, 5), (8, 1), (8, 9), (15, 5)):
+            assert bool(refiner.wfc.seen_mask[position]) is False
+        assert bool(refiner.wfc.seen_mask[8, 5]) is True
+
     def test_repair_room_seed_makes_wfc_reproducible(self):
         """Seeded repair should not depend on NumPy's global random state."""
         from src.core.symbolic_refiner import SymbolicRefiner, TileType

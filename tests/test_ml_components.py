@@ -746,6 +746,54 @@ class TestGraphGridAttention:
 
         assert torch.allclose(output[0], expected, atol=1e-6)
 
+    def test_lightweight_gcn_batches_graphs_without_cross_graph_messages(self):
+        """Batched sparse propagation must match independent dense graphs, including padding."""
+        from src.core.graph_grid_attention import LightweightGCNLayer
+
+        layer = LightweightGCNLayer(in_dim=2, out_dim=2)
+        with torch.no_grad():
+            layer.linear.weight.copy_(torch.eye(2))
+            layer.linear.bias.zero_()
+
+        x = torch.tensor(
+            [
+                [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]],
+                [[10.0, 20.0], [30.0, 40.0], [50.0, 60.0]],
+            ]
+        )
+        edge_index = torch.tensor(
+            [
+                [[0, 1, -1], [1, 2, -1]],
+                [[0, 2, 99], [2, 1, 0]],
+            ],
+            dtype=torch.long,
+        )
+        node_mask = torch.tensor([[True, True, True], [True, True, False]])
+
+        output = layer(x, edge_index, node_mask=node_mask)
+
+        expected_graphs = []
+        for batch_idx in range(2):
+            valid = node_mask[batch_idx]
+            adjacency = torch.zeros(3, 3)
+            for source, target in edge_index[batch_idx].t().tolist():
+                if (
+                    0 <= source < 3
+                    and 0 <= target < 3
+                    and bool(valid[source])
+                    and bool(valid[target])
+                ):
+                    adjacency[source, target] += 1.0
+                    adjacency[target, source] += 1.0
+            adjacency += torch.diag(valid.float())
+            degree = adjacency.sum(dim=1).clamp(min=1.0)
+            normalized = degree.pow(-0.5)[:, None] * adjacency * degree.pow(-0.5)[None, :]
+            expected_graphs.append(normalized @ (x[batch_idx] * valid[:, None]))
+
+        expected = torch.stack(expected_graphs)
+        assert torch.allclose(output, expected, atol=1e-6)
+        assert torch.equal(output[1, 2], torch.zeros(2))
+
     def test_spatial_graph_conditioner_rejects_topology_batch_mismatch(self):
         """SpatialGraphConditioner should validate room-topology batch alignment."""
         from src.core.graph_grid_attention import SpatialGraphConditioner

@@ -83,60 +83,66 @@ class LightweightGCNLayer(nn.Module):
                     f"LightweightGCNLayer node_mask must have shape [B, N] = ({b}, {n}), "
                     f"got {tuple(valid_nodes_all.shape)}."
                 )
-        out = []
-        for bi in range(b):
-            xb = x[bi]  # [N, D]
-            valid_nodes = valid_nodes_all[bi]
-
-            if edge_index.dim() == 3:
-                if int(edge_index.shape[0]) == b:
-                    ei = edge_index[bi]
-                elif int(edge_index.shape[0]) == 1:
-                    ei = edge_index[0]
-                else:
-                    raise ValueError(
-                        f"LightweightGCNLayer edge_index batch size {int(edge_index.shape[0])} "
-                        f"does not match graph batch size {b}."
-                    )
-            else:
-                ei = edge_index
-
-            if int(ei.shape[0]) != 2:
+        if n == 0:
+            return self.linear(x)
+        if edge_index.dim() == 2:
+            if int(edge_index.shape[0]) != 2:
                 raise ValueError(
-                    f"LightweightGCNLayer edge_index first dimension must be 2, got {tuple(ei.shape)}."
+                    f"LightweightGCNLayer edge_index first dimension must be 2, got {tuple(edge_index.shape)}."
+                )
+            batched_edges = edge_index.to(device=x.device).unsqueeze(0).expand(b, -1, -1)
+        else:
+            if int(edge_index.shape[1]) != 2:
+                raise ValueError(
+                    f"LightweightGCNLayer edge_index second dimension must be 2, got {tuple(edge_index.shape)}."
+                )
+            if int(edge_index.shape[0]) == b:
+                batched_edges = edge_index.to(device=x.device)
+            elif int(edge_index.shape[0]) == 1:
+                batched_edges = edge_index.to(device=x.device).expand(b, -1, -1)
+            else:
+                raise ValueError(
+                    f"LightweightGCNLayer edge_index batch size {int(edge_index.shape[0])} "
+                    f"does not match graph batch size {b}."
                 )
 
-            z = self.linear(xb) * valid_nodes[:, None].to(dtype=xb.dtype)
-            self_idx = torch.nonzero(valid_nodes, as_tuple=False).flatten()
-            if ei.numel() > 0:
-                src = ei[0].long()
-                dst = ei[1].long()
-                valid = (src >= 0) & (src < n) & (dst >= 0) & (dst < n)
-                safe_src = src.clamp(0, max(0, n - 1))
-                safe_dst = dst.clamp(0, max(0, n - 1))
-                valid = valid & valid_nodes[safe_src] & valid_nodes[safe_dst]
-                src = src[valid]
-                dst = dst[valid]
-                src_all = torch.cat([src, dst, self_idx], dim=0)
-                dst_all = torch.cat([dst, src, self_idx], dim=0)
-            else:
-                src_all = self_idx
-                dst_all = self_idx
+        z = self.linear(x) * valid_nodes_all.unsqueeze(-1).to(dtype=x.dtype)
+        src_raw = batched_edges[:, 0, :].long()
+        dst_raw = batched_edges[:, 1, :].long()
+        in_range = (src_raw >= 0) & (src_raw < n) & (dst_raw >= 0) & (dst_raw < n)
+        safe_src = src_raw.clamp(0, max(0, n - 1))
+        safe_dst = dst_raw.clamp(0, max(0, n - 1))
+        valid_edges = (
+            in_range
+            & valid_nodes_all.gather(1, safe_src)
+            & valid_nodes_all.gather(1, safe_dst)
+        )
 
-            if src_all.numel() == 0:
-                out.append(torch.zeros_like(z))
-                continue
+        offsets = torch.arange(b, device=x.device, dtype=torch.long).unsqueeze(1) * n
+        flat_src = (safe_src + offsets)[valid_edges]
+        flat_dst = (safe_dst + offsets)[valid_edges]
+        self_nodes = torch.nonzero(valid_nodes_all.reshape(-1), as_tuple=False).flatten()
+        src_all = torch.cat([flat_src, flat_dst, self_nodes], dim=0)
+        dst_all = torch.cat([flat_dst, flat_src, self_nodes], dim=0)
 
-            deg = torch.zeros(n, device=xb.device, dtype=xb.dtype)
-            deg.index_add_(0, src_all, torch.ones(src_all.shape[0], device=xb.device, dtype=xb.dtype))
-            norm = deg[src_all].clamp(min=1.0).pow(-0.5) * deg[dst_all].clamp(min=1.0).pow(-0.5)
+        z_flat = z.reshape(b * n, -1)
+        if src_all.numel() == 0:
+            return torch.zeros_like(z)
 
-            messages = z[dst_all] * norm.unsqueeze(-1)
-            aggregated = torch.zeros_like(z)
-            aggregated.index_add_(0, src_all, messages)
-            out.append(aggregated)
-
-        return torch.stack(out, dim=0)
+        deg = torch.zeros(b * n, device=x.device, dtype=x.dtype)
+        deg.index_add_(
+            0,
+            src_all,
+            torch.ones(src_all.shape[0], device=x.device, dtype=x.dtype),
+        )
+        norm = (
+            deg[src_all].clamp(min=1.0).pow(-0.5)
+            * deg[dst_all].clamp(min=1.0).pow(-0.5)
+        )
+        messages = z_flat[dst_all] * norm.unsqueeze(-1)
+        aggregated = torch.zeros_like(z_flat)
+        aggregated.index_add_(0, src_all, messages)
+        return aggregated.reshape(b, n, -1)
 
 
 # ============================================================================
@@ -726,44 +732,58 @@ class GraphToGridCrossAttention(nn.Module):
 
         ones_dtype = degree.dtype
         degree_norm = float(max(1, num_nodes - 1))
-        for bi in range(batch_size):
-            if edge_index.dim() == 3:
-                if int(edge_index.shape[0]) == batch_size:
-                    ei = edge_index[bi]
-                elif int(edge_index.shape[0]) == 1:
-                    ei = edge_index[0]
-                else:
-                    raise ValueError(
-                        f"GraphToGridCrossAttention edge_index batch size {int(edge_index.shape[0])} "
-                        f"does not match graph batch size {batch_size}."
-                    )
-            else:
-                ei = edge_index
-
-            if int(ei.shape[0]) != 2:
+        if edge_index.dim() == 2:
+            if int(edge_index.shape[0]) != 2:
                 raise ValueError(
-                    f"GraphToGridCrossAttention edge_index first dimension must be 2, got {tuple(ei.shape)}."
+                    f"GraphToGridCrossAttention edge_index first dimension must be 2, got {tuple(edge_index.shape)}."
                 )
-            if ei.numel() == 0:
-                continue
-            src = ei[0].long()
-            dst = ei[1].long()
-            valid = (src >= 0) & (src < num_nodes) & (dst >= 0) & (dst < num_nodes)
-            if valid_nodes_all is not None:
-                safe_src = src.clamp(0, max(0, num_nodes - 1))
-                safe_dst = dst.clamp(0, max(0, num_nodes - 1))
-                valid = valid & valid_nodes_all[bi, safe_src] & valid_nodes_all[bi, safe_dst]
-            src = src[valid]
-            dst = dst[valid]
-            if src.numel() == 0:
-                continue
+            batched_edges = edge_index.to(device=device).unsqueeze(0).expand(batch_size, -1, -1)
+        else:
+            if int(edge_index.shape[1]) != 2:
+                raise ValueError(
+                    f"GraphToGridCrossAttention edge_index second dimension must be 2, got {tuple(edge_index.shape)}."
+                )
+            if int(edge_index.shape[0]) == batch_size:
+                batched_edges = edge_index.to(device=device)
+            elif int(edge_index.shape[0]) == 1:
+                batched_edges = edge_index.to(device=device).expand(batch_size, -1, -1)
+            else:
+                raise ValueError(
+                    f"GraphToGridCrossAttention edge_index batch size {int(edge_index.shape[0])} "
+                    f"does not match graph batch size {batch_size}."
+                )
+
+        src_raw = batched_edges[:, 0, :].long()
+        dst_raw = batched_edges[:, 1, :].long()
+        valid = (
+            (src_raw >= 0)
+            & (src_raw < num_nodes)
+            & (dst_raw >= 0)
+            & (dst_raw < num_nodes)
+        )
+        safe_src = src_raw.clamp(0, max(0, num_nodes - 1))
+        safe_dst = dst_raw.clamp(0, max(0, num_nodes - 1))
+        if valid_nodes_all is not None:
+            valid = (
+                valid
+                & valid_nodes_all.gather(1, safe_src)
+                & valid_nodes_all.gather(1, safe_dst)
+            )
+        offsets = (
+            torch.arange(batch_size, device=device, dtype=torch.long).unsqueeze(1)
+            * num_nodes
+        )
+        src = (safe_src + offsets)[valid]
+        dst = (safe_dst + offsets)[valid]
+        if src.numel() > 0:
+            flat_degree = degree.reshape(batch_size * num_nodes, 2)
             ones = torch.ones(src.shape[0], device=device, dtype=ones_dtype)
-            degree[bi, :, 0].scatter_add_(0, dst, ones)
-            degree[bi, :, 1].scatter_add_(0, src, ones)
+            flat_degree[:, 0].index_add_(0, dst, ones)
+            flat_degree[:, 1].index_add_(0, src, ones)
 
         degree = degree / degree_norm
-        if node_mask is not None:
-            degree = degree * node_mask.unsqueeze(-1).to(device=device, dtype=dtype)
+        if valid_nodes_all is not None:
+            degree = degree * valid_nodes_all.unsqueeze(-1).to(dtype=dtype)
         return degree
     
     def forward(

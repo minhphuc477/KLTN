@@ -69,7 +69,12 @@ from src.pipeline.room_stitching import (
     compute_graph_aware_room_slots,
     validate_connection_realizations,
 )
-from src.core.definitions import ROOM_HEIGHT, ROOM_WIDTH, parse_node_label_tokens
+from src.core.definitions import (
+    ROOM_HEIGHT,
+    ROOM_WIDTH,
+    SEMANTIC_PALETTE,
+    parse_node_label_tokens,
+)
 from src.optimization.lcm_lora import load_fast_sampler_checkpoint
 
 # Validation
@@ -1606,6 +1611,89 @@ class AdvancedNeuralSymbolicPipeline:
                 return value
 
         return {key: clone_value(value) for key, value in dict(graph_context).items()}
+
+    def _build_topology_preserving_fallback_room(
+        self,
+        *,
+        node_id: int,
+        mission_graph: nx.DiGraph,
+    ) -> np.ndarray:
+        """Construct a deterministic fallback under the canonical room contract.
+
+        This path is deliberately symbolic: it preserves graph-required door
+        types, graph-owned semantic markers, and any validated puzzle scaffold.
+        If the canonical helpers are unavailable, generation fails instead of
+        emitting a room that contradicts the mission graph.
+        """
+        pipeline = self.neural_pipeline
+        required_helpers = (
+            "_enforce_room_boundary_shell",
+            "_extract_room_start_goal",
+            "_overlay_room_graph_markers",
+            "_apply_puzzle_room_scaffold",
+        )
+        missing_helpers = [name for name in required_helpers if not hasattr(pipeline, name)]
+        if missing_helpers:
+            raise RuntimeError(
+                "Topology-preserving room fallback requires canonical pipeline helpers: "
+                f"{missing_helpers}."
+            )
+        if not isinstance(mission_graph, nx.Graph) or node_id not in mission_graph:
+            raise RuntimeError(
+                f"Cannot construct room fallback for unknown graph node {node_id}."
+            )
+
+        room = np.full(
+            (ROOM_HEIGHT, ROOM_WIDTH),
+            int(SEMANTIC_PALETTE["FLOOR"]),
+            dtype=np.int32,
+        )
+        room, boundary_stats = pipeline._enforce_room_boundary_shell(
+            room,
+            graph=mission_graph,
+            room_id=node_id,
+        )
+        start_goal = pipeline._extract_room_start_goal(mission_graph, node_id)
+        room, marker_count, marker_ids = pipeline._overlay_room_graph_markers(
+            room,
+            graph=mission_graph,
+            room_id=node_id,
+            start_goal=start_goal,
+        )
+
+        room_plan_mask = None
+        if hasattr(pipeline, "_build_room_plan_trace"):
+            room_plan_mask = pipeline._build_room_plan_trace(
+                mission_graph,
+                node_id,
+                room,
+                start_goal=start_goal,
+            )
+        room, scaffold_stats = pipeline._apply_puzzle_room_scaffold(
+            room,
+            graph=mission_graph,
+            room_id=node_id,
+            room_plan_mask=room_plan_mask,
+            start_goal=start_goal,
+        )
+        # Puzzle construction may alter the interior, but the graph boundary
+        # remains the final authority for doors and locked-door tile types.
+        room, final_boundary_stats = pipeline._enforce_room_boundary_shell(
+            room,
+            graph=mission_graph,
+            room_id=node_id,
+        )
+        logger.warning(
+            "Constructed topology-preserving fallback for room %s "
+            "(markers=%d ids=%s scaffold_applied=%s boundary=%s final_boundary=%s)",
+            node_id,
+            int(marker_count),
+            marker_ids,
+            int(scaffold_stats.get("applied", 0) or 0),
+            boundary_stats,
+            final_boundary_stats,
+        )
+        return np.asarray(room, dtype=np.int32)
     
     def _generate_single_room_with_ml(
         self,
@@ -1735,18 +1823,19 @@ class AdvancedNeuralSymbolicPipeline:
             self._room_generation_fallbacks += 1
             logger.error(f"Failed to generate room {node_id} with ML pipeline: {e}")
             logger.warning(
-                "Using explicitly enabled bordered-room fallback for room %s",
+                "Using explicitly enabled topology-preserving fallback for room %s",
                 node_id,
             )
-            room = np.zeros((ROOM_HEIGHT, ROOM_WIDTH), dtype=int)
-            from src.core.definitions import SEMANTIC_PALETTE
-            # Create simple bordered room
-            room[:, :] = SEMANTIC_PALETTE['FLOOR']
-            room[0, :] = SEMANTIC_PALETTE['WALL']
-            room[-1, :] = SEMANTIC_PALETTE['WALL']
-            room[:, 0] = SEMANTIC_PALETTE['WALL']
-            room[:, -1] = SEMANTIC_PALETTE['WALL']
-            return room
+            try:
+                return self._build_topology_preserving_fallback_room(
+                    node_id=node_id,
+                    mission_graph=mission_graph,
+                )
+            except (AttributeError, RuntimeError, ValueError, TypeError) as fallback_error:
+                raise RuntimeError(
+                    f"Neural room generation and topology-preserving fallback both failed "
+                    f"for room {node_id}."
+                ) from fallback_error
     
     def _prepare_graph_context(self, mission_graph: nx.DiGraph) -> Dict[str, Any]:
         """Prepare graph context through the canonical conditioning schema."""

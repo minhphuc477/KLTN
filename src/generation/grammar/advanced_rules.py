@@ -19,11 +19,6 @@ from .graph_types import (
     MissionNode,
     NodeType,
 )
-from src.generation.grammar_validators import (
-    validate_battery_reachability,
-    validate_resource_loops,
-    validate_skill_chains,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -304,7 +299,8 @@ class AddBossGauntlet(ProductionRule):
         if not preds:
             return graph
         
-        pred = preds[0]
+        approach_nodes = sorted(set(preds))
+        pred = approach_nodes[0]
         goal_pos = goal.position
         # Create Boss Door and Boss chain directly so strict validation passes
         # without needing a later normalization pass.
@@ -346,7 +342,7 @@ class AddBossGauntlet(ProductionRule):
             if edge.target != goal.id and edge.source != goal.id
         ]
 
-        for source in sorted(set(preds)):
+        for source in approach_nodes:
             graph.add_edge(source, boss_door_id, EdgeType.BOSS_LOCKED, key_required=boss_door_id)
         graph.add_edge(boss_door_id, boss_id, EdgeType.PATH)
         graph.add_edge(boss_id, goal.id, EdgeType.PATH)
@@ -354,13 +350,16 @@ class AddBossGauntlet(ProductionRule):
         
         # Spawn Big Key in a node guaranteed reachable before the boss lock.
         start = graph.get_start_node()
-        excluded_edge = {(pred, boss_door_id)}
+        excluded_edges = {
+            (source, boss_door_id)
+            for source in approach_nodes
+        }
         excluded_nodes = {boss_door_id, goal.id}
         pre_lock_reachable: Set[int] = set()
         if start is not None:
             pre_lock_reachable = graph.get_reachable_nodes(
                 start.id,
-                excluded_edges=excluded_edge,
+                excluded_edges=excluded_edges,
                 excluded_nodes=excluded_nodes,
             )
 
@@ -372,7 +371,7 @@ class AddBossGauntlet(ProductionRule):
             while queue:
                 current = queue.popleft()
                 for neighbor in graph._adjacency.get(current, []):
-                    if (current, neighbor) in excluded_edge:
+                    if (current, neighbor) in excluded_edges:
                         continue
                     if neighbor in visited:
                         continue
@@ -395,8 +394,12 @@ class AddBossGauntlet(ProductionRule):
                 continue
             if node.node_type in {NodeType.GOAL, NodeType.BOSS_DOOR}:
                 continue
-            # Prefer placements that still allow returning to the boss approach.
-            if _reachable_without_edges(node_id, pred):
+            # Prefer placements that still allow returning to at least one
+            # boss approach without crossing any boss-door edge.
+            if any(
+                _reachable_without_edges(node_id, approach)
+                for approach in approach_nodes
+            ):
                 candidates.append(node_id)
 
         # Fallback to any pre-lock-reachable node if return path constraint is too strict.
@@ -411,8 +414,13 @@ class AddBossGauntlet(ProductionRule):
             dist_from_start = -1
             if start is not None:
                 dist_from_start = graph.get_shortest_path_length(start.id, node_id)
-            dist_to_pred = graph.get_shortest_path_length(node_id, pred)
-            return (max(0, dist_from_start), max(0, dist_to_pred))
+            approach_distances = [
+                graph.get_shortest_path_length(node_id, approach)
+                for approach in approach_nodes
+            ]
+            reachable_distances = [distance for distance in approach_distances if distance >= 0]
+            dist_to_approach = min(reachable_distances) if reachable_distances else -1
+            return (max(0, dist_from_start), max(0, dist_to_approach))
 
         anchor_id = max(candidates, key=_score)
         anchor = graph.nodes[anchor_id]
@@ -1615,9 +1623,26 @@ class AddCollectionChallengeRule(ProductionRule):
             graph.add_node(token_node)
             graph.add_edge(target_node_id, token_id, EdgeType.PATH)
             token_ids.append(token_id)
-        
+
+        def _rollback_tokens() -> None:
+            token_set = set(token_ids)
+            for token_id in token_set:
+                graph.nodes.pop(token_id, None)
+            graph.edges = [
+                edge
+                for edge in graph.edges
+                if edge.source not in token_set and edge.target not in token_set
+            ]
+            graph.sanitize()
+
         if len(token_ids) < 2:
-            return graph  # Not enough tokens placed
+            _rollback_tokens()
+            logger.debug(
+                "AddCollectionChallengeRule: Fewer than two usable branches; "
+                "rolled back %d token insert(s)",
+                len(token_ids),
+            )
+            return graph
         graph.sanitize()
         
         # Find an edge to convert to MULTI_LOCK (preferably near hub).
@@ -1652,15 +1677,7 @@ class AddCollectionChallengeRule(ProductionRule):
 
         # No valid lock edge: rollback token-only inserts so this rule remains
         # semantically meaningful (collection + gate), not pure rewards.
-        token_set = set(token_ids)
-        for token_id in token_set:
-            if token_id in graph.nodes:
-                del graph.nodes[token_id]
-        graph.edges = [
-            e for e in graph.edges
-            if e.source not in token_set and e.target not in token_set
-        ]
-        graph.sanitize()
+        _rollback_tokens()
         logger.debug(
             "AddCollectionChallengeRule: No pre-gate-valid MULTI_LOCK edge; rolled back %d tokens",
             len(token_ids),

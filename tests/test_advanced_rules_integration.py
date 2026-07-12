@@ -21,10 +21,9 @@ from pathlib import Path
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from typing import List, Dict
-
 from src.generation.grammar import (
     AddBossGauntlet,
+    AddCollectionChallengeRule,
     AddSecretRule,
     AddValveRule,
     CreateHubRule,
@@ -111,6 +110,89 @@ class TestAdvancedRulesIntegration:
         grammar = MissionGrammar(seed=42)
         assert grammar.validate_goal_gauntlet(updated)
         assert _positions_are_unique(updated)
+
+    def test_add_boss_gauntlet_keeps_big_key_before_every_boss_approach(self):
+        """No alternate approach may make the boss-key provider post-gate."""
+        graph = MissionGraph()
+        graph.add_node(MissionNode(id=0, node_type=NodeType.START, position=(0, 0, 0)))
+        graph.add_node(MissionNode(id=1, node_type=NodeType.ENEMY, position=(1, -1, 0)))
+        graph.add_node(MissionNode(id=2, node_type=NodeType.PUZZLE, position=(1, 1, 0)))
+        graph.add_node(MissionNode(id=3, node_type=NodeType.GOAL, position=(2, 0, 0)))
+        graph.add_edge(0, 1, EdgeType.PATH)
+        graph.add_edge(0, 2, EdgeType.PATH)
+        graph.add_edge(1, 3, EdgeType.PATH)
+        graph.add_edge(2, 3, EdgeType.PATH)
+
+        updated = AddBossGauntlet().apply(graph, {"rng": random.Random(5)})
+        boss_door = updated.get_nodes_by_type(NodeType.BOSS_DOOR)[0]
+        big_key = updated.get_nodes_by_type(NodeType.BIG_KEY)[0]
+        boss_edges = {
+            (edge.source, edge.target)
+            for edge in updated.edges
+            if edge.target == boss_door.id
+        }
+
+        reachable_pre_gate = updated.get_reachable_nodes(
+            0,
+            excluded_edges=boss_edges,
+            excluded_nodes={boss_door.id},
+        )
+        assert big_key.id in reachable_pre_gate
+
+    def test_lock_key_validation_rejects_mutually_locked_key_cycle(self):
+        """Each key being behind the other lock is a deadlock, not two valid local pairs."""
+        graph = MissionGraph()
+        graph.add_node(MissionNode(id=0, node_type=NodeType.START, position=(0, 0, 0)))
+        graph.add_node(MissionNode(id=1, node_type=NodeType.LOCK, position=(1, -1, 0), key_id=20))
+        graph.add_node(MissionNode(id=2, node_type=NodeType.KEY, position=(2, -1, 0), key_id=10))
+        graph.add_node(MissionNode(id=3, node_type=NodeType.LOCK, position=(1, 1, 0), key_id=10))
+        graph.add_node(MissionNode(id=4, node_type=NodeType.KEY, position=(2, 1, 0), key_id=20))
+        graph.add_node(MissionNode(id=5, node_type=NodeType.GOAL, position=(3, 0, 0)))
+        graph.add_edge(0, 1, EdgeType.PATH)
+        graph.add_edge(1, 2, EdgeType.PATH)
+        graph.add_edge(2, 5, EdgeType.PATH)
+        graph.add_edge(0, 3, EdgeType.PATH)
+        graph.add_edge(3, 4, EdgeType.PATH)
+        graph.add_edge(4, 5, EdgeType.PATH)
+
+        assert MissionGrammar(seed=7).validate_lock_key_ordering(
+            graph,
+            log_failures=False,
+        ) is False
+
+    def test_collection_challenge_is_atomic_when_no_gate_can_be_placed(self):
+        """A failed collection mechanic must not leave token-only graph mutations."""
+        graph = MissionGraph()
+        graph.add_node(MissionNode(id=0, node_type=NodeType.START, position=(0, 0, 0)))
+        for node_id, position in enumerate(
+            ((1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (1, 1, 0)),
+            start=1,
+        ):
+            graph.add_node(
+                MissionNode(
+                    id=node_id,
+                    node_type=NodeType.GOAL if node_id == 1 else NodeType.EMPTY,
+                    position=position,
+                )
+            )
+            graph.add_edge(0, node_id, EdgeType.PATH)
+        original_nodes = set(graph.nodes)
+        original_edges = {
+            (edge.source, edge.target, edge.edge_type)
+            for edge in graph.edges
+        }
+
+        updated = AddCollectionChallengeRule().apply(
+            graph,
+            {"rng": random.Random(11)},
+        )
+
+        assert set(updated.nodes) == original_nodes
+        assert {
+            (edge.source, edge.target, edge.edge_type)
+            for edge in updated.edges
+        } == original_edges
+        assert updated.get_nodes_by_type(NodeType.TOKEN) == []
 
     def test_insert_challenge_adjacent_edge_does_not_collide_with_source_room(self):
         graph = MissionGraph()

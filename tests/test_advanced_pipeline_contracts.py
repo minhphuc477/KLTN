@@ -3,7 +3,7 @@ import networkx as nx
 from types import SimpleNamespace
 
 from src.generation.style_transfer import ThemeType
-from src.core.definitions import SEMANTIC_PALETTE
+from src.core.definitions import DOOR_POSITIONS, SEMANTIC_PALETTE
 from src.generation.graph_constraint_enforcer import GraphConstraintEnforcer, enforce_all_rooms
 from src.simulation.edge_logic import can_traverse_edge_type, edge_type_from_data
 from src.simulation.validator import GameState, StateSpaceAStar, ZeldaLogicEnv, ZeldaValidator
@@ -156,6 +156,36 @@ def test_spatial_pipeline_rejects_multiple_unrepresentable_protection_identities
 
     with np.testing.assert_raises_regex(ValueError, "multiple named hazard protections"):
         pipeline._validate_spatial_mechanics(graph)
+
+
+def test_advanced_pipeline_fallback_preserves_locked_exit_and_key_marker():
+    """A neural failure fallback must still realize the mission graph physically."""
+    from src.pipeline.dungeon_pipeline import NeuralSymbolicDungeonPipeline
+
+    canonical = object.__new__(NeuralSymbolicDungeonPipeline)
+    canonical.default_puzzle_room_scaffold_enabled = False
+    canonical.default_semantic_puzzle_offset = 2
+    canonical.domain_schema = None
+
+    pipeline = object.__new__(AdvancedNeuralSymbolicPipeline)
+    pipeline.neural_pipeline = canonical
+    graph = nx.DiGraph()
+    graph.add_node(0, type="KEY", has_key=True, position=(0, 0, 0))
+    graph.add_node(1, type="GOAL", position=(1, 0, 0))
+    graph.add_edge(0, 1, edge_type="LOCKED")
+
+    room = pipeline._build_topology_preserving_fallback_room(
+        node_id=0,
+        mission_graph=graph,
+    )
+
+    south = DOOR_POSITIONS["S"]
+    south_strip = room[
+        int(south["row"]),
+        int(south["col_start"]):int(south["col_end"]) + 1,
+    ]
+    assert np.all(south_strip == int(SEMANTIC_PALETTE["DOOR_LOCKED"]))
+    assert int(np.sum(room == int(SEMANTIC_PALETTE["KEY_SMALL"]))) == 1
 
 
 def test_advanced_pipeline_disables_requested_lcm_without_real_backend():

@@ -112,6 +112,16 @@ _ENTITY_TILES: Set[int] = {
     TileType.PUZZLE.value,
 }
 
+# Entropy reset repairs local geometry. It must not mutate topology-owned
+# transitions or the global route endpoints, even when a failure mask is
+# dilated across them. Graph-owned room entities are reintroduced later by
+# the generation pipeline, but doors/start/goal are connectivity contracts.
+_IMMUTABLE_REPAIR_TILES: Set[int] = _DOOR_TILES | {
+    TileType.START.value,
+    TileType.TRIFORCE.value,
+    TileType.STAIR.value,
+}
+
 _SELF_ADJACENT_TILES: Set[int] = {
     TileType.VOID.value,
     TileType.FLOOR.value,
@@ -1640,6 +1650,11 @@ class SymbolicRefiner:
             # Create localized reset mask around failure points.
             mask = self.entropy_reset.create_mask(grid.shape[:2], failures)
             mask = self.entropy_reset.expand_mask(mask, iterations=1)
+            immutable_mask = np.isin(
+                current_grid,
+                np.fromiter(_IMMUTABLE_REPAIR_TILES, dtype=np.int32),
+            )
+            mask = mask & (~immutable_mask)
             if floor_mask is not None:
                 mask = mask & (~floor_mask)
             current_grid = _apply_required_floor_constraints(current_grid)
