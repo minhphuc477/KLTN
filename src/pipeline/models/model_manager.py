@@ -410,6 +410,12 @@ def load_diffusion(pipeline, checkpoint_path: Optional[str]) -> LatentDiffusionM
     ).strip().lower()
     model = LatentDiffusionModel(
         latent_dim=default_latent_dim,
+        latent_scale_factor=float(
+            checkpoint_config.get(
+                "latent_scale_factor",
+                fallback_config.get("latent_scale_factor", 1.0),
+            )
+        ),
         context_dim=default_context_dim,
         num_timesteps=int(checkpoint_config.get("num_timesteps", fallback_config.get("num_timesteps", 1000))),
         prediction_type=str(checkpoint_config.get("prediction_type", fallback_config.get("prediction_type", "epsilon"))),
@@ -592,10 +598,20 @@ def load_logic_net(pipeline, checkpoint_path: Optional[str]) -> Optional[LogicNe
     )
     model = LogicNet(
         latent_dim=default_latent_dim,
+        latent_scale_factor=float(
+            getattr(
+                getattr(pipeline, "diffusion", None),
+                "latent_scale_factor",
+                fallback_config.get("latent_scale_factor", 1.0),
+            )
+        ),
         num_classes=default_num_classes,
         num_iterations=int(fallback_config.get("num_logic_iterations", 20)),
         grid_pathfinder_type=str(fallback_config.get("logic_grid_pathfinder", "bellman_ford")),
+        resource_gate_mode=str(fallback_config.get("logic_resource_gate_mode", "hard_ordered")),
         full_coverage=bool(fallback_config.get("logic_full_coverage", True)),
+        initial_temperature=float(fallback_config.get("logic_initial_temperature", 1.0)),
+        final_temperature=float(fallback_config.get("logic_final_temperature", 0.05)),
         topology_trace_weight=float(fallback_config.get("logic_topology_trace_weight", 0.25)),
         topology_anchor_weight=float(fallback_config.get("logic_topology_anchor_weight", 0.25)),
         global_reach_weight=float(fallback_config.get("logic_global_reach_weight", 1.0)),
@@ -616,10 +632,19 @@ def load_logic_net(pipeline, checkpoint_path: Optional[str]) -> Optional[LogicNe
         architecture = metadata.get("architecture", {}) if isinstance(metadata, dict) else {}
         model = LogicNet(
             latent_dim=int(checkpoint_config.get("latent_dim", architecture.get("latent_dim", default_latent_dim))),
+            latent_scale_factor=float(
+                checkpoint_config.get(
+                    "latent_scale_factor",
+                    getattr(getattr(pipeline, "diffusion", None), "latent_scale_factor", 1.0),
+                )
+            ),
             num_classes=int(checkpoint_config.get("num_classes", architecture.get("num_classes", default_num_classes))),
             num_iterations=int(checkpoint_config.get("num_logic_iterations", 20)),
             grid_pathfinder_type=str(checkpoint_config.get("logic_grid_pathfinder", fallback_config.get("logic_grid_pathfinder", "bellman_ford"))),
+            resource_gate_mode=str(checkpoint_config.get("logic_resource_gate_mode", fallback_config.get("logic_resource_gate_mode", "hard_ordered"))),
             full_coverage=bool(checkpoint_config.get("logic_full_coverage", fallback_config.get("logic_full_coverage", True))),
+            initial_temperature=float(checkpoint_config.get("logic_initial_temperature", fallback_config.get("logic_initial_temperature", 1.0))),
+            final_temperature=float(checkpoint_config.get("logic_final_temperature", fallback_config.get("logic_final_temperature", 0.05))),
             topology_trace_weight=float(checkpoint_config.get("logic_topology_trace_weight", 0.25)),
             topology_anchor_weight=float(checkpoint_config.get("logic_topology_anchor_weight", 0.25)),
             global_reach_weight=float(checkpoint_config.get("logic_global_reach_weight", 1.0)),

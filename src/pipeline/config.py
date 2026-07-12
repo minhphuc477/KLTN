@@ -104,6 +104,7 @@ class GraphConfig:
     map_elites_archive_path: Optional[str] = None
     map_elites_load_archive: bool = False
     map_elites_autosave_archive: bool = False
+    map_elites_preference_buffer_size: int = 0
     use_graph_node_cross_attention: bool = True
     use_latent_boundary_masking: bool = True
     use_current_node_distance_features: bool = True

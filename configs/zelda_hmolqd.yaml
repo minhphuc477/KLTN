@@ -104,6 +104,7 @@ diffusion:
   keep_last: 2  # type=int, default=2, valid>=0; number of retained full-resume checkpoints besides latest_resume/best/final
   validation_fraction: 0.1  # type=float, default=0.1, valid=0..0.5; internal validation split drawn only from train_dungeons, never from Dungeon 9
   latent_dim: 64  # type=int, default=64, valid>=1
+  latent_scale_factor: 1.0  # type=float, default=1.0, valid>0; checkpointed ablation, set from corpus calibration rather than a single batch
   model_channels: 96  # type=int, default=128, valid>=8; recommended small-data-balanced setting for the current Zelda corpus
   context_dim: 256  # type=int, default=256, valid>=8
   denoiser_backbone: unet  # type=str, default=unet, valid={unet,dit}; DiT is a controlled ablation for flow-matching/backbone studies
@@ -166,8 +167,11 @@ diffusion:
   logic_learning_rate: null  # type=float|null, default=null, valid>=1e-8; optional LogicNet-specific LR
   logic_lr_warmup_epochs: 5  # type=int, default=5, valid>=0; linearly warm up only the LogicNet optimizer group
   logic_grid_pathfinder: bellman_ford  # type=str, default=bellman_ford, valid={cnn,bellman_ford,vin,perturb_and_map}; grid-pathfinder ablation
+  logic_resource_gate_mode: hard_ordered  # type=str, default=hard_ordered, valid={hard_ordered,soft_ordered}; explicit differentiable resource-rollout ablation
   logic_full_coverage: true  # type=bool, default=true; false is the explicitly truncated Bellman-planning ablation
   num_logic_iterations: 30  # type=int, default=30, valid>=1
+  logic_initial_temperature: 1.0  # type=float, default=1.0, valid>0; smooth start of the explicit annealing ablation
+  logic_final_temperature: 0.05  # type=float, default=0.05, valid>0; sharp endpoint of the explicit annealing ablation
   logic_topology_trace_weight: 0.25  # type=float, default=0.25, valid>=0; extra LogicNet pressure on mission-conditioned traversability traces
   logic_topology_anchor_weight: 0.25  # type=float, default=0.25, valid>=0; extra LogicNet pressure on start/goal/door anchor walkability
   logic_global_reach_weight: 1.0  # type=float, default=1.0, valid>=0; dungeon-level LogicNet mission-graph reachability pressure
@@ -240,6 +244,7 @@ generation:
   repair_inpaint_noise_strength: 0.5  # type=float, default=0.5, valid=0..1; latent noise strength for contradiction-region inpainting
   repair_inpaint_guidance_scale_multiplier: 1.0  # type=float, default=1.0, valid>=0; multiplier on LogicNet guidance during M3 repair inpainting
   enable_map_elites: false  # type=bool, default=false, valid={true,false}
+  map_elites_preference_buffer_size: 0  # type=int, default=0; set >0 only for same-graph multi-seed DPO data collection
   symbolic_max_repair_attempts: 5  # type=int, default=5, valid>=1; maximum post-generation symbolic repair passes per room
   symbolic_repair_margin: 2  # type=int, default=2, valid>=0; local margin used by symbolic repair when patching disconnected structure
   symbolic_adjacency_threshold: 0.01  # type=float, default=0.01, valid>=0; adjacency threshold used by symbolic repair connectivity checks
@@ -358,8 +363,11 @@ masked_room:
   logic_topology_trace_weight: 0.25  # type=float, default=0.25, valid>=0
   logic_topology_anchor_weight: 0.25  # type=float, default=0.25, valid>=0
   logic_grid_pathfinder: bellman_ford  # type=str, default=bellman_ford, valid={bellman_ford,conv,cnn,vin,learnable,perturb_and_map}
+  logic_resource_gate_mode: hard_ordered  # type=str, default=hard_ordered, valid={hard_ordered,soft_ordered}
   logic_full_coverage: true  # type=bool, default=true; false is the truncated Bellman-planning ablation
   num_logic_iterations: 30  # type=int, default=30, valid>=1
+  logic_initial_temperature: 1.0  # type=float, default=1.0, valid>0
+  logic_final_temperature: 0.05  # type=float, default=0.05, valid>0
   puzzle_structure_dropout_prob: 0.0  # type=float, default=0.0, valid=0..1; disabled until a solver-validated counterfactual compiler rewrites both grid and stage plan consistently
   puzzle_stage_conditioning_enabled: false  # type=bool, default=false, valid={true,false}; append ordered puzzle-stage tokens to masked-room conditioning for the staged-puzzle retrain only
   puzzle_stage_token_scale: 0.20  # type=float, default=0.20, valid=0..2; deterministic ordered stage token amplitude during masked-room training

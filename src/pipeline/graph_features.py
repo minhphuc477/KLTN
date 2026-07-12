@@ -13,12 +13,46 @@ import torch
 from src.core.definitions import (
     GRAPH_EDGE_FEATURE_DIM,
     GRAPH_NODE_FLOOR_FEATURE_INDEX,
+    GRAPH_NODE_FLOOR_NORMALIZATION_SCALE,
     GRAPH_NODE_FEATURE_DIM,
     GRAPH_TPE_DIM,
     parse_edge_type_tokens,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def extract_authoritative_floor_value(attrs: Mapping[str, Any]) -> Optional[float]:
+    """Return an explicitly supplied floor/z coordinate, if one exists.
+
+    Missing floor metadata must remain distinguishable from a real floor zero;
+    otherwise a partially labelled graph can masquerade as a multi-floor
+    training example after zero filling.
+    """
+    raw_value: Any = None
+    for floor_key in ("floor", "floor_id", "floor_level", "z"):
+        if floor_key in attrs and attrs.get(floor_key) is not None:
+            raw_value = attrs.get(floor_key)
+            break
+    if raw_value is None:
+        position = attrs.get("position", attrs.get("pos"))
+        if isinstance(position, (list, tuple, np.ndarray)) and len(position) > 2:
+            raw_value = position[2]
+    if raw_value is None:
+        return None
+    try:
+        value = float(raw_value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return value if np.isfinite(value) else None
+
+
+def normalize_floor_value(value: Optional[float]) -> float:
+    """Normalize an ordinal floor coordinate under the shared schema."""
+    if value is None:
+        return 0.0
+    scale = float(GRAPH_NODE_FLOOR_NORMALIZATION_SCALE)
+    return float(np.clip(float(value) / scale, -1.0, 1.0))
 
 
 def build_key_lock_pairs(
@@ -668,19 +702,7 @@ def extract_node_feature_vector(
         float(is_secret),
         float(is_hub),
     ]
-    floor_value: Any = None
-    for floor_key in ("floor", "floor_id", "floor_level", "z"):
-        if floor_key in attrs and attrs.get(floor_key) is not None:
-            floor_value = attrs.get(floor_key)
-            break
-    if floor_value is None:
-        position = attrs.get("position", attrs.get("pos"))
-        if isinstance(position, (list, tuple, np.ndarray)) and len(position) > 2:
-            floor_value = position[2]
-    try:
-        normalized_floor = float(np.clip(float(floor_value or 0.0) / 5.0, -1.0, 1.0))
-    except (TypeError, ValueError, OverflowError):
-        normalized_floor = 0.0
+    normalized_floor = normalize_floor_value(extract_authoritative_floor_value(attrs))
 
     features = base_features + extended_features
     if int(node_dim) > int(GRAPH_NODE_FLOOR_FEATURE_INDEX):

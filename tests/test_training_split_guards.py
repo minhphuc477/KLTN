@@ -118,7 +118,11 @@ def test_vqvae_evaluation_restores_training_mode():
 
 def test_floor_conditioning_rejects_single_floor_training_data():
     dataset = SimpleNamespace(
-        graphs=[{"node_features": torch.zeros(3, 15)}],
+        graphs=[{
+            "node_features": torch.zeros(3, 15),
+            "floor_values": [0.0, 0.0, 0.0],
+            "floor_labels_present": [True, True, True],
+        }],
     )
 
     with pytest.raises(ValueError, match="fewer than two distinct floor labels"):
@@ -128,7 +132,32 @@ def test_floor_conditioning_rejects_single_floor_training_data():
 def test_floor_conditioning_accepts_observed_multi_floor_signal():
     node_features = torch.zeros(3, 15)
     node_features[2, 14] = 0.2
-    dataset = SimpleNamespace(graphs=[{"node_features": node_features}])
+    dataset = SimpleNamespace(graphs=[{
+        "node_features": node_features,
+        "floor_values": [0.0, 0.0, 1.0],
+        "floor_labels_present": [True, True, True],
+    }])
 
     validate_floor_conditioning_signal(dataset, node_feature_dim=15)
     validate_floor_conditioning_signal(dataset, node_feature_dim=14)
+
+
+def test_floor_conditioning_rejects_only_cross_dungeon_floor_variation():
+    floor_zero = torch.zeros(2, 15)
+    floor_one = torch.zeros(2, 15)
+    floor_one[:, 14] = 0.2
+    dataset = SimpleNamespace(graphs=[
+        {
+            "node_features": floor_zero,
+            "floor_values": [0.0, 0.0],
+            "floor_labels_present": [True, True],
+        },
+        {
+            "node_features": floor_one,
+            "floor_values": [1.0, 1.0],
+            "floor_labels_present": [True, True],
+        },
+    ])
+
+    with pytest.raises(ValueError, match="within any one dungeon"):
+        validate_floor_conditioning_signal(dataset, node_feature_dim=15)

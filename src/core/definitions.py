@@ -244,6 +244,10 @@ GRAPH_NODE_FEATURE_DIM: int = 14
 # Optional multi-floor ablation appends normalized floor/z at this index.  The
 # default width remains 14 so existing checkpoints retain their exact shapes.
 GRAPH_NODE_FLOOR_FEATURE_INDEX: int = GRAPH_NODE_FEATURE_DIM
+# Floor is an ordinal coordinate, not a tile category. Keep its normalization
+# contract centralized so offline datasets and runtime graph contexts cannot
+# silently encode the same floor with different scales.
+GRAPH_NODE_FLOOR_NORMALIZATION_SCALE: float = 5.0
 GRAPH_EDGE_FEATURE_DIM: int = 16
 GRAPH_TPE_DIM: int = 8
 
@@ -709,6 +713,7 @@ __all__ = [
     'SLOT_WIDTH',
     'GRAPH_NODE_FEATURE_DIM',
     'GRAPH_NODE_FLOOR_FEATURE_INDEX',
+    'GRAPH_NODE_FLOOR_NORMALIZATION_SCALE',
     'GRAPH_EDGE_FEATURE_DIM',
     'GRAPH_TPE_DIM',
     'ROOM_TOPOLOGY_GATE_FAMILY_TOKENS',

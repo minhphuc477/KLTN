@@ -31,6 +31,7 @@ from src.core.definitions import (
     parse_node_label_tokens,
 )
 from src.simulation.validation_helpers import MetricsEngine
+from src.evaluation.preference_buffer import QDPreferenceBuffer
 
 try:
     from src.zelda_data.zelda_core import DungeonSolver
@@ -73,6 +74,7 @@ class MAPElitesEvaluator:
         archive_path: Optional[Union[str, Path]] = None,
         load_existing_archive: bool = False,
         autosave_archive: bool = False,
+        preference_buffer_size: int = 0,
     ):
         self.resolution = int(resolution)
         self.grid: Dict[Tuple[int, int], BinEntry] = {}
@@ -81,6 +83,10 @@ class MAPElitesEvaluator:
         self.rng = np.random.default_rng(seed)
         self.archive_path = Path(archive_path) if archive_path is not None else None
         self.autosave_archive = bool(autosave_archive)
+        self.preference_buffer = QDPreferenceBuffer(
+            max_candidates=int(max(0, preference_buffer_size)),
+            seed=seed,
+        )
 
         # Optional CVT archive (from src.evaluation.map_elites) to keep
         # grid-based and research-grade QD tracking aligned.
@@ -572,8 +578,29 @@ class MAPElitesEvaluator:
         grid: np.ndarray,
         solver_result: Dict[str, Any],
         mission_graph: Optional[nx.Graph] = None,
+        generated_rooms: Optional[Dict[Any, Any]] = None,
     ) -> Optional[Dict[str, float]]:
         # solver_result expected to contain 'solvable' and 'path_length' when solvable
+        if (
+            self.preference_buffer.enabled
+            and mission_graph is not None
+            and generated_rooms
+            and isinstance(solver_result, dict)
+        ):
+            quality_value = solver_result.get("quality_score")
+            try:
+                preference_score = float(quality_value)
+            except (TypeError, ValueError, OverflowError):
+                preference_score = 1.0 if bool(solver_result.get("solvable", False)) else 0.0
+            if not math.isfinite(preference_score):
+                preference_score = 1.0 if bool(solver_result.get("solvable", False)) else 0.0
+            self.preference_buffer.add_rooms(
+                generated_rooms,
+                mission_graph=mission_graph,
+                score=preference_score,
+                solvable=bool(solver_result.get("solvable", False)),
+                metadata=solver_result,
+            )
         if not solver_result or not solver_result.get('solvable', False):
             return None
 
@@ -643,6 +670,8 @@ class MAPElitesEvaluator:
         self.grid.clear()
         if self._advanced_archive is not None:
             self._advanced_archive.clear()
+        self.preference_buffer.candidates.clear()
+        self.preference_buffer.total_seen = 0
 
     def _archive_payload(self) -> Dict[str, Any]:
         return {
@@ -652,6 +681,7 @@ class MAPElitesEvaluator:
             'descriptor_mode': str(self.descriptor_mode),
             'grid': dict(self.grid),
             'advanced_archive': self._advanced_archive,
+            'preference_buffer': self.preference_buffer.state_dict(),
         }
 
     def save_archive(self, filepath: Optional[Union[str, Path]] = None) -> Path:
@@ -750,8 +780,23 @@ class MAPElitesEvaluator:
         advanced_archive = payload.get('advanced_archive')
         if advanced_archive is not None:
             self._advanced_archive = advanced_archive
+        preference_payload = payload.get("preference_buffer")
+        if isinstance(preference_payload, dict):
+            self.preference_buffer.load_state_dict(preference_payload)
         if discarded:
             logger.warning("Discarded %d invalid legacy MAP-Elites bin(s) from %s", discarded, path)
+
+    def export_dpo_preferences(
+        self,
+        filepath: Union[str, Path],
+        *,
+        min_score_margin: float = 0.05,
+    ) -> Path:
+        """Export same-graph, same-room raw pairs for downstream Diffusion-DPO preparation."""
+        return self.preference_buffer.export_raw_pairs(
+            filepath,
+            min_score_margin=float(min_score_margin),
+        )
 
     def advanced_archive_stats(self) -> Optional[Dict[str, float]]:
         """Return auxiliary CVT archive stats if enabled."""

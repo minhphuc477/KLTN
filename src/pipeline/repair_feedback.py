@@ -183,6 +183,8 @@ def logicnet_guided_inpaint_room(
 
     with torch.no_grad():
         z_0, _ = vqvae.encode(x_0)
+        if hasattr(diffusion, "scale_first_stage_latent"):
+            z_0 = diffusion.scale_first_stage_latent(z_0)
     latent_h, latent_w = int(z_0.shape[2]), int(z_0.shape[3])
     latent_mask = build_latent_edit_mask(
         mask_bool,
@@ -214,7 +216,12 @@ def logicnet_guided_inpaint_room(
         if old_guidance_scale is not None:
             guidance_module.guidance_scale = old_guidance_scale
     with torch.no_grad():
-        logits = vqvae.decode(z_inpaint)
+        decode_latent = (
+            diffusion.unscale_first_stage_latent(z_inpaint)
+            if hasattr(diffusion, "unscale_first_stage_latent")
+            else z_inpaint
+        )
+        logits = vqvae.decode(decode_latent)
     inpainted_grid = logits.argmax(dim=1).detach().cpu().numpy()[0]
 
     keep = ~mask_bool

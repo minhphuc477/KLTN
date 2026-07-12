@@ -16,7 +16,7 @@ if str(ROOT) not in sys.path:
 
 from src.core.latent_diffusion import LatentDiffusionModel, create_latent_diffusion
 from src.train_diffusion import DiffusionTrainingConfig
-from src.utils.checkpoint import safe_torch_load
+from src.utils.checkpoint import atomic_torch_save, checkpoint_sha256, safe_torch_load
 
 try:
     from accelerate import Accelerator
@@ -56,40 +56,50 @@ def _dpo_metrics_payload(
 
 
 def _load_model_from_checkpoint(path: Path, config: DiffusionTrainingConfig) -> LatentDiffusionModel:
-    model = create_latent_diffusion(
-        latent_dim=config.latent_dim,
-        model_channels=config.model_channels,
-        context_dim=config.context_dim,
-        denoiser_backbone=config.denoiser_backbone,
-        unet_channel_mult=config.unet_channel_mult,
-        unet_num_res_blocks=config.unet_num_res_blocks,
-        unet_attention_resolutions=config.unet_attention_resolutions,
-        unet_num_heads=config.unet_num_heads,
-        unet_dropout=config.unet_dropout,
-        dit_depth=config.dit_depth,
-        dit_patch_size=config.dit_patch_size,
-        dit_mlp_ratio=config.dit_mlp_ratio,
-        num_timesteps=config.num_timesteps,
-        schedule_type=config.schedule_type,
-        prediction_type=config.prediction_type,
-        cfg_dropout_prob=config.cfg_dropout_prob,
-        cfg_scale=config.cfg_scale,
-        pag_scale=config.pag_scale,
-        min_snr_gamma=config.min_snr_gamma,
-        topology_refinement_mode=config.topology_refinement_mode,
-        attention_mode=config.attention_mode,
-        topology_conditioning_mode=config.topology_conditioning_mode,
-        hedgehog_feature_dim=config.hedgehog_feature_dim,
-        graph_auto_linear_attention_nodes=config.graph_auto_linear_attention_nodes,
-        spatial_graph_gate_init=config.spatial_graph_gate_init,
-        spatial_topology_gate_init=config.spatial_topology_gate_init,
-        room_topology_channels=config.room_topology_channels,
-    )
     checkpoint = safe_torch_load(str(path), map_location="cpu")
+    checkpoint_config = checkpoint.get("config", {}) if isinstance(checkpoint, dict) else {}
+    if not isinstance(checkpoint_config, dict):
+        checkpoint_config = {}
+
+    def _saved(name: str, fallback: Any) -> Any:
+        return checkpoint_config.get(name, fallback)
+    model = create_latent_diffusion(
+        latent_dim=int(_saved("latent_dim", config.latent_dim)),
+        latent_scale_factor=float(_saved("latent_scale_factor", config.latent_scale_factor)),
+        model_channels=int(_saved("model_channels", config.model_channels)),
+        context_dim=int(_saved("context_dim", config.context_dim)),
+        denoiser_backbone=str(_saved("denoiser_backbone", config.denoiser_backbone)),
+        unet_channel_mult=tuple(_saved("unet_channel_mult", config.unet_channel_mult)),
+        unet_num_res_blocks=int(_saved("unet_num_res_blocks", config.unet_num_res_blocks)),
+        unet_attention_resolutions=tuple(_saved("unet_attention_resolutions", config.unet_attention_resolutions)),
+        unet_num_heads=int(_saved("unet_num_heads", config.unet_num_heads)),
+        unet_dropout=float(_saved("unet_dropout", config.unet_dropout)),
+        dit_depth=int(_saved("dit_depth", config.dit_depth)),
+        dit_patch_size=int(_saved("dit_patch_size", config.dit_patch_size)),
+        dit_mlp_ratio=float(_saved("dit_mlp_ratio", config.dit_mlp_ratio)),
+        num_timesteps=int(_saved("num_timesteps", config.num_timesteps)),
+        schedule_type=str(_saved("schedule_type", config.schedule_type)),
+        prediction_type=str(_saved("prediction_type", config.prediction_type)),
+        cfg_dropout_prob=float(_saved("cfg_dropout_prob", config.cfg_dropout_prob)),
+        cfg_scale=float(_saved("cfg_scale", config.cfg_scale)),
+        pag_scale=float(_saved("pag_scale", config.pag_scale)),
+        min_snr_gamma=float(_saved("min_snr_gamma", config.min_snr_gamma)),
+        topology_refinement_mode=str(_saved("topology_refinement_mode", config.topology_refinement_mode)),
+        attention_mode=str(_saved("attention_mode", config.attention_mode)),
+        topology_conditioning_mode=str(_saved("topology_conditioning_mode", config.topology_conditioning_mode)),
+        hedgehog_feature_dim=int(_saved("hedgehog_feature_dim", config.hedgehog_feature_dim)),
+        graph_auto_linear_attention_nodes=int(_saved("graph_auto_linear_attention_nodes", config.graph_auto_linear_attention_nodes)),
+        spatial_graph_gate_init=float(_saved("spatial_graph_gate_init", config.spatial_graph_gate_init)),
+        spatial_topology_gate_init=float(_saved("spatial_topology_gate_init", config.spatial_topology_gate_init)),
+        room_topology_channels=int(_saved("room_topology_channels", config.room_topology_channels)),
+        training_objective=str(
+            _saved("diffusion_training_objective", _saved("training_objective", "diffusion"))
+        ),
+    )
     state = checkpoint.get("ema_diffusion_state_dict") or checkpoint.get("diffusion_state_dict") or checkpoint
     if not isinstance(state, dict):
         raise ValueError(f"Checkpoint {path} does not contain a diffusion state dict.")
-    model.load_state_dict(state, strict=False)
+    model.load_state_dict(state, strict=True)
     return model
 
 
@@ -110,9 +120,20 @@ def _load_preference_payload(path: Path, device: torch.device) -> Dict[str, Any]
     if not isinstance(payload, dict):
         raise ValueError("Preference payload must be a dict with preferred, rejected, and context tensors.")
     required = {"preferred", "rejected", "context"}
-    missing = sorted(required - set(payload))
-    if missing:
-        raise ValueError(f"Preference payload is missing required keys: {missing}")
+    examples = payload.get("examples")
+    if isinstance(examples, list):
+        if not examples:
+            raise ValueError("Preference payload examples list is empty.")
+        for index, example in enumerate(examples):
+            if not isinstance(example, dict):
+                raise ValueError(f"Preference example {index} must be a dict.")
+            missing = sorted(required - set(example))
+            if missing:
+                raise ValueError(f"Preference example {index} is missing required keys: {missing}")
+    else:
+        missing = sorted(required - set(payload))
+        if missing:
+            raise ValueError(f"Preference payload is missing required keys: {missing}")
     return {key: _to_device(value, device) for key, value in payload.items()}
 
 
@@ -128,17 +149,27 @@ def run_dpo(args: argparse.Namespace) -> Dict[str, float]:
         if accelerator is not None and str(args.device).strip().lower() == "auto"
         else torch.device("cuda" if str(args.device).strip().lower() == "auto" and torch.cuda.is_available() else args.device)
     )
-    config = DiffusionTrainingConfig(
-        denoiser_backbone=args.denoiser_backbone,
-        latent_dim=args.latent_dim,
-        model_channels=args.model_channels,
-        context_dim=args.context_dim,
-        unet_num_heads=args.num_heads,
-        dit_depth=args.dit_depth,
-        dit_patch_size=args.dit_patch_size,
-        num_timesteps=args.num_timesteps,
-        prediction_type=args.prediction_type,
+    checkpoint_path = Path(args.checkpoint)
+    base_checkpoint = (
+        safe_torch_load(str(checkpoint_path), map_location="cpu")
+        if checkpoint_path.exists()
+        else None
     )
+    saved_config = base_checkpoint.get("config") if isinstance(base_checkpoint, dict) else None
+    if isinstance(saved_config, dict):
+        config = DiffusionTrainingConfig.from_dict(saved_config)
+    else:
+        config = DiffusionTrainingConfig(
+            denoiser_backbone=args.denoiser_backbone,
+            latent_dim=args.latent_dim,
+            model_channels=args.model_channels,
+            context_dim=args.context_dim,
+            unet_num_heads=args.num_heads,
+            dit_depth=args.dit_depth,
+            dit_patch_size=args.dit_patch_size,
+            num_timesteps=args.num_timesteps,
+            prediction_type=args.prediction_type,
+        )
     model = _load_model_from_checkpoint(Path(args.checkpoint), config).to(device)
     model.train()
 
@@ -150,25 +181,47 @@ def run_dpo(args: argparse.Namespace) -> Dict[str, float]:
             param.requires_grad_(False)
 
     payload = _load_preference_payload(Path(args.preference_pairs), device=device)
+    provenance = payload.get("provenance")
+    if isinstance(provenance, dict) and provenance.get("diffusion_sha256"):
+        expected_sha = str(provenance["diffusion_sha256"])
+        actual_sha = checkpoint_sha256(Path(args.checkpoint))
+        if actual_sha != expected_sha:
+            raise ValueError(
+                "Preference latents were prepared for a different diffusion checkpoint: "
+                f"expected sha256={expected_sha}, got {actual_sha}."
+            )
+    config.latent_scale_factor = float(
+        getattr(model, "latent_scale_factor", config.latent_scale_factor)
+    )
+    examples = payload.get("examples")
+    if not isinstance(examples, list):
+        examples = [payload]
     optimizer = torch.optim.AdamW(model.parameters(), lr=float(args.learning_rate), weight_decay=float(args.weight_decay))
     if accelerator is not None:
         model, optimizer = accelerator.prepare(model, optimizer)
     metrics: Dict[str, float] = {}
+    accumulation_steps = max(1, int(args.gradient_accumulation_steps))
+    pending_micro_batches = 0
+    if accelerator is None:
+        optimizer.zero_grad(set_to_none=True)
     for step in range(int(args.steps)):
+        example = examples[step % len(examples)]
         accumulate_ctx = accelerator.accumulate(model) if accelerator is not None else torch.enable_grad()
         with accumulate_ctx:
-            optimizer.zero_grad(set_to_none=True)
+            if accelerator is not None:
+                optimizer.zero_grad(set_to_none=True)
             loss, aux = model(
-                payload["preferred"],
-                payload["rejected"],
-                payload["context"],
+                example["preferred"],
+                example["rejected"],
+                example["context"],
                 reference_model=reference_model,
                 beta=float(args.beta),
-                graph_data=payload.get("graph_data") if isinstance(payload.get("graph_data"), dict) else None,
+                graph_data=example.get("graph_data") if isinstance(example.get("graph_data"), dict) else None,
                 forward_mode="dpo_preference_loss",
             )
             if not _tensor_is_finite(loss):
                 optimizer.zero_grad(set_to_none=True)
+                pending_micro_batches = 0
                 metrics = _dpo_metrics_payload(loss, aux, skipped_nonfinite_batch=True)
                 if accelerator is None or accelerator.is_main_process:
                     print({"step": step, "skipped": "nonfinite_loss", **metrics})
@@ -191,10 +244,19 @@ def run_dpo(args: argparse.Namespace) -> Dict[str, float]:
                             print({"step": step, "skipped": "nonfinite_clipped_grad_norm", **metrics})
                         continue
             else:
-                loss.backward()
+                (loss / float(accumulation_steps)).backward()
+                pending_micro_batches += 1
+                should_step = (
+                    pending_micro_batches >= accumulation_steps
+                    or step + 1 >= int(args.steps)
+                )
+                if not should_step:
+                    metrics = _dpo_metrics_payload(loss, aux, skipped_nonfinite_batch=False)
+                    continue
                 params = list(model.parameters())
                 if not _gradients_are_finite(params):
                     optimizer.zero_grad(set_to_none=True)
+                    pending_micro_batches = 0
                     metrics = _dpo_metrics_payload(loss, aux, skipped_nonfinite_batch=True)
                     print({"step": step, "skipped": "nonfinite_gradient", **metrics})
                     continue
@@ -202,10 +264,14 @@ def run_dpo(args: argparse.Namespace) -> Dict[str, float]:
                     grad_norm = torch.nn.utils.clip_grad_norm_(params, float(args.grad_clip_norm))
                     if not _tensor_is_finite(grad_norm):
                         optimizer.zero_grad(set_to_none=True)
+                        pending_micro_batches = 0
                         metrics = _dpo_metrics_payload(loss, aux, skipped_nonfinite_batch=True)
                         print({"step": step, "skipped": "nonfinite_clipped_grad_norm", **metrics})
                         continue
             optimizer.step()
+            if accelerator is None:
+                optimizer.zero_grad(set_to_none=True)
+                pending_micro_batches = 0
         metrics = _dpo_metrics_payload(loss, aux, skipped_nonfinite_batch=False)
         is_main = bool(accelerator is None or accelerator.is_main_process)
         if is_main and step % max(1, int(args.log_every)) == 0:
@@ -215,7 +281,7 @@ def run_dpo(args: argparse.Namespace) -> Dict[str, float]:
         accelerator.wait_for_everyone()
     if args.output_checkpoint and bool(accelerator is None or accelerator.is_main_process):
         state_dict = accelerator.get_state_dict(model) if accelerator is not None else model.state_dict()
-        torch.save(
+        atomic_torch_save(
             {
                 "diffusion_state_dict": state_dict,
                 "dpo_metrics": metrics,

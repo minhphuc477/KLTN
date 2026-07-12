@@ -698,7 +698,12 @@ def sample_tile_grid(diffusion, vqvae, conditioning, num_nodes, torch_module, np
             raise ValueError(f"Unsupported diffusion training_objective={training_objective!r}")
         target_h = lat_h * 4
         target_w = lat_w * 4
-        recon = vqvae.decode(latent, target_size=(target_h, target_w))
+        decode_latent = (
+            diffusion.unscale_first_stage_latent(latent)
+            if hasattr(diffusion, "unscale_first_stage_latent")
+            else latent
+        )
+        recon = vqvae.decode(decode_latent, target_size=(target_h, target_w))
         tile_grid = recon.argmax(dim=1).squeeze(0).cpu().numpy().astype(np_module.int32)
 
     height, width = tile_grid.shape

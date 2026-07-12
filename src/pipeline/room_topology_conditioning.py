@@ -301,7 +301,12 @@ def _classify_puzzle_stage_gate_family(
     return "generic"
 
 
-def _sequence_anchor_to_stage_kind(anchor_name: str, gate_family: str) -> str:
+def _sequence_anchor_to_stage_kind(
+    anchor_name: str,
+    gate_family: str,
+    *,
+    puzzle_structure_enabled: bool = False,
+) -> str:
     normalized = str(anchor_name).strip().lower()
     if normalized == "key":
         return "collect_key"
@@ -310,7 +315,10 @@ def _sequence_anchor_to_stage_kind(anchor_name: str, gate_family: str) -> str:
     if normalized in {"enemy", "boss"}:
         return "defeat_enemy"
     if normalized == "puzzle":
-        if str(gate_family or "generic").strip().lower() in {"switch", "toggle"}:
+        if (
+            bool(puzzle_structure_enabled)
+            and str(gate_family or "generic").strip().lower() in {"switch", "toggle"}
+        ):
             return "push_block_to_switch"
         return "step_on_puzzle"
     return "reach_exit"
@@ -1200,6 +1208,7 @@ def build_validator_room_plan_trace_mask(
     }
     role_flags = {str(key): bool(value) for key, value in dict(room_role_flags or {}).items()}
     gate_family = _classify_puzzle_stage_gate_family(normalized_tokens, role_flags)
+    puzzle_structure_enabled = infer_puzzle_room_structure_enabled(room_grid, role_flags)
 
     sequences = _build_validator_sequences(
         anchors=anchors,
@@ -1226,13 +1235,20 @@ def build_validator_room_plan_trace_mask(
             if goal_anchor is None:
                 sequence_ok = False
                 break
-            stage_kind = _sequence_anchor_to_stage_kind(str(anchor_name), gate_family)
+            stage_kind = _sequence_anchor_to_stage_kind(
+                str(anchor_name),
+                gate_family,
+                puzzle_structure_enabled=puzzle_structure_enabled,
+            )
             goal_predicate = None
             if stage_kind == "push_block_to_switch":
-                goal_predicate = lambda candidate_state, anchor=goal_anchor: any(
-                    tuple(destination) == tuple(anchor)
-                    for _origin, destination in candidate_state.pushed_blocks
-                )
+                def _block_reached_switch(candidate_state: GameState, anchor=goal_anchor) -> bool:
+                    return any(
+                        tuple(destination) == tuple(anchor)
+                        for _origin, destination in candidate_state.pushed_blocks
+                    )
+
+                goal_predicate = _block_reached_switch
             result = _room_local_state_search(
                 env,
                 state,
@@ -1438,6 +1454,7 @@ def build_puzzle_stage_condition_metadata(
     room_role_flags: Optional[Mapping[str, bool]] = None,
     anchors: Optional[Mapping[str, Tuple[int, int]]] = None,
     room_grid: Optional[np.ndarray] = None,
+    puzzle_structure_enabled: Optional[bool] = None,
     validator_plan_max_states: int = DEFAULT_VALIDATOR_PLAN_MAX_STATES,
     semantic_puzzle_offset: int = DEFAULT_SEMANTIC_PUZZLE_OFFSET,
     stage_trace_decay: float = DEFAULT_PUZZLE_STAGE_TRACE_DECAY,
@@ -1530,6 +1547,12 @@ def build_puzzle_stage_condition_metadata(
     )
 
     gate_family = _classify_puzzle_stage_gate_family(normalized_tokens, role_flags)
+    if puzzle_structure_enabled is None:
+        puzzle_structure_enabled = (
+            infer_puzzle_room_structure_enabled(np.asarray(room_grid), role_flags)
+            if room_grid is not None
+            else bool(role_flags.get("puzzle_room_structure_enabled", False))
+        )
     stage_sequence: List[Dict[str, Any]] = []
     for stage_index, name in enumerate(canonical_sequence[1:]):
         anchor = semantic_anchors.get(str(name))
@@ -1539,7 +1562,11 @@ def build_puzzle_stage_condition_metadata(
             {
                 "stage_index": int(stage_index),
                 "name": str(name),
-                "kind": _sequence_anchor_to_stage_kind(str(name), gate_family),
+                "kind": _sequence_anchor_to_stage_kind(
+                    str(name),
+                    gate_family,
+                    puzzle_structure_enabled=bool(puzzle_structure_enabled),
+                ),
                 "local_anchor": [int(anchor[0]), int(anchor[1])],
                 "anchor_source": str(anchor_sources.get(str(name), "heuristic")),
                 "anchor_grounded": bool(anchor_sources.get(str(name)) == "observed"),
@@ -1581,10 +1608,13 @@ def build_puzzle_stage_condition_metadata(
                 # state transition that opens a switch door.
                 goal_predicate = None
                 if stage_kind == "push_block_to_switch":
-                    goal_predicate = lambda candidate_state, anchor=goal_anchor: any(
-                        tuple(destination) == tuple(anchor)
-                        for _origin, destination in candidate_state.pushed_blocks
-                    )
+                    def _block_reached_switch(candidate_state: GameState, anchor=goal_anchor) -> bool:
+                        return any(
+                            tuple(destination) == tuple(anchor)
+                            for _origin, destination in candidate_state.pushed_blocks
+                        )
+
+                    goal_predicate = _block_reached_switch
                 result = _room_local_state_search(
                     env,
                     state,
@@ -1649,6 +1679,7 @@ def build_room_topology_condition_map(
     validator_plan_max_states: int = DEFAULT_VALIDATOR_PLAN_MAX_STATES,
     puzzle_stage_topology_enabled: bool = False,
     puzzle_stage_trace_decay: float = DEFAULT_PUZZLE_STAGE_TRACE_DECAY,
+    puzzle_structure_enabled: Optional[bool] = None,
 ) -> np.ndarray:
     """
     Build a dense [C, H, W] topology prior for a single room.
@@ -1706,6 +1737,7 @@ def build_room_topology_condition_map(
             validator_plan_max_states=int(validator_plan_max_states),
             semantic_puzzle_offset=int(max(0, semantic_puzzle_offset)),
             stage_trace_decay=float(puzzle_stage_trace_decay),
+            puzzle_structure_enabled=puzzle_structure_enabled,
         )
         stage_trace = stage_metadata.get("stage_trace_mask")
         if isinstance(stage_trace, np.ndarray) and stage_trace.shape == (h, w) and bool(np.any(stage_trace > 0)):

@@ -2919,10 +2919,17 @@ class LatentDiffusionModel(nn.Module):
         training_objective: str = "diffusion",
         dit_activation_type: str = "gelu",
         dit_norm_type: str = "layer",
+        latent_scale_factor: float = 1.0,
     ):
         super().__init__()
         
         self.latent_dim = latent_dim
+        self.latent_scale_factor = float(latent_scale_factor)
+        if not math.isfinite(self.latent_scale_factor) or self.latent_scale_factor <= 0.0:
+            raise ValueError(
+                "latent_scale_factor must be a finite positive value, "
+                f"got {latent_scale_factor!r}."
+            )
         self.context_dim = context_dim
         self.num_timesteps = num_timesteps
         self.cfg_dropout_prob = cfg_dropout_prob
@@ -2943,6 +2950,7 @@ class LatentDiffusionModel(nn.Module):
             raise ValueError(
                 f"training_objective must be 'diffusion' or 'flow_matching', got {training_objective!r}."
             )
+
         if self.topology_conditioning_mode not in {"additive", "spade"}:
             raise ValueError(
                 "topology_conditioning_mode must be 'additive' or 'spade'. "
@@ -3033,6 +3041,14 @@ class LatentDiffusionModel(nn.Module):
         self.register_buffer('posterior_variance', posterior_variance)
         self.register_buffer('posterior_log_variance', torch.log(torch.clamp(posterior_variance, min=1e-20)))
         self._compiled_for_inference = False
+
+    def scale_first_stage_latent(self, latent: torch.Tensor) -> torch.Tensor:
+        """Map a raw VQ-VAE latent into the diffusion model's training space."""
+        return latent * self.latent_scale_factor
+
+    def unscale_first_stage_latent(self, latent: torch.Tensor) -> torch.Tensor:
+        """Map a diffusion-space latent back to the frozen VQ-VAE decoder space."""
+        return latent / self.latent_scale_factor
 
     def compile_for_inference(self, *, mode: str = "reduce-overhead") -> bool:
         """
@@ -4790,6 +4806,7 @@ def create_latent_diffusion(
     spatial_graph_gate_init: float = -2.0,
     spatial_topology_gate_init: float = -2.0,
     training_objective: str = "diffusion",
+    latent_scale_factor: float = 1.0,
     **kwargs,
 ) -> LatentDiffusionModel:
     """
@@ -4797,6 +4814,7 @@ def create_latent_diffusion(
     
     Args:
         latent_dim: VQ-VAE latent dimension
+        latent_scale_factor: Multiplier from raw VQ-VAE latents to diffusion space
         context_dim: Conditioning dimension
         num_timesteps: Number of diffusion steps
         prediction_type: 'epsilon' or 'v' (v-prediction, Salimans & Ho 2022)
@@ -4813,6 +4831,7 @@ def create_latent_diffusion(
     """
     return LatentDiffusionModel(
         latent_dim=latent_dim,
+        latent_scale_factor=latent_scale_factor,
         context_dim=context_dim,
         num_timesteps=num_timesteps,
         prediction_type=prediction_type,

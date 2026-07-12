@@ -722,7 +722,9 @@ class ConsistencyLoRATrainer:
         student_logits = None
         if self.config.decode_alignment_weight > 0.0:
             target_tiles = self._room_tile_targets(real_maps)
-            student_logits = self.base_bundle.vqvae.decode(student_x0)
+            student_logits = self.base_bundle.vqvae.decode(
+                self.base_bundle.diffusion.unscale_first_stage_latent(student_x0)
+            )
             decode_ce_loss = F.cross_entropy(student_logits, target_tiles)
             focus_map = self._topology_focus_map(graph_list, batch_size, device=target_tiles.device)
             if focus_map is not None and bool((focus_map > 0).any()):
@@ -731,14 +733,18 @@ class ConsistencyLoRATrainer:
                 topology_decode_ce_loss = (ce_map * focus_map).sum() / denom
         elif self.config.topology_alignment_weight > 0.0:
             target_tiles = self._room_tile_targets(real_maps)
-            student_logits = self.base_bundle.vqvae.decode(student_x0)
+            student_logits = self.base_bundle.vqvae.decode(
+                self.base_bundle.diffusion.unscale_first_stage_latent(student_x0)
+            )
             focus_map = self._topology_focus_map(graph_list, batch_size, device=target_tiles.device)
             if focus_map is not None and bool((focus_map > 0).any()):
                 ce_map = F.cross_entropy(student_logits, target_tiles, reduction="none")
                 denom = focus_map.sum().clamp(min=1.0)
                 topology_decode_ce_loss = (ce_map * focus_map).sum() / denom
         if student_logits is None and float(getattr(self.config, "puzzle_stage_semantics_loss_weight", 0.0)) > 0.0:
-            student_logits = self.base_bundle.vqvae.decode(student_x0)
+            student_logits = self.base_bundle.vqvae.decode(
+                self.base_bundle.diffusion.unscale_first_stage_latent(student_x0)
+            )
         puzzle_stage_semantic_loss, puzzle_stage_semantic_metrics = self._puzzle_stage_semantic_loss(
             tile_logits=student_logits,
             graph_list=graph_list,
@@ -930,7 +936,9 @@ class ConsistencyLoRATrainer:
         student_logits = None
         if self.config.decode_alignment_weight > 0.0:
             target_tiles = self._room_tile_targets(real_maps)
-            student_logits = self.base_bundle.vqvae.decode(student_x0)
+            student_logits = self.base_bundle.vqvae.decode(
+                self.base_bundle.diffusion.unscale_first_stage_latent(student_x0)
+            )
             decode_ce_loss = F.cross_entropy(student_logits, target_tiles)
             focus_map = self._topology_focus_map(graph_list, batch_size, device=target_tiles.device)
             if focus_map is not None and bool((focus_map > 0).any()):
@@ -939,14 +947,18 @@ class ConsistencyLoRATrainer:
                 topology_decode_ce_loss = (ce_map * focus_map).sum() / denom
         elif self.config.topology_alignment_weight > 0.0:
             target_tiles = self._room_tile_targets(real_maps)
-            student_logits = self.base_bundle.vqvae.decode(student_x0)
+            student_logits = self.base_bundle.vqvae.decode(
+                self.base_bundle.diffusion.unscale_first_stage_latent(student_x0)
+            )
             focus_map = self._topology_focus_map(graph_list, batch_size, device=target_tiles.device)
             if focus_map is not None and bool((focus_map > 0).any()):
                 ce_map = F.cross_entropy(student_logits, target_tiles, reduction="none")
                 denom = focus_map.sum().clamp(min=1.0)
                 topology_decode_ce_loss = (ce_map * focus_map).sum() / denom
         if student_logits is None and float(getattr(self.config, "puzzle_stage_semantics_loss_weight", 0.0)) > 0.0:
-            student_logits = self.base_bundle.vqvae.decode(student_x0)
+            student_logits = self.base_bundle.vqvae.decode(
+                self.base_bundle.diffusion.unscale_first_stage_latent(student_x0)
+            )
         puzzle_stage_semantic_loss, semantic_metrics_full = self._puzzle_stage_semantic_loss(
             tile_logits=student_logits,
             graph_list=graph_list,

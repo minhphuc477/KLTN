@@ -1153,3 +1153,134 @@ schema-validated, cached JSON linked to immutable mission-node IDs; it must not
 modify locks, keys, puzzle stages, or solvability after validation. Evaluation
 requires blinded human ratings of coherence, controllability, and repetition,
 plus a no-narrative control. It is not part of the current mechanical claim.
+
+### Model And Self-Correction Pass (2026-07-12)
+
+Implemented contracts:
+
+- Latent diffusion now has an explicit `latent_scale_factor`. Raw VQ-VAE
+  latents are multiplied before diffusion and divided before every production
+  VQ decode, including LCM alignment, neural inpainting, autoregressive neighbor
+  caching, and preference preparation. The default is `1.0`, so existing
+  checkpoints retain their original geometry. New scaled runs must use
+  `scripts/calibrate_vqvae_latent_scale.py` over the declared training corpus
+  and store the measured reciprocal standard deviation in config. Automatic
+  first-batch calibration was rejected because it is order- and rank-dependent.
+  This follows the symmetric encode/decode scale contract in the
+  [CompVis LDM implementation](https://github.com/CompVis/latent-diffusion/blob/main/ldm/models/diffusion/ddpm.py)
+  and remains an ablation, not a presumed universal improvement.
+- LogicNet node passability no longer multiplies ordinary probabilities by its
+  one-million infinity sentinel. It uses a negative-log traversal barrier
+  scaled to the reachability horizon, restoring graph-loss gradients for values
+  throughout `(0, 1]`. A direct probe confirmed non-zero graph gradients for
+  intermediate room passabilities.
+- `logic_resource_gate_mode={hard_ordered,soft_ordered}` is wired through
+  diffusion, MaskGIT, checkpoint reconstruction, runtime fallback config, YAML,
+  and CLI. `soft_ordered` differentiably composes key reachability and supports
+  conjunctive multi-token providers; `hard_ordered` preserves the prior
+  discrete rollout as the baseline. This is closer to an explicit planning
+  computation such as [Value Iteration Networks](https://papers.nips.cc/paper/2016/hash/c21002f464c5fc5bee3b98ced83963b8-Abstract.html),
+  but it is not called Neural A*: that method requires supervised path traces
+  and a differentiable search objective
+  ([Yonetani et al., 2021](https://proceedings.mlr.press/v139/yonetani21a.html)).
+- The final state-space validator now receives the exact stitched graph,
+  room/node mapping, room offsets, and puzzle metadata. Its public result
+  records final inventory and distinct path interactions, so a real integration
+  protocol can verify key and lock usage rather than inferring it from graph
+  labels.
+- `scripts/run_master_pipeline_integration.py` is the strict artifact protocol:
+  it builds exactly 20 mission nodes and three lock/key stages, requires real
+  VQ-VAE/diffusion/condition/LogicNet checkpoints, probes condition-encoder
+  gradients, runs generation/stitching/repair/the stateful oracle, and requires
+  a non-empty solution path with exactly three key pickups and three lock
+  traversals. It intentionally has no random-weight success mode.
+
+Self-correction and playtesting:
+
+- MAP-Elites can retain a bounded replay buffer of pre-repair neural rooms.
+  Preferences are formed only between different samples for the same immutable
+  graph fingerprint and room ID. Solvability is primary and room repair burden
+  supplies local credit; path length is not treated as quality. Export and
+  preparation scripts bind pairs to checkpoint hashes, reconstruct the true
+  condition encoder context, apply the checkpoint latent scale, and refuse
+  cross-checkpoint DPO training. This observes the same-condition requirement
+  implied by [DPO](https://arxiv.org/abs/2305.18290) and
+  [Diffusion-DPO](https://arxiv.org/abs/2311.12908); arbitrary elites from
+  different mission graphs are not valid preference pairs.
+- `HeadlessZeldaPersonaEnv` exposes the canonical stateful tile mechanics via
+  Gymnasium's reset/step contract with deterministic cardinal and graph
+  transition actions. A measured 100,000-step CPU run completed in 1.62 seconds
+  (about 61.8k steps/s, excluding interpreter import). The optional SB3 PPO
+  runner is an executable baseline. SB3 is preferred here for the single-node
+  baseline and evaluation utilities; CleanRL remains useful for transparent
+  single-file algorithm audits, while RLlib's distributed services are
+  unnecessary until environment throughput becomes the bottleneck. RL policy
+  completion is a behavioral metric and never replaces the hard oracle.
+
+Neural floor conditioning decision:
+
+- The 15th node feature remains implemented but disabled in canonical config.
+  Training with it now requires preserved raw floor metadata for every
+  conditioned node and at least two floors within the same dungeon. Merely
+  mixing separate single-floor dungeons at different elevations is rejected,
+  as is treating a missing label as floor zero. Offline loaders and runtime
+  graph contexts share the same normalization constant and provenance fields.
+  The single-floor VGLC corpus therefore cannot support a meaningful learned-
+  floor claim. The next valid experiment is a matched M1/M2 comparison on
+  curated or generated multi-floor graphs, not enabling a zero-valued feature
+  on current data.
+
+LogicNet follow-up audit:
+
+- Complete Bellman coverage already scales to `N-1` graph relaxations and
+  `H*W` room-grid relaxations, with checkpointed training relaxation for larger
+  problems. Replacing it with Neural A* would be scientifically mismatched
+  without expert path-trace supervision. Recent long-horizon VIN work instead
+  reinforces planning-depth and gradient-transport ablations as the relevant
+  comparison ([Wang et al., ICML 2025](https://proceedings.mlr.press/v267/wang25do.html)).
+- The checkpointed `current_temperature` buffer previously disagreed with the
+  actual Python temperature attributes: a new model reported 1.0 while its
+  solvers ran at 0.1, and loading the buffer did not restore those attributes.
+  Initialization, checkpoint post-load synchronization, diffusion timestep
+  guidance, and MaskGIT optimizer-step annealing now use one schedule.
+  `logic_initial_temperature` and `logic_final_temperature` are explicit YAML,
+  CLI, checkpoint, and runtime reconstruction parameters.
+- Multi-resource supervision no longer invents a provider/lock assignment by
+  zipping independently sorted lists. Only a unique one-provider/one-lock case
+  may be inferred; ambiguous assignments are reported, and locked graphs with
+  no explicit provider pairs receive a non-zero structural violation. Batched
+  logs now retain blocked-stage, unmatched-lock, and open-probability metrics.
+- Switch gates are no longer synonymous with block-push puzzles. A switch room
+  is represented as `step_on_puzzle` unless an actual block structure is
+  observed or explicitly declared; this repaired all-zero puzzle traces caused
+  by asking the validator to push a block that did not exist.
+
+Verification completed in this pass:
+
+- 60 focused pipeline/training tests passed before the model changes.
+- 113 LogicNet, architecture, and vulnerability tests passed after the
+  passability and resource-gate work.
+- A subsequent trainer and fast-sampler regression suite passed all 98 tests
+  after preserving the baseline `train_step` override contract and making
+  latent-scale metadata backward compatible with legacy trainer fixtures.
+- The latent/LogicNet/DPO/RL/master scripts compile, and the hard/soft resource
+  rollout probe produces finite losses and non-zero passability gradients.
+- The expanded floor/LogicNet/puzzle/trainer/loader/fast-sampler suite passed
+  268 tests. A direct checkpoint probe also restored a non-default LogicNet
+  temperature exactly and rejected ambiguous two-key/one-lock inference with a
+  non-zero violation.
+- A repository-wide `pytest -q` attempt terminated inside the native PyTorch
+  convolution constructor on Windows/Python 3.13 at roughly 8 percent. This
+  was not a Python assertion failure, so the focused suites above are the
+  reproducible verification evidence for this pass rather than a false claim
+  of full-suite completion.
+
+Still requiring real artifacts rather than more code:
+
+- Calibrate the latent scale on the frozen VQ-VAE training split, then train
+  identity-scale and calibrated-scale seeds under an otherwise fixed protocol.
+- Execute the strict 20-room integration protocol with final checkpoints.
+- Generate repeated samples per fixed graph before exporting DPO pairs; a
+  single sample per condition cannot form a scientifically valid preference.
+- Install the optional Gymnasium/SB3 experiment dependencies and train matched
+  persona seeds. Human-likeness still requires human calibration data.

@@ -183,6 +183,7 @@ class DiffusionTrainingConfig:
         
         # Diffusion Model
         latent_dim: int = 64,
+        latent_scale_factor: float = 1.0,
         model_channels: int = 128,
         context_dim: int = 256,
         denoiser_backbone: str = "unet",
@@ -250,8 +251,11 @@ class DiffusionTrainingConfig:
         logic_learning_rate: Optional[float] = None,
         logic_lr_warmup_epochs: int = 5,
         logic_grid_pathfinder: str = "bellman_ford",
+        logic_resource_gate_mode: str = "hard_ordered",
         logic_full_coverage: bool = True,
         num_logic_iterations: int = 30,
+        logic_initial_temperature: float = 1.0,
+        logic_final_temperature: float = 0.05,
         logic_topology_trace_weight: float = 0.25,
         logic_topology_anchor_weight: float = 0.25,
         logic_global_reach_weight: float = 1.0,
@@ -356,6 +360,9 @@ class DiffusionTrainingConfig:
         self.vqvae_mrf_penalty_weight = float(max(0.0, vqvae_mrf_penalty_weight))
         
         self.latent_dim = latent_dim
+        self.latent_scale_factor = float(latent_scale_factor)
+        if not math.isfinite(self.latent_scale_factor) or self.latent_scale_factor <= 0.0:
+            raise ValueError("latent_scale_factor must be finite and greater than zero.")
         self.model_channels = int(model_channels)
         self.context_dim = int(context_dim)
         self.denoiser_backbone = str(denoiser_backbone).strip().lower()
@@ -538,6 +545,9 @@ class DiffusionTrainingConfig:
         )
         self.logic_lr_warmup_epochs = int(max(0, logic_lr_warmup_epochs))
         self.logic_grid_pathfinder = str(logic_grid_pathfinder).strip().lower()
+        self.logic_resource_gate_mode = str(logic_resource_gate_mode).strip().lower()
+        if self.logic_resource_gate_mode not in {"hard_ordered", "soft_ordered"}:
+            raise ValueError("logic_resource_gate_mode must be 'hard_ordered' or 'soft_ordered'.")
         if self.logic_grid_pathfinder in {"bellman-ford", "soft_bellman_ford", "soft-bellman-ford"}:
             self.logic_grid_pathfinder = "bellman_ford"
         if self.logic_grid_pathfinder in {"value_iteration", "value-iteration"}:
@@ -547,7 +557,13 @@ class DiffusionTrainingConfig:
         if self.logic_grid_pathfinder not in {"cnn", "bellman_ford", "vin", "perturb_and_map"}:
             raise ValueError("logic_grid_pathfinder must be 'cnn', 'bellman_ford', 'vin', or 'perturb_and_map'.")
         self.logic_full_coverage = bool(logic_full_coverage)
-        self.num_logic_iterations = num_logic_iterations
+        self.num_logic_iterations = int(max(1, num_logic_iterations))
+        self.logic_initial_temperature = float(logic_initial_temperature)
+        self.logic_final_temperature = float(logic_final_temperature)
+        for name in ("logic_initial_temperature", "logic_final_temperature"):
+            value = float(getattr(self, name))
+            if not math.isfinite(value) or value <= 0.0:
+                raise ValueError(f"{name} must be finite and greater than zero.")
         self.logic_topology_trace_weight = float(max(0.0, logic_topology_trace_weight))
         self.logic_topology_anchor_weight = float(max(0.0, logic_topology_anchor_weight))
         self.logic_global_reach_weight = float(max(0.0, logic_global_reach_weight))
@@ -704,6 +720,7 @@ def diffusion_training_kwargs_from_resolved_config(
         "vqvae_use_coordconv": vqvae_stage["use_coordconv"],
         "vqvae_mrf_penalty_weight": vqvae_stage["mrf_penalty_weight"],
         "latent_dim": stage["latent_dim"],
+        "latent_scale_factor": stage.get("latent_scale_factor", 1.0),
         "model_channels": stage["model_channels"],
         "context_dim": stage["context_dim"],
         "denoiser_backbone": stage.get("denoiser_backbone", "unet"),
@@ -775,8 +792,11 @@ def diffusion_training_kwargs_from_resolved_config(
         "logic_learning_rate": stage["logic_learning_rate"],
         "logic_lr_warmup_epochs": stage["logic_lr_warmup_epochs"],
         "logic_grid_pathfinder": stage["logic_grid_pathfinder"],
+        "logic_resource_gate_mode": stage.get("logic_resource_gate_mode", "hard_ordered"),
         "logic_full_coverage": stage.get("logic_full_coverage", True),
         "num_logic_iterations": stage["num_logic_iterations"],
+        "logic_initial_temperature": stage.get("logic_initial_temperature", 1.0),
+        "logic_final_temperature": stage.get("logic_final_temperature", 0.05),
         "logic_topology_trace_weight": stage["logic_topology_trace_weight"],
         "logic_topology_anchor_weight": stage["logic_topology_anchor_weight"],
         "logic_global_reach_weight": stage.get("logic_global_reach_weight", 1.0),
@@ -1113,7 +1133,11 @@ def _legacy_diffusion_overrides_from_args(args: argparse.Namespace) -> Dict[str,
     _set("logic_learning_rate", getattr(args, "logic_learning_rate", None))
     _set("logic_lr_warmup_epochs", getattr(args, "logic_lr_warmup_epochs", None))
     _set("logic_grid_pathfinder", getattr(args, "logic_grid_pathfinder", None))
+    _set("logic_resource_gate_mode", getattr(args, "logic_resource_gate_mode", None))
     _set("logic_full_coverage", getattr(args, "logic_full_coverage", None))
+    _set("num_logic_iterations", getattr(args, "num_logic_iterations", None))
+    _set("logic_initial_temperature", getattr(args, "logic_initial_temperature", None))
+    _set("logic_final_temperature", getattr(args, "logic_final_temperature", None))
     _set("global_lr_warmup_epochs", getattr(args, "global_lr_warmup_epochs", None))
     _set("logic_loss_ramp_epochs", getattr(args, "logic_loss_ramp_epochs", None))
     _set("guidance_scale", getattr(args, "guidance_scale", None))
@@ -1512,6 +1536,7 @@ class DiffusionTrainer:
         """Create latent diffusion model."""
         return create_latent_diffusion(
             latent_dim=self.config.latent_dim,
+            latent_scale_factor=self.config.latent_scale_factor,
             model_channels=self.config.model_channels,
             context_dim=self.config.context_dim,
             denoiser_backbone=self.config.denoiser_backbone,
@@ -1597,10 +1622,14 @@ class DiffusionTrainer:
         """Create LogicNet for solvability."""
         return LogicNet(
             latent_dim=self.config.latent_dim,
+            latent_scale_factor=self.config.latent_scale_factor,
             num_classes=self.config.num_classes,
             num_iterations=self.config.num_logic_iterations,
             grid_pathfinder_type=self.config.logic_grid_pathfinder,
+            resource_gate_mode=self.config.logic_resource_gate_mode,
             full_coverage=self.config.logic_full_coverage,
+            initial_temperature=self.config.logic_initial_temperature,
+            final_temperature=self.config.logic_final_temperature,
             topology_trace_weight=self.config.logic_topology_trace_weight,
             topology_anchor_weight=self.config.logic_topology_anchor_weight,
             global_reach_weight=self.config.logic_global_reach_weight,
@@ -1642,7 +1671,10 @@ class DiffusionTrainer:
             
             # encode() returns (z_q, indices) -- 2 values, not 3
             z_q, _indices = self.vqvae.encode(x_onehot)
-        return z_q
+        diffusion = getattr(self, "diffusion", None)
+        if diffusion is not None and hasattr(diffusion, "scale_first_stage_latent"):
+            return diffusion.scale_first_stage_latent(z_q)
+        return z_q * float(getattr(self.config, "latent_scale_factor", 1.0))
 
     def _latent_cache_key(self, x: torch.Tensor) -> Optional[Tuple[Any, ...]]:
         """Build a stable key for one frozen-tokenizer input map."""
@@ -1710,7 +1742,13 @@ class DiffusionTrainer:
             Tensor [B, C=44, H, W] of tile class logits
         """
         with torch.no_grad():
-            return self.vqvae.decode(z, target_size=(ROOM_HEIGHT, ROOM_WIDTH))
+            diffusion = getattr(self, "diffusion", None)
+            decode_latent = (
+                diffusion.unscale_first_stage_latent(z)
+                if diffusion is not None and hasattr(diffusion, "unscale_first_stage_latent")
+                else z / float(getattr(self.config, "latent_scale_factor", 1.0))
+            )
+            return self.vqvae.decode(decode_latent, target_size=(ROOM_HEIGHT, ROOM_WIDTH))
 
     def _encode_edge_features(self, graph_dict: dict) -> Optional[torch.Tensor]:
         """Load explicit edge features when available, else fall back to one-hot labels."""
@@ -1919,10 +1957,15 @@ class DiffusionTrainer:
         """
         if not hasattr(self.vqvae, "decode"):
             raise TypeError("Configured VQ-VAE does not expose decode(); cannot compute decoded logic loss.")
-        decode_latent = latent
+        diffusion = getattr(self, "diffusion", None)
+        decode_latent = (
+            diffusion.unscale_first_stage_latent(latent)
+            if diffusion is not None and hasattr(diffusion, "unscale_first_stage_latent")
+            else latent / float(getattr(self.config, "latent_scale_factor", 1.0))
+        )
         quantize = getattr(self.vqvae, "quantize", None)
         if callable(quantize):
-            quantized = quantize(latent)
+            quantized = quantize(decode_latent)
             if isinstance(quantized, (tuple, list)) and quantized:
                 decode_latent = quantized[0]
             elif isinstance(quantized, torch.Tensor):
@@ -2988,7 +3031,7 @@ class DiffusionTrainer:
         modules = [self.diffusion, self.condition_encoder]
         if bool(getattr(self.config, "logic_net_trainable", True)):
             modules.append(self.logic_net)
-        if self.puzzle_stage_semantics_head is not None:
+        if getattr(self, "puzzle_stage_semantics_head", None) is not None:
             modules.append(self.puzzle_stage_semantics_head)
         for module in modules:
             for param in module.parameters():
@@ -3135,7 +3178,7 @@ class DiffusionTrainer:
         modules = [self.diffusion, self.condition_encoder]
         if bool(getattr(self.config, "logic_net_trainable", True)):
             modules.append(self.logic_net)
-        if self.puzzle_stage_semantics_head is not None:
+        if getattr(self, "puzzle_stage_semantics_head", None) is not None:
             modules.append(self.puzzle_stage_semantics_head)
         seen: Set[int] = set()
         for module in modules:
@@ -3168,7 +3211,7 @@ class DiffusionTrainer:
             "puzzle_stage_slot_acc": 0.0,
         }
         if (
-            self.puzzle_stage_semantics_head is None
+            getattr(self, "puzzle_stage_semantics_head", None) is None
             or tile_logits is None
             or tile_logits.numel() == 0
             or not graph_list
@@ -3267,7 +3310,7 @@ class DiffusionTrainer:
         """
         self.diffusion.train()
         self.condition_encoder.train()
-        if self.puzzle_stage_semantics_head is not None:
+        if getattr(self, "puzzle_stage_semantics_head", None) is not None:
             self.puzzle_stage_semantics_head.train()
         
         batch_size = real_maps.shape[0]
@@ -3407,7 +3450,7 @@ class DiffusionTrainer:
                 logic_loss = torch.zeros((), device=self.device, dtype=diffusion_loss.dtype)
                 solvability_proxy = torch.zeros((), device=self.device, dtype=diffusion_loss.dtype)
 
-        if self.puzzle_stage_semantics_head is not None and graph_list:
+        if getattr(self, "puzzle_stage_semantics_head", None) is not None and graph_list:
             if predicted_tile_logits is None:
                 predicted_x0_for_stage = self._predict_x0_for_auxiliary_supervision(
                     z_0,
@@ -3500,7 +3543,7 @@ class DiffusionTrainer:
         modules_for_average = [self.diffusion, self.condition_encoder]
         if bool(getattr(self.config, "logic_net_trainable", True)):
             modules_for_average.append(self.logic_net)
-        if self.puzzle_stage_semantics_head is not None:
+        if getattr(self, "puzzle_stage_semantics_head", None) is not None:
             modules_for_average.append(self.puzzle_stage_semantics_head)
         average_gradients(
             tuple(modules_for_average),
@@ -3527,7 +3570,7 @@ class DiffusionTrainer:
                 ]
                 if bool(getattr(self.config, "logic_net_trainable", True)):
                     grad_norms.append(self._accelerator.clip_grad_norm_(self.logic_net.parameters(), max_norm=grad_clip_norm))
-                if self.puzzle_stage_semantics_head is not None:
+                if getattr(self, "puzzle_stage_semantics_head", None) is not None:
                     grad_norms.append(
                         self._accelerator.clip_grad_norm_(
                             self.puzzle_stage_semantics_head.parameters(),
@@ -3541,7 +3584,7 @@ class DiffusionTrainer:
                 ]
                 if bool(getattr(self.config, "logic_net_trainable", True)):
                     grad_norms.append(torch.nn.utils.clip_grad_norm_(self.logic_net.parameters(), max_norm=grad_clip_norm))
-                if self.puzzle_stage_semantics_head is not None:
+                if getattr(self, "puzzle_stage_semantics_head", None) is not None:
                     grad_norms.append(
                         torch.nn.utils.clip_grad_norm_(
                             self.puzzle_stage_semantics_head.parameters(),
@@ -3826,15 +3869,18 @@ class DiffusionTrainer:
                     logic_graph_data = diffusion_graph_data
             
             is_last_batch = int(batch_idx) + 1 >= len(dataloader)
-            metrics = self.train_step(
-                real_maps,
-                conditioning=conditioning,
-                include_logic_loss=include_logic,
-                logic_graph_data=logic_graph_data,
-                diffusion_graph_data=diffusion_graph_data,
-                graph_list=graph_list,
-                force_optimizer_step=is_last_batch,
-            )
+            train_step_kwargs: Dict[str, Any] = {
+                "conditioning": conditioning,
+                "include_logic_loss": include_logic,
+                "logic_graph_data": logic_graph_data,
+                "diffusion_graph_data": diffusion_graph_data,
+                "force_optimizer_step": is_last_batch,
+            }
+            # graph_list is consumed only by the optional stage-semantics
+            # head. Keep the baseline train_step override contract unchanged.
+            if getattr(self, "puzzle_stage_semantics_head", None) is not None:
+                train_step_kwargs["graph_list"] = graph_list
+            metrics = self.train_step(real_maps, **train_step_kwargs)
 
             if float(metrics.get("skipped_nonfinite_batch", 0.0)) >= 0.5:
                 skipped_nonfinite_batches += 1
@@ -3895,7 +3941,7 @@ class DiffusionTrainer:
         """Validate model using EMA weights and real graph conditioning."""
         eval_model = self.ema_diffusion if hasattr(self, 'ema_diffusion') else self.diffusion
         eval_model.eval()
-        if self.puzzle_stage_semantics_head is not None:
+        if getattr(self, "puzzle_stage_semantics_head", None) is not None:
             self.puzzle_stage_semantics_head.eval()
 
         if num_diffusion_samples is None:
@@ -4177,7 +4223,7 @@ class DiffusionTrainer:
             and getattr(self, "logic_net", None) is not None
         ):
             payload['logic_net_state_dict'] = self.logic_net.state_dict()
-        if self.puzzle_stage_semantics_head is not None:
+        if getattr(self, "puzzle_stage_semantics_head", None) is not None:
             payload['puzzle_stage_semantics_head_state_dict'] = (
                 self.puzzle_stage_semantics_head.state_dict()
             )
@@ -4251,6 +4297,9 @@ class DiffusionTrainer:
             model_type="diffusion_resume" if include_optimizer else "diffusion",
             architecture={
                 "latent_dim": int(self.config.latent_dim),
+                "latent_scale_factor": float(getattr(self.config, "latent_scale_factor", 1.0)),
+                "logic_initial_temperature": float(getattr(self.config, "logic_initial_temperature", 1.0)),
+                "logic_final_temperature": float(getattr(self.config, "logic_final_temperature", 0.05)),
                 "context_dim": int(self.config.context_dim),
                 "num_timesteps": int(self.config.num_timesteps),
                 "schedule_type": str(self.config.schedule_type),
@@ -4303,6 +4352,9 @@ class DiffusionTrainer:
                 model_type="diffusion_safetensors_inference",
                 architecture={
                     "latent_dim": int(self.config.latent_dim),
+                    "latent_scale_factor": float(getattr(self.config, "latent_scale_factor", 1.0)),
+                    "logic_initial_temperature": float(getattr(self.config, "logic_initial_temperature", 1.0)),
+                    "logic_final_temperature": float(getattr(self.config, "logic_final_temperature", 0.05)),
                     "context_dim": int(self.config.context_dim),
                     "num_timesteps": int(self.config.num_timesteps),
                     "schedule_type": str(self.config.schedule_type),
@@ -4360,6 +4412,27 @@ class DiffusionTrainer:
             if logic_state:
                 self.logic_net.load_state_dict(logic_state)
             metadata = _load_checkpoint_metadata_sidecar(path)
+            architecture = dict(metadata.get("architecture", {}) or {})
+            saved_scale = float(architecture.get("latent_scale_factor", 1.0))
+            configured_scale = float(getattr(self.config, "latent_scale_factor", 1.0))
+            if not math.isclose(saved_scale, configured_scale, rel_tol=0.0, abs_tol=1e-12):
+                raise ValueError(
+                    "Diffusion checkpoint latent_scale_factor mismatch: "
+                    f"checkpoint={saved_scale}, config={configured_scale}."
+                )
+            for field, default in (
+                ("logic_initial_temperature", 1.0),
+                ("logic_final_temperature", 0.05),
+            ):
+                if field not in architecture:
+                    continue
+                saved_value = float(architecture.get(field, default))
+                configured_value = float(getattr(self.config, field, default))
+                if not math.isclose(saved_value, configured_value, rel_tol=0.0, abs_tol=1e-12):
+                    raise ValueError(
+                        f"Diffusion checkpoint {field} mismatch: "
+                        f"checkpoint={saved_value}, config={configured_value}."
+                    )
             extra = dict(metadata.get("extra", {}) or {})
             self.epoch = int(extra.get("epoch", getattr(self, "epoch", 0)))
             self.global_step = int(extra.get("global_step", getattr(self, "global_step", 0)))
@@ -4375,6 +4448,28 @@ class DiffusionTrainer:
             return
 
         checkpoint = safe_torch_load(path, map_location=self.device)
+        checkpoint_config = checkpoint.get("config", {}) if isinstance(checkpoint, dict) else {}
+        if isinstance(checkpoint_config, dict):
+            saved_scale = float(checkpoint_config.get("latent_scale_factor", 1.0))
+            configured_scale = float(getattr(self.config, "latent_scale_factor", 1.0))
+            if not math.isclose(saved_scale, configured_scale, rel_tol=0.0, abs_tol=1e-12):
+                raise ValueError(
+                    "Diffusion checkpoint latent_scale_factor mismatch: "
+                    f"checkpoint={saved_scale}, config={configured_scale}."
+                )
+            for field, default in (
+                ("logic_initial_temperature", 1.0),
+                ("logic_final_temperature", 0.05),
+            ):
+                if field not in checkpoint_config:
+                    continue
+                saved_value = float(checkpoint_config.get(field, default))
+                configured_value = float(getattr(self.config, field, default))
+                if not math.isclose(saved_value, configured_value, rel_tol=0.0, abs_tol=1e-12):
+                    raise ValueError(
+                        f"Diffusion checkpoint {field} mismatch: "
+                        f"checkpoint={saved_value}, config={configured_value}."
+                    )
         for key in ('diffusion_state_dict', 'ema_diffusion_state_dict'):
             if key in checkpoint:
                 checkpoint[key], removed = self._strip_embedded_guidance_logic_net_state(checkpoint[key])
@@ -4416,7 +4511,7 @@ class DiffusionTrainer:
             self.logic_net.load_state_dict(checkpoint['logic_net_state_dict'])
         stage_head_state = checkpoint.get('puzzle_stage_semantics_head_state_dict')
         if stage_head_state is not None:
-            if self.puzzle_stage_semantics_head is None:
+            if getattr(self, "puzzle_stage_semantics_head", None) is None:
                 logger.warning(
                     "Checkpoint %s contains puzzle-stage semantics weights, but the current "
                     "configuration disables that ablation; leaving those weights unused.",
@@ -4973,6 +5068,15 @@ def main():
         default=None,
         help='Use complete Bellman coverage; --no-logic-full-coverage is the truncated-planning ablation.',
     )
+    parser.add_argument(
+        '--logic-resource-gate-mode',
+        choices=['hard_ordered', 'soft_ordered'],
+        default=None,
+        help='Ablate discrete versus differentiable ordered key/lock rollout.',
+    )
+    parser.add_argument('--num-logic-iterations', type=int, default=None)
+    parser.add_argument('--logic-initial-temperature', type=float, default=None)
+    parser.add_argument('--logic-final-temperature', type=float, default=None)
     parser.add_argument('--logic-topology-trace-weight', type=float, default=None)
     parser.add_argument('--logic-topology-anchor-weight', type=float, default=None)
     parser.add_argument('--logic-global-reach-weight', type=float, default=None)

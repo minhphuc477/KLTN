@@ -75,6 +75,7 @@ class PipelineComponentFactory:
     map_elites_archive_path: Optional[str] = None
     map_elites_load_archive: bool = False
     map_elites_autosave_archive: bool = False
+    map_elites_preference_buffer_size: int = 0
     symbolic_max_repair_attempts: int = 5
     symbolic_repair_margin: int = 2
     symbolic_adjacency_threshold: float = 0.01
@@ -126,6 +127,7 @@ class PipelineComponentFactory:
                     archive_path=self.map_elites_archive_path,
                     load_existing_archive=self.map_elites_load_archive,
                     autosave_archive=self.map_elites_autosave_archive,
+                    preference_buffer_size=self.map_elites_preference_buffer_size,
                 ),
             ),
         )

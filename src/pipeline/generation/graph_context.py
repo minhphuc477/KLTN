@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Set, Tuple
 
 import networkx as nx
 import numpy as np
@@ -24,18 +24,11 @@ from src.pipeline.graph_features import (
     build_key_lock_pairs,
     compute_current_node_distance_features,
     compute_rrwp_edge_features,
-    compute_tpe_features,
-    encode_edge_feature_vector,
-    extract_node_feature_vector,
+    extract_authoritative_floor_value,
 )
 from src.pipeline.room_topology_conditioning import (
-    DEFAULT_PUZZLE_STAGE_TRACE_DECAY,
-    DEFAULT_SEMANTIC_PUZZLE_OFFSET,
-    DEFAULT_SEMANTIC_ROLE_PRIOR_STRENGTH,
     DEFAULT_VALIDATOR_PLAN_MAX_STATES,
     ROOM_TOPOLOGY_CHANNEL_COUNT,
-    TOPOLOGY_ANCHOR_POLICY_VERSION,
-    apply_puzzle_structure_control_to_conditioning,
     build_puzzle_stage_condition_metadata,
     build_room_semantic_anchor_points,
     build_semantic_room_plan_trace,
@@ -80,6 +73,8 @@ def _prepare_graph_context(pipeline, graph: nx.Graph, use_tpe: bool = True) -> D
             'node_to_idx': {},
             'start_node_id': -1,
             'target_idx': -1,
+            'floor_values': [],
+            'floor_labels_present': [],
         }
 
     # Deterministic order is required so room_id -> node_idx stays stable.
@@ -96,8 +91,15 @@ def _prepare_graph_context(pipeline, graph: nx.Graph, use_tpe: bool = True) -> D
 
     node_features = torch.zeros(num_nodes, node_dim, device=pipeline.device, dtype=torch.float32)
     node_positions = torch.zeros(num_nodes, 2, device=pipeline.device, dtype=torch.float32)
+    floor_values: List[float] = [0.0] * num_nodes
+    floor_labels_present: List[bool] = [False] * num_nodes
     for node_id, idx in node_to_idx.items():
-        node_features[idx] = pipeline._extract_node_feature_vector(graph.nodes[node_id])
+        node_attrs = graph.nodes[node_id]
+        node_features[idx] = pipeline._extract_node_feature_vector(node_attrs)
+        floor_value = extract_authoritative_floor_value(node_attrs)
+        if floor_value is not None:
+            floor_values[idx] = float(floor_value)
+            floor_labels_present[idx] = True
         pos = pipeline._get_node_grid_position(graph, node_id)
         if pos is None:
             node_positions[idx] = torch.tensor((float(idx), 0.0), device=pipeline.device, dtype=torch.float32)
@@ -185,6 +187,8 @@ def _prepare_graph_context(pipeline, graph: nx.Graph, use_tpe: bool = True) -> D
         'start_node_id': int(node_to_idx.get(start_node, 0)) if start_node is not None else 0,
         'target_idx': int(node_to_idx.get(target_node, -1)) if target_node is not None else -1,
         'key_lock_pairs': key_lock_pairs,
+        'floor_values': floor_values,
+        'floor_labels_present': floor_labels_present,
     }
 
 
@@ -767,6 +771,7 @@ def _build_room_graph_context(
         validator_plan_max_states=budget,
         semantic_puzzle_offset=pipeline.default_semantic_puzzle_offset,
         stage_trace_decay=pipeline.default_puzzle_stage_trace_decay,
+        puzzle_structure_enabled=bool(attrs.get("puzzle_room_structure_enabled", False)),
     )
     room_topology_map = pipeline._build_room_topology_condition_tensor(
         mission_graph,

@@ -18,6 +18,35 @@ from src.zelda_data.vglc_utils import get_physical_start_node
 logger = logging.getLogger(__name__)
 
 
+def _stitched_validation_context(
+    graph: Optional[nx.Graph],
+    stitched_layout: Optional[Any],
+) -> Dict[str, Any]:
+    """Build the exact graph/room mapping contract consumed by ZeldaLogicEnv."""
+    if graph is None or stitched_layout is None:
+        return {}
+    slot_positions = dict(getattr(stitched_layout, "slot_positions", {}) or {})
+    room_offsets = dict(getattr(stitched_layout, "room_offsets", {}) or {})
+    if not slot_positions or not room_offsets:
+        return {"graph": graph}
+    room_to_node = {
+        tuple(slot): node_id
+        for node_id, slot in slot_positions.items()
+        if node_id in graph and node_id in room_offsets
+    }
+    room_positions = {
+        tuple(slot_positions[node_id]): tuple(room_offsets[node_id])
+        for node_id in room_to_node.values()
+    }
+    node_to_room = {node_id: room for room, node_id in room_to_node.items()}
+    return {
+        "graph": graph,
+        "room_to_node": room_to_node,
+        "room_positions": room_positions,
+        "node_to_room": node_to_room,
+    }
+
+
 def _hard_oracle_verdict(validation: Dict[str, Any]) -> Optional[bool]:
     """Return a definitive hard verdict, preserving indeterminate outcomes."""
     if not validation or not bool(validation.get("is_exact", False)):
@@ -112,6 +141,8 @@ def evaluate_generated_dungeon(
     *,
     enable_map_elites: bool = True,
     room_puzzle_metadata: Optional[Dict[str, Any]] = None,
+    stitched_layout: Optional[Any] = None,
+    generated_rooms: Optional[Dict[Any, RoomGenerationResult]] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Evaluate a stitched dungeon grid with MAP-Elites when available.
@@ -124,25 +155,35 @@ def evaluate_generated_dungeon(
     if not map_elites_available and not reference_rooms:
         return None
     validator_fn = getattr(pipeline, "_validate_dungeon", None)
+    validation_context = _stitched_validation_context(
+        mission_graph_physical,
+        stitched_layout,
+    )
     solver_result = (
-        validator_fn(dungeon_grid, room_puzzle_metadata=room_puzzle_metadata)
+        validator_fn(
+            dungeon_grid,
+            room_puzzle_metadata=room_puzzle_metadata,
+            **validation_context,
+        )
         if callable(validator_fn)
         else _validate_dungeon(
             pipeline,
             dungeon_grid,
             room_puzzle_metadata=room_puzzle_metadata,
+            **validation_context,
         )
     )
     map_elites_score: Dict[str, Any] = dict(solver_result or {})
     if map_elites_available:
         try:
+            descriptor_metrics = map_elites.add_dungeon(
+                dungeon=dungeon_grid,
+                grid=dungeon_grid,
+                solver_result=solver_result or {},
+                mission_graph=mission_graph_physical,
+                generated_rooms=generated_rooms,
+            )
             if solver_result and solver_result.get('solvable'):
-                descriptor_metrics = map_elites.add_dungeon(
-                    dungeon=dungeon_grid,
-                    grid=dungeon_grid,
-                    solver_result=solver_result,
-                    mission_graph=mission_graph_physical,
-                )
                 descriptor_metrics = descriptor_metrics or {}
                 map_elites_score.update({
                 'linearity': descriptor_metrics.get('linearity', solver_result.get('linearity', 0.0)),
@@ -488,6 +529,8 @@ def repair_and_stitch_dungeon(
         mission_graph,
         enable_map_elites=enable_map_elites,
         room_puzzle_metadata=puzzle_metadata,
+        stitched_layout=stitched_layout,
+        generated_rooms=normalized_rooms,
     )
     hard_validation = (
         dict(map_elites_score)
@@ -496,6 +539,7 @@ def repair_and_stitch_dungeon(
             pipeline._validate_dungeon(
                 dungeon_grid,
                 room_puzzle_metadata=puzzle_metadata,
+                **_stitched_validation_context(mission_graph, stitched_layout),
             )
             or {}
         )
@@ -554,6 +598,10 @@ def _validate_dungeon(
     dungeon_grid: np.ndarray,
     *,
     room_puzzle_metadata: Optional[Dict[str, Any]] = None,
+    graph: Optional[nx.Graph] = None,
+    room_to_node: Optional[Dict[Any, Any]] = None,
+    room_positions: Optional[Dict[Any, Tuple[int, int]]] = None,
+    node_to_room: Optional[Dict[Any, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Validate dungeon solvability and compute MAP-Elites descriptors.
@@ -584,6 +632,10 @@ def _validate_dungeon(
         validator = ZeldaValidator()
         result = validator.validate_single(
             dungeon_grid,
+            graph=graph,
+            room_to_node=room_to_node,
+            room_positions=room_positions,
+            node_to_room=node_to_room,
             solver_timeout=int(max(1, int(getattr(pipeline, "tile_oracle_max_states", 200_000)))),
             room_puzzle_metadata=room_puzzle_metadata,
         )
@@ -640,6 +692,8 @@ def _validate_dungeon(
             'states_explored': int(getattr(result, 'states_explored', 0) or 0),
             'termination_status': str(getattr(result, 'termination_status', 'unknown')),
             'proven_unsolvable': bool(getattr(result, 'proven_unsolvable', False)),
+            'final_inventory': dict(getattr(result, 'final_inventory', {}) or {}),
+            'path_interactions': dict(getattr(result, 'path_interactions', {}) or {}),
             'is_exact': True,
         }
     except (AttributeError, RuntimeError, ValueError, TypeError) as e:

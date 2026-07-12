@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -142,8 +143,11 @@ class MaskedRoomTrainingConfig:
         logic_topology_trace_weight: float = 0.25,
         logic_topology_anchor_weight: float = 0.25,
         logic_grid_pathfinder: str = "bellman_ford",
+        logic_resource_gate_mode: str = "hard_ordered",
         logic_full_coverage: bool = True,
         num_logic_iterations: int = 30,
+        logic_initial_temperature: float = 1.0,
+        logic_final_temperature: float = 0.05,
         validation_fraction: float = 0.1,
         validation_max_batches: int = 16,
         best_checkpoint_metric: str = "val_loss",
@@ -281,8 +285,17 @@ class MaskedRoomTrainingConfig:
         self.logic_topology_trace_weight = float(max(0.0, logic_topology_trace_weight))
         self.logic_topology_anchor_weight = float(max(0.0, logic_topology_anchor_weight))
         self.logic_grid_pathfinder = str(logic_grid_pathfinder).strip().lower()
+        self.logic_resource_gate_mode = str(logic_resource_gate_mode).strip().lower()
+        if self.logic_resource_gate_mode not in {"hard_ordered", "soft_ordered"}:
+            raise ValueError("logic_resource_gate_mode must be 'hard_ordered' or 'soft_ordered'.")
         self.logic_full_coverage = bool(logic_full_coverage)
         self.num_logic_iterations = int(max(1, num_logic_iterations))
+        self.logic_initial_temperature = float(logic_initial_temperature)
+        self.logic_final_temperature = float(logic_final_temperature)
+        for name in ("logic_initial_temperature", "logic_final_temperature"):
+            value = float(getattr(self, name))
+            if not math.isfinite(value) or value <= 0.0:
+                raise ValueError(f"{name} must be finite and greater than zero.")
         self.validation_fraction = float(max(0.0, min(0.5, validation_fraction)))
         self.validation_max_batches = int(max(1, validation_max_batches))
         self.best_checkpoint_metric = str(best_checkpoint_metric).strip().lower()
@@ -437,8 +450,11 @@ def masked_room_training_kwargs_from_resolved_config(config: Dict[str, Any]) -> 
         "logic_topology_trace_weight": stage.get("logic_topology_trace_weight", 0.25),
         "logic_topology_anchor_weight": stage.get("logic_topology_anchor_weight", 0.25),
         "logic_grid_pathfinder": stage.get("logic_grid_pathfinder", "bellman_ford"),
+        "logic_resource_gate_mode": stage.get("logic_resource_gate_mode", "hard_ordered"),
         "logic_full_coverage": stage.get("logic_full_coverage", True),
         "num_logic_iterations": stage.get("num_logic_iterations", 30),
+        "logic_initial_temperature": stage.get("logic_initial_temperature", 1.0),
+        "logic_final_temperature": stage.get("logic_final_temperature", 0.05),
         "validation_fraction": stage.get("validation_fraction", 0.1),
         "validation_max_batches": stage.get("validation_max_batches", 16),
         "best_checkpoint_metric": stage.get("best_checkpoint_metric", "val_loss"),
@@ -541,8 +557,11 @@ def _legacy_masked_room_overrides_from_args(args: argparse.Namespace) -> Dict[st
     _set("logic_topology_trace_weight", getattr(args, "logic_topology_trace_weight", None))
     _set("logic_topology_anchor_weight", getattr(args, "logic_topology_anchor_weight", None))
     _set("logic_grid_pathfinder", getattr(args, "logic_grid_pathfinder", None))
+    _set("logic_resource_gate_mode", getattr(args, "logic_resource_gate_mode", None))
     _set("logic_full_coverage", getattr(args, "logic_full_coverage", None))
     _set("num_logic_iterations", getattr(args, "num_logic_iterations", None))
+    _set("logic_initial_temperature", getattr(args, "logic_initial_temperature", None))
+    _set("logic_final_temperature", getattr(args, "logic_final_temperature", None))
     _set("validation_fraction", getattr(args, "validation_fraction", None))
     _set("validation_max_batches", getattr(args, "validation_max_batches", None))
     _set("best_checkpoint_metric", getattr(args, "best_checkpoint_metric", None))
@@ -773,8 +792,9 @@ class MaskedRoomTrainer:
 
     def configure_scheduler_total_steps(self, total_steps: int) -> None:
         """Set cosine period from the actual dataloader length when known."""
+        self._estimated_total_steps = int(max(1, total_steps))
         if hasattr(self.scheduler, "T_max"):
-            self.scheduler.T_max = int(max(1, total_steps))
+            self.scheduler.T_max = self._estimated_total_steps
 
     def _create_logic_net(self) -> LogicNet:
         pathfinder = str(getattr(self.config, "logic_grid_pathfinder", "bellman_ford")).strip().lower()
@@ -791,7 +811,10 @@ class MaskedRoomTrainer:
             topology_trace_weight=float(getattr(self.config, "logic_topology_trace_weight", 0.25)),
             topology_anchor_weight=float(getattr(self.config, "logic_topology_anchor_weight", 0.25)),
             grid_pathfinder_type=pathfinder,
+            resource_gate_mode=str(getattr(self.config, "logic_resource_gate_mode", "hard_ordered")),
             full_coverage=bool(getattr(self.config, "logic_full_coverage", True)),
+            initial_temperature=float(getattr(self.config, "logic_initial_temperature", 1.0)),
+            final_temperature=float(getattr(self.config, "logic_final_temperature", 0.05)),
         )
 
     @staticmethod
@@ -1536,6 +1559,9 @@ class MaskedRoomTrainer:
             if self.scheduler is not None:
                 self.scheduler.step()
             self.global_step += 1
+            if self.logic_net is not None and hasattr(self.logic_net, "anneal_temperature"):
+                total_steps = int(max(1, getattr(self, "_estimated_total_steps", 1)))
+                self.logic_net.anneal_temperature(min(1.0, self.global_step / total_steps))
         metrics = dict(metrics)
         metrics["loss"] = float(total_loss.detach().item())
         metrics.update(puzzle_stage_semantic_metrics)
@@ -1642,6 +1668,8 @@ class MaskedRoomTrainer:
                 "alpha_logic": float(getattr(self.config, "alpha_logic", 0.0)),
                 "logic_grid_pathfinder": str(getattr(self.config, "logic_grid_pathfinder", "bellman_ford")),
                 "num_logic_iterations": int(getattr(self.config, "num_logic_iterations", 30)),
+                "logic_initial_temperature": float(getattr(self.config, "logic_initial_temperature", 1.0)),
+                "logic_final_temperature": float(getattr(self.config, "logic_final_temperature", 0.05)),
             },
             extra={
                 "graph_conditioning_mode": self.config.graph_conditioning_mode,
@@ -1666,6 +1694,21 @@ class MaskedRoomTrainer:
 
     def load_checkpoint(self, path: str) -> Dict[str, Any]:
         checkpoint = safe_torch_load(path, map_location=self.device)
+        checkpoint_config = checkpoint.get("config", {}) if isinstance(checkpoint, dict) else {}
+        if isinstance(checkpoint_config, dict):
+            for field, default in (
+                ("logic_initial_temperature", 1.0),
+                ("logic_final_temperature", 0.05),
+            ):
+                if field not in checkpoint_config:
+                    continue
+                saved_value = float(checkpoint_config.get(field, default))
+                configured_value = float(getattr(self.config, field, default))
+                if not math.isclose(saved_value, configured_value, rel_tol=0.0, abs_tol=1e-12):
+                    raise ValueError(
+                        f"Masked-room checkpoint {field} mismatch: "
+                        f"checkpoint={saved_value}, config={configured_value}."
+                    )
         self.model.load_state_dict(checkpoint["model_state_dict"])
         self.condition_encoder.load_state_dict(checkpoint["condition_encoder_state_dict"])
         if "puzzle_stage_semantics_head_state_dict" in checkpoint:
@@ -1991,7 +2034,14 @@ def main() -> None:
         default=None,
     )
     parser.add_argument("--logic-full-coverage", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument(
+        "--logic-resource-gate-mode",
+        choices=["hard_ordered", "soft_ordered"],
+        default=None,
+    )
     parser.add_argument("--num-logic-iterations", type=int, default=None)
+    parser.add_argument("--logic-initial-temperature", type=float, default=None)
+    parser.add_argument("--logic-final-temperature", type=float, default=None)
     parser.add_argument("--validation-fraction", type=float, default=None)
     parser.add_argument("--validation-max-batches", type=int, default=None)
     parser.add_argument(

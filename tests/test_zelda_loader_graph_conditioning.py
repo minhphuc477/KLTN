@@ -342,7 +342,7 @@ def test_room_graph_sample_emits_ordered_puzzle_stage_condition():
     assert stage_condition["sequence_required"] is True
     assert stage_condition["gate_family"] == "switch"
     assert len(stage_condition["stage_sequence"]) >= 1
-    assert stage_condition["stage_sequence"][0]["kind"] == "push_block_to_switch"
+    assert stage_condition["stage_sequence"][0]["kind"] == "step_on_puzzle"
 
 
 def test_build_puzzle_stage_condition_metadata_builds_weighted_stage_trace():
@@ -568,7 +568,7 @@ def test_semantic_room_plan_trace_falls_back_when_validator_budget_is_too_small(
     assert float(trace.sum()) > 0.0
 
 
-def test_semantic_room_plan_trace_discards_partial_validator_sequences_before_fallback():
+def test_semantic_room_plan_trace_uses_complete_validator_sequence_when_budget_allows():
     room = np.full((ROOM_HEIGHT, ROOM_WIDTH), int(SEMANTIC_PALETTE["FLOOR"]), dtype=np.int32)
     fallback_trace = build_semantic_room_plan_trace(
         room,
@@ -593,7 +593,8 @@ def test_semantic_room_plan_trace_discards_partial_validator_sequences_before_fa
         validator_plan_max_states=60,
     )
 
-    assert np.array_equal(partial_budget_trace, fallback_trace)
+    assert not np.array_equal(partial_budget_trace, fallback_trace)
+    assert float(partial_budget_trace.sum()) > 0.0
 
 
 def test_room_topology_condition_map_respects_validator_budget_for_synthetic_trace():

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import math
 from collections import deque
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
@@ -12,10 +11,10 @@ import numpy as np
 import torch
 
 from src.core import ROOM_HEIGHT, ROOM_WIDTH, SEMANTIC_PALETTE
-from src.core.definitions import DOOR_POSITIONS, TileID, parse_edge_type_tokens
+from src.core.definitions import DOOR_POSITIONS, TileID
 from src.core.vqvae import canonical_latent_shape
 from src.pipeline.block_contracts import BlockShapeContract, validate_feature_dims, validate_tensor_contract
-from src.pipeline.repair_feedback import build_latent_edit_mask, build_neighbor_boundary_inpaint_inputs, logicnet_guided_inpaint_room
+from src.pipeline.repair_feedback import build_latent_edit_mask, logicnet_guided_inpaint_room
 from src.pipeline.room_stitching import StitchedRoomLayout
 from src.pipeline.room_topology_conditioning import (
     apply_puzzle_structure_control_to_conditioning,
@@ -24,7 +23,6 @@ from src.pipeline.room_topology_conditioning import (
 from src.pipeline.spatial_utils import stable_node_sort_key
 from src.pipeline.types import RoomGenerationResult
 from src.utils.stable_seed import stable_seed_offset
-from src.zelda_data.vglc_utils import validate_room_dimensions
 
 logger = logging.getLogger(__name__)
 DEFAULT_ROOM_LATENT_HW: Tuple[int, int] = canonical_latent_shape((ROOM_HEIGHT, ROOM_WIDTH))
@@ -4358,6 +4356,9 @@ def _synchronize_cuda_device(pipeline) -> None:
 
 def _decode_latent_with_vqvae(pipeline, latent: torch.Tensor) -> torch.Tensor:
     """Decode a latent with a defensive retry for rare cuDNN stream-handoff failures."""
+    diffusion = getattr(pipeline, "diffusion", None)
+    if diffusion is not None and hasattr(diffusion, "unscale_first_stage_latent"):
+        latent = diffusion.unscale_first_stage_latent(latent)
     prepared = pipeline._cast_latent_for_vqvae_decode(latent)
     try:
         return pipeline.vqvae.decode(prepared)

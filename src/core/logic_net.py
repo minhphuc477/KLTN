@@ -30,6 +30,7 @@ Output:
 """
 
 import logging
+import math
 from typing import Dict, List, Tuple, Optional, Any
 
 import torch
@@ -1262,14 +1263,19 @@ class LogicNet(nn.Module):
         global_reach_weight: float = 1.0,
         global_room_weight: float = 0.25,
         grid_pathfinder_type: str = "bellman_ford",
+        resource_gate_mode: str = "hard_ordered",
         full_coverage: bool = True,
         # --- Phase 1D: Temperature annealing (Jang et al., 2017) ---
         initial_temperature: float = 1.0,
         final_temperature: float = 0.05,
+        latent_scale_factor: float = 1.0,
     ):
         super().__init__()
         
         self.latent_dim = latent_dim
+        self.latent_scale_factor = float(latent_scale_factor)
+        if not math.isfinite(self.latent_scale_factor) or self.latent_scale_factor <= 0.0:
+            raise ValueError("latent_scale_factor must be finite and greater than zero.")
         if num_tile_classes is not None:
             num_classes = int(num_tile_classes)
         self.num_classes = num_classes
@@ -1280,6 +1286,11 @@ class LogicNet(nn.Module):
         self.global_reach_weight = float(max(0.0, global_reach_weight))
         self.global_room_weight = float(max(0.0, global_room_weight))
         self.grid_pathfinder_type = str(grid_pathfinder_type).strip().lower()
+        self.resource_gate_mode = str(resource_gate_mode).strip().lower()
+        if self.resource_gate_mode not in {"hard_ordered", "soft_ordered"}:
+            raise ValueError(
+                "resource_gate_mode must be 'hard_ordered' or 'soft_ordered'."
+            )
         self.full_coverage = bool(full_coverage)
         if self.grid_pathfinder_type in {"bellman-ford", "soft_bellman_ford", "soft-bellman-ford"}:
             self.grid_pathfinder_type = "bellman_ford"
@@ -1291,9 +1302,19 @@ class LogicNet(nn.Module):
             raise ValueError("grid_pathfinder_type must be 'cnn', 'bellman_ford', 'vin', or 'perturb_and_map'.")
         
         # --- Phase 1D: Temperature annealing state ---
-        self.initial_temperature = initial_temperature
-        self.final_temperature = final_temperature
-        self.register_buffer('current_temperature', torch.tensor(initial_temperature))
+        for name, value in (
+            ("temperature", temperature),
+            ("initial_temperature", initial_temperature),
+            ("final_temperature", final_temperature),
+        ):
+            if not math.isfinite(float(value)) or float(value) <= 0.0:
+                raise ValueError(f"{name} must be finite and greater than zero.")
+        self.initial_temperature = float(initial_temperature)
+        self.final_temperature = float(final_temperature)
+        self.register_buffer(
+            'current_temperature',
+            torch.tensor(self.initial_temperature, dtype=torch.float32),
+        )
         self.register_buffer(
             "locked_edge_role_ids",
             torch.tensor([1, 4, 5], dtype=torch.long),
@@ -1357,6 +1378,10 @@ class LogicNet(nn.Module):
             margin=1.0,
             temperature=temperature,
         )
+        # The schedule buffer and the actual solver temperatures must agree
+        # before the first optimizer step and after checkpoint restoration.
+        self._sync_temperature_modules(self.initial_temperature)
+        self.register_load_state_dict_post_hook(self._restore_temperature_after_load)
 
     @staticmethod
     def _project_tile_logits_to_room(tile_logits: Tensor) -> Tensor:
@@ -1891,7 +1916,15 @@ class LogicNet(nn.Module):
             node_pass = node_passability.to(device=device, dtype=dtype).flatten()[:n].clamp(0.0, 1.0)
             if node_pass.numel() < n:
                 node_pass = F.pad(node_pass, (0, n - int(node_pass.numel())), value=1.0)
-            entry_penalty = (1.0 - node_pass).reshape(1, n) * float(self.graph_pathfinder.inf_distance)
+            # Treat passability as a traversal probability. Multiplying
+            # (1-p) by the 1e6 infinity sentinel saturated ReachabilityScorer
+            # for every ordinary prediction below ~1.0 and removed the graph
+            # gradient. A negative-log barrier is finite and informative for
+            # p in (0,1], while p~0 still behaves as effectively blocked.
+            entry_penalty = (
+                -torch.log(node_pass.clamp_min(1e-6)).reshape(1, n)
+                * float(self.reachability.max_distance)
+            )
             weights = torch.where(adj > 0, weights + entry_penalty, weights)
 
         return adj, weights
@@ -1924,6 +1957,15 @@ class LogicNet(nn.Module):
         dtype: torch.dtype,
     ) -> Tuple[Tensor, Tensor, Dict[str, Any]]:
         """Evaluate ordered key acquisition while unlocking one gate at a time."""
+        if self.resource_gate_mode == "soft_ordered":
+            return self._soft_resource_gated_rollout(
+                adjacency=adjacency,
+                weights=weights,
+                locked_edges=locked_edges,
+                source_mask=source_mask,
+                key_lock_pairs=key_lock_pairs,
+                dtype=dtype,
+            )
         device = adjacency.device
         zero = torch.tensor(0.0, device=device, dtype=dtype)
         unlocked_edges = torch.zeros_like(locked_edges, dtype=torch.bool)
@@ -2032,6 +2074,117 @@ class LogicNet(nn.Module):
         }
         return distances, resource_loss, info
 
+    def _soft_resource_gated_rollout(
+        self,
+        *,
+        adjacency: Tensor,
+        weights: Tensor,
+        locked_edges: Tensor,
+        source_mask: Tensor,
+        key_lock_pairs: List[Tuple[int, int]],
+        dtype: torch.dtype,
+    ) -> Tuple[Tensor, Tensor, Dict[str, Any]]:
+        """Differentiable ordered resource rollout with probabilistic lock opening.
+
+        Providers assigned to the same target are conjunctive: their reachability
+        probabilities are multiplied, and the edge is softened only after every
+        declared provider has been evaluated. This preserves multi-token locks
+        while allowing gradients to flow from later rooms back through earlier
+        key-room passability.
+        """
+        device = adjacency.device
+        zero = torch.zeros((), device=device, dtype=dtype)
+        unlock_probability = torch.zeros_like(weights, dtype=dtype)
+        remaining_by_target: Dict[int, int] = {}
+        product_by_target: Dict[int, Tensor] = {}
+        for _provider_idx, target_idx in key_lock_pairs:
+            target = int(target_idx)
+            remaining_by_target[target] = remaining_by_target.get(target, 0) + 1
+            product_by_target.setdefault(target, torch.ones((), device=device, dtype=dtype))
+
+        def _distances() -> Tensor:
+            probability = torch.where(
+                locked_edges,
+                unlock_probability.clamp(1e-6, 1.0),
+                torch.ones_like(unlock_probability),
+            )
+            gate_penalty = -torch.log(probability) * float(self.reachability.max_distance)
+            staged_weights = weights + torch.where(
+                locked_edges,
+                gate_penalty.to(dtype=weights.dtype),
+                torch.zeros_like(weights),
+            )
+            return self.graph_pathfinder(adjacency, staged_weights, source_mask)
+
+        pair_losses: List[Tensor] = []
+        key_scores: List[Tensor] = []
+        lock_scores: List[Tensor] = []
+        distances = _distances()
+        matched_edge_count = 0
+        for key_idx, lock_idx in key_lock_pairs:
+            target = int(lock_idx)
+            key_target = torch.zeros_like(source_mask)
+            key_target[int(key_idx)] = 1.0
+            key_score, key_loss = self.reachability(distances, key_target, return_loss=True)
+            key_probability = key_score.mean().clamp(0.0, 1.0)
+            product_by_target[target] = product_by_target[target] * key_probability
+            remaining_by_target[target] -= 1
+            key_scores.append(key_probability)
+
+            lock_loss = zero
+            if remaining_by_target[target] == 0:
+                matching_edges = locked_edges & (
+                    torch.arange(int(adjacency.shape[0]), device=device).view(1, -1)
+                    == target
+                )
+                unlock_probability = torch.where(
+                    matching_edges,
+                    product_by_target[target].expand_as(unlock_probability),
+                    unlock_probability,
+                )
+                matched_edge_count += int(matching_edges.sum().detach().item())
+                distances = _distances()
+                lock_target = torch.zeros_like(source_mask)
+                lock_target[target] = 1.0
+                lock_score, lock_loss = self.reachability(
+                    distances,
+                    lock_target,
+                    return_loss=True,
+                )
+                lock_scores.append(lock_score.mean())
+            pair_losses.append(0.5 * (key_loss + lock_loss))
+
+        pair_loss_tensor = (
+            torch.stack(pair_losses)
+            if pair_losses
+            else torch.empty(0, device=device, dtype=dtype)
+        )
+        resource_loss = pair_loss_tensor.mean() if pair_loss_tensor.numel() else zero
+        unresolved = locked_edges & (unlock_probability < 0.5)
+        info: Dict[str, Any] = {
+            "num_violations": (
+                int((pair_loss_tensor > 0.25).sum().detach().item())
+                if pair_loss_tensor.numel()
+                else 0
+            ),
+            "total_violation": resource_loss,
+            "key_lock_mode": "resource_gated",
+            "resource_gate_ordering": "soft_ordered",
+            "locked_edge_count": float(locked_edges.float().sum().detach().item()),
+            "matched_lock_edge_count": float(matched_edge_count),
+            "remaining_locked_edge_count": float(unresolved.float().sum().detach().item()),
+            "resource_stage_count": float(len(key_lock_pairs)),
+            "blocked_resource_stage_count": float(
+                sum(float(score.detach().item()) < 0.5 for score in key_scores)
+            ),
+            "key_reach_before_lock": torch.stack(key_scores).mean() if key_scores else zero,
+            "lock_reach_after_key": torch.stack(lock_scores).mean() if lock_scores else zero,
+            "mean_lock_open_probability": (
+                unlock_probability[locked_edges].mean() if torch.any(locked_edges) else zero
+            ),
+        }
+        return distances, resource_loss, info
+
     def _compute_one_global_graph_loss(
         self,
         *,
@@ -2110,6 +2263,7 @@ class LogicNet(nn.Module):
         distances = self.graph_pathfinder(adj, weights, source_mask)
 
         pairs_were_supplied = key_lock_pairs is not None
+        resource_pair_inference_ambiguous = False
         pairs: List[Tuple[int, int]] = []
         if isinstance(key_lock_pairs, (list, tuple)):
             for pair in key_lock_pairs:
@@ -2144,8 +2298,14 @@ class LogicNet(nn.Module):
                             dst = int(edge_index[1, edge_i].item())
                             if 0 <= dst < n:
                                 locked_targets.append(dst)
-            for key_node, lock_node in zip(key_nodes, sorted(set(locked_targets))):
-                pairs.append((int(key_node), int(lock_node)))
+            unique_locked_targets = sorted(set(locked_targets))
+            # Inference is only defensible when the assignment is unique. An
+            # index-order zip across multiple keys and locks invents causal
+            # supervision that is not present in the graph metadata.
+            if len(key_nodes) == 1 and len(unique_locked_targets) == 1:
+                pairs.append((int(key_nodes[0]), int(unique_locked_targets[0])))
+            elif key_nodes or unique_locked_targets:
+                resource_pair_inference_ambiguous = True
 
         lock_loss = zero
         lock_info: Dict[str, Any] = {}
@@ -2158,6 +2318,16 @@ class LogicNet(nn.Module):
                 key_lock_pairs=pairs,
                 dtype=dtype,
             )
+            if not pairs:
+                # A locked graph with no provider assignment is structurally
+                # invalid even when the selected goal happens to avoid that
+                # optional branch. Keep this explicit in the objective instead
+                # of silently assigning zero key-economy loss.
+                missing_pair_loss = torch.ones((), device=device, dtype=dtype)
+                lock_loss = lock_loss + missing_pair_loss
+                lock_info["missing_resource_pair_loss"] = missing_pair_loss
+                lock_info["num_violations"] = int(lock_info.get("num_violations", 0)) + 1
+                lock_info["total_violation"] = lock_loss
         elif pairs:
             key_mask = torch.zeros(n, device=device, dtype=dtype)
             lock_mask = torch.zeros(n, device=device, dtype=dtype)
@@ -2194,6 +2364,7 @@ class LogicNet(nn.Module):
             "global_room_loss": room_loss,
             "global_num_key_lock_pairs": float(len(pairs)),
             "resource_pairs_inferred": float(not pairs_were_supplied and bool(pairs)),
+            "resource_pair_inference_ambiguous": float(resource_pair_inference_ambiguous),
             **lock_info,
         }
         return total, graph_reach_loss, lock_loss, info
@@ -2330,7 +2501,21 @@ class LogicNet(nn.Module):
             "global_graph_count": float(len(losses)),
             "global_room_passability": room_passability[:batch_size].mean(),
         }
-        scalar_keys = ("global_graph_reachability", "global_room_loss", "global_num_key_lock_pairs")
+        scalar_keys = (
+            "global_graph_reachability",
+            "global_room_loss",
+            "global_num_key_lock_pairs",
+            "locked_edge_count",
+            "matched_lock_edge_count",
+            "remaining_locked_edge_count",
+            "resource_stage_count",
+            "blocked_resource_stage_count",
+            "key_reach_before_lock",
+            "lock_reach_after_key",
+            "mean_lock_open_probability",
+            "missing_resource_pair_loss",
+            "resource_pair_inference_ambiguous",
+        )
         for key in scalar_keys:
             values = [info[key] for info in infos if key in info]
             if values:
@@ -2340,6 +2525,23 @@ class LogicNet(nn.Module):
                     merged_info[key] = float(sum(float(v) for v in values) / len(values))
         return torch.stack(losses).mean(), torch.stack(reach_losses).mean(), torch.stack(lock_losses).mean(), merged_info
     
+    def _sync_temperature_modules(self, temperature: float) -> None:
+        """Apply one temperature to every differentiable planning component."""
+        tau = float(temperature)
+        self.graph_pathfinder.temperature = tau
+        self.reachability.temperature = tau
+        self.key_lock.temperature = tau
+        if hasattr(self.grid_pathfinder, "temperature"):
+            self.grid_pathfinder.temperature = tau
+        nested_pathfinder = getattr(self.grid_pathfinder, "pathfinder", None)
+        if nested_pathfinder is not None and hasattr(nested_pathfinder, "temperature"):
+            nested_pathfinder.temperature = tau
+
+    def _restore_temperature_after_load(self, module: nn.Module, _incompatible_keys: Any) -> None:
+        """Restore plain-Python solver attributes from the checkpointed buffer."""
+        if module is self:
+            self._sync_temperature_modules(float(self.current_temperature.detach().item()))
+
     def update_temperature(self, progress: float):
         """
         Anneal soft-min temperature during training.
@@ -2353,6 +2555,9 @@ class LogicNet(nn.Module):
         Args:
             progress: Training progress in [0, 1] (0=start, 1=end)
         """
+        progress = float(progress)
+        if not math.isfinite(progress):
+            raise ValueError("LogicNet temperature progress must be finite.")
         progress = max(0.0, min(1.0, progress))
         tau = self.initial_temperature * (
             self.final_temperature / self.initial_temperature
@@ -2360,15 +2565,7 @@ class LogicNet(nn.Module):
         
         self.current_temperature.fill_(tau)
         
-        # Propagate to sub-modules
-        self.graph_pathfinder.temperature = tau
-        self.reachability.temperature = tau
-        self.key_lock.temperature = tau
-        if hasattr(self.grid_pathfinder, "temperature"):
-            self.grid_pathfinder.temperature = tau
-        nested_pathfinder = getattr(self.grid_pathfinder, "pathfinder", None)
-        if nested_pathfinder is not None and hasattr(nested_pathfinder, "temperature"):
-            nested_pathfinder.temperature = tau
+        self._sync_temperature_modules(tau)
 
     def anneal_temperature(self, step_fraction: float):
         """Alias used by training scripts and experiment protocols."""
@@ -2422,7 +2619,7 @@ class LogicNet(nn.Module):
                 walkability = self.walkability(tile_logits, is_probs=None)
             else:
                 # z is latent codes -- classify first, then lift to room size
-                tile_logits = self.tile_classifier(z)
+                tile_logits = self.tile_classifier(z / self.latent_scale_factor)
                 tile_logits = self._project_tile_logits_to_room(tile_logits)
                 walkability = self.walkability(tile_logits, is_probs=False)
             if start_mask.dim() == 3:
@@ -2451,7 +2648,7 @@ class LogicNet(nn.Module):
             tile_logits = self._project_tile_logits_to_room(z)
             info["logic_input_space"] = "tile_logits"
         else:
-            latent_tile_logits = self.tile_classifier(z)
+            latent_tile_logits = self.tile_classifier(z / self.latent_scale_factor)
             tile_logits = self._project_tile_logits_to_room(latent_tile_logits)
             info["logic_input_space"] = "latent"
         info['latent_tile_logits'] = latent_tile_logits

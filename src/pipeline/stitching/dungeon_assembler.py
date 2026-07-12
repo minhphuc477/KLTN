@@ -16,7 +16,11 @@ from src.generation.entity_spawner import materialize_entities_on_grid, spawn_al
 from src.generation.evolutionary_director import EvolutionaryTopologyGenerator
 from src.generation.graph_constraint_enforcer import enforce_all_rooms
 from src.pipeline.generation.sampler import _stable_node_seed_offset
-from src.pipeline.evaluation import _hard_oracle_verdict, _logicnet_hard_agreement
+from src.pipeline.evaluation import (
+    _hard_oracle_verdict,
+    _logicnet_hard_agreement,
+    _stitched_validation_context,
+)
 from src.pipeline.room_stitching import (
     StitchedRoomLayout,
     build_stitched_room_layout,
@@ -1120,6 +1124,8 @@ def generate_dungeon(
         prepared.mission_graph_physical,
         enable_map_elites=enable_map_elites,
         room_puzzle_metadata=puzzle_metadata,
+        stitched_layout=stitched_layout,
+        generated_rooms=room_set.rooms,
     )
     hard_validation = (
         dict(map_elites_score)
@@ -1128,6 +1134,10 @@ def generate_dungeon(
             pipeline._validate_dungeon(
                 dungeon_grid,
                 room_puzzle_metadata=puzzle_metadata,
+                **_stitched_validation_context(
+                    prepared.mission_graph_physical,
+                    stitched_layout,
+                ),
             )
             or {}
         )

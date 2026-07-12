@@ -439,6 +439,8 @@ class ValidationResult:
     states_explored: int = 0
     termination_status: str = "unknown"
     proven_unsolvable: bool = False
+    final_inventory: Optional[Dict[str, Any]] = None
+    path_interactions: Dict[str, int] = field(default_factory=dict)
     
     def to_dict(self) -> Dict:
         return {
@@ -451,6 +453,8 @@ class ValidationResult:
             'error_message': self.error_message,
             'termination_status': self.termination_status,
             'proven_unsolvable': self.proven_unsolvable,
+            'final_inventory': dict(self.final_inventory or {}),
+            'path_interactions': dict(self.path_interactions or {}),
         }
 
 
@@ -687,6 +691,10 @@ class ZeldaLogicEnv:
 
     def try_move_pure(self, state: GameState, target_pos: Tuple[int, int], target_tile: int) -> Tuple[bool, GameState]:
         return self._try_move_pure(state, target_pos, target_tile)
+
+    def try_move(self, target_pos: Tuple[int, int], target_tile: int) -> Tuple[bool, GameState, float, Dict[str, Any]]:
+        """Public mutating transition used by headless environment adapters."""
+        return self._try_move(target_pos, target_tile)
 
     def _underlay_tile_for_block_origin(self, pos: Tuple[int, int]) -> int:
         return int(self.block_underlay_tiles.get(tuple(pos), SEMANTIC_PALETTE['FLOOR']))
@@ -4755,6 +4763,7 @@ class ZeldaValidator:
                 states_explored=exact_states,
                 termination_status="budget_exhausted" if budget_exhausted else "exhausted",
                 proven_unsolvable=not budget_exhausted,
+                final_inventory=dict(getattr(diagnostics, "final_inventory", {}) or {}),
             )
 
         # Step 4: Recreate environment for metrics/rendering on the winning path.
@@ -4775,6 +4784,38 @@ class ZeldaValidator:
         finally:
             env.close()
 
+        path_positions = {
+            (int(position[0]), int(position[1]))
+            for position in path
+            if 0 <= int(position[0]) < int(semantic_grid.shape[0])
+            and 0 <= int(position[1]) < int(semantic_grid.shape[1])
+        }
+        path_interactions = {
+            "small_keys_collected": sum(
+                int(int(semantic_grid[row, col]) == int(SEMANTIC_PALETTE['KEY_SMALL']))
+                for row, col in path_positions
+            ),
+            "boss_keys_collected": sum(
+                int(int(semantic_grid[row, col]) == int(SEMANTIC_PALETTE['KEY_BOSS']))
+                for row, col in path_positions
+            ),
+            "key_items_collected": sum(
+                int(int(semantic_grid[row, col]) == int(SEMANTIC_PALETTE['KEY_ITEM']))
+                for row, col in path_positions
+            ),
+            "locked_doors_traversed": sum(
+                int(int(semantic_grid[row, col]) == int(SEMANTIC_PALETTE['DOOR_LOCKED']))
+                for row, col in path_positions
+            ),
+            "boss_doors_traversed": sum(
+                int(int(semantic_grid[row, col]) == int(SEMANTIC_PALETTE['DOOR_BOSS']))
+                for row, col in path_positions
+            ),
+        }
+        final_inventory = dict(getattr(diagnostics, "final_inventory", {}) or {})
+        for key, value in path_interactions.items():
+            final_inventory.setdefault(f"path_{key}", int(value))
+
         return ValidationResult(
             is_solvable=True,
             is_valid_syntax=True,
@@ -4788,6 +4829,8 @@ class ZeldaValidator:
             primary_solver_error=primary_failure if solver_used != "astar" else "",
             states_explored=int(getattr(diagnostics, "states_explored", 0) or 0),
             termination_status="solved",
+            final_inventory=final_inventory,
+            path_interactions=path_interactions,
         )
     
     def check_soft_locks(

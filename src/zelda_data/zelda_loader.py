@@ -71,6 +71,7 @@ from src.pipeline.graph_features import (
     compute_rrwp_edge_features,
     compute_tpe_features,
     encode_edge_feature_vector,
+    extract_authoritative_floor_value,
     extract_node_feature_vector,
 )
 from src.pipeline.room_topology_conditioning import (
@@ -190,6 +191,8 @@ def _extract_graph_spatial_from_dungeon(
         'num_edges': len(edges),
         'start_node_id': -1,
         'node_to_idx': dict(room_to_idx),
+        'floor_values': [0.0] * len(nodes),
+        'floor_labels_present': [False] * len(nodes),
     }
 
 
@@ -222,6 +225,8 @@ def _extract_graph_from_dungeon(
     node_id_to_idx: Dict[Any, int] = {}
     start_node_idx = -1
     node_positions: List[List[float]] = []
+    floor_values: List[float] = []
+    floor_labels_present: List[bool] = []
 
     room_position_by_graph_node = {}
     for room_pos, room in getattr(dungeon, "rooms", {}).items():
@@ -244,6 +249,9 @@ def _extract_graph_from_dungeon(
             coerce_difficulty=_coerce_difficulty_local,
         )
         nodes.append(node_features.cpu().numpy().astype(np.float32).tolist())
+        floor_value = extract_authoritative_floor_value(data)
+        floor_values.append(float(floor_value) if floor_value is not None else 0.0)
+        floor_labels_present.append(floor_value is not None)
         pos = room_position_by_graph_node.get(node_id)
         if pos is None:
             pos = (idx, 0)
@@ -340,6 +348,8 @@ def _extract_graph_from_dungeon(
         'target_idx': target_node_idx,
         'key_lock_pairs': key_lock_pairs,
         'node_to_idx': {node_id: node_id_to_idx[node_id] for node_id in filtered_nodes},
+        'floor_values': floor_values,
+        'floor_labels_present': floor_labels_present,
     }
 
 
@@ -594,6 +604,10 @@ def _build_room_graph_sample(
     if room_grid_for_structure is None:
         room_grid_for_structure = getattr(room, "grid", np.zeros((ROOM_HEIGHT, ROOM_WIDTH), dtype=np.int32))
     room_grid_for_structure = np.asarray(room_grid_for_structure, dtype=np.int32)
+    puzzle_room_structure_enabled = infer_puzzle_room_structure_enabled(
+        room_grid_for_structure,
+        role_flags,
+    )
     puzzle_stage_condition = build_puzzle_stage_condition_metadata(
         room_shape=(ROOM_HEIGHT, ROOM_WIDTH),
         start=start,
@@ -604,6 +618,7 @@ def _build_room_graph_sample(
         edge_constraint_tokens=_edge_constraint_tokens_by_direction(dungeon, room_position, graph_node_id),
         room_role_flags=role_flags,
         room_grid=room_grid_for_structure,
+        puzzle_structure_enabled=puzzle_room_structure_enabled,
         semantic_puzzle_offset=int(max(0, semantic_puzzle_offset)),
         stage_trace_decay=float(puzzle_stage_trace_decay),
     )
@@ -626,6 +641,7 @@ def _build_room_graph_sample(
         semantic_puzzle_offset=int(max(0, semantic_puzzle_offset)),
         puzzle_stage_topology_enabled=bool(puzzle_stage_topology_enabled),
         puzzle_stage_trace_decay=float(puzzle_stage_trace_decay),
+        puzzle_structure_enabled=puzzle_room_structure_enabled,
     )
 
     def _direction_mask(directions: Set[str]) -> np.ndarray:
@@ -648,11 +664,6 @@ def _build_room_graph_sample(
 
     logic_source_mask = _direction_mask(incoming_dirs)
     logic_target_mask = _direction_mask(outgoing_dirs)
-    puzzle_room_structure_enabled = infer_puzzle_room_structure_enabled(
-        room_grid_for_structure,
-        role_flags,
-    )
-
     neighbor_maps: Dict[str, Optional[np.ndarray]] = {}
     direction_to_neighbor = {
         "N": (room_position[0] - 1, room_position[1]),
@@ -681,6 +692,8 @@ def _build_room_graph_sample(
         'start_node_id': int(base_graph.get('start_node_id', -1)),
         'target_idx': int(base_graph.get('target_idx', -1)),
         'key_lock_pairs': list(base_graph.get('key_lock_pairs', []) or []),
+        'floor_values': list(base_graph.get('floor_values', []) or []),
+        'floor_labels_present': list(base_graph.get('floor_labels_present', []) or []),
         'node_to_idx': node_to_idx,
         'current_node_idx': current_node_idx,
         'room_position': np.array([float(room_position[0]), float(room_position[1])], dtype=np.float32),
@@ -980,6 +993,8 @@ class ZeldaDungeonDataset(Dataset):
                 'start_node_id': graph.get('start_node_id', -1),
                 'target_idx': graph.get('target_idx', -1),
                 'key_lock_pairs': list(graph.get('key_lock_pairs', []) or []),
+                'floor_values': list(graph.get('floor_values', []) or []),
+                'floor_labels_present': list(graph.get('floor_labels_present', []) or []),
                 'node_to_idx': dict(graph.get('node_to_idx', {})),
             }
             
@@ -1216,6 +1231,8 @@ class ZeldaRoomDataset(Dataset):
                 'start_node_id': graph.get('start_node_id', -1),
                 'target_idx': graph.get('target_idx', -1),
                 'key_lock_pairs': list(graph.get('key_lock_pairs', []) or []),
+                'floor_values': list(graph.get('floor_values', []) or []),
+                'floor_labels_present': list(graph.get('floor_labels_present', []) or []),
                 'current_node_idx': int(graph.get('current_node_idx', 0)),
                 'node_to_idx': dict(graph.get('node_to_idx', {})),
                 'has_puzzle': bool(graph.get('has_puzzle', False)),
@@ -1359,9 +1376,10 @@ def validate_floor_conditioning_signal(
     """Reject a floor-conditioning ablation without observable floor labels.
 
     Feature widths up to the checkpoint-compatible baseline do not use floor
-    conditioning.  Wider schemas include floor/z at index 14 and therefore
-    require at least one non-zero floor label; otherwise the ablation is
-    indistinguishable from the baseline while changing checkpoint shapes.
+    conditioning. Wider schemas include floor/z at index 14 and therefore
+    require at least one completely labelled dungeon containing two or more
+    floors. Variation only between separate single-floor dungeons does not
+    demonstrate within-dungeon floor conditioning.
     """
     floor_index = int(GRAPH_NODE_FLOOR_FEATURE_INDEX)
     if int(node_feature_dim) <= floor_index:
@@ -1373,45 +1391,71 @@ def validate_floor_conditioning_signal(
         )
 
     observed_floor_values: Set[float] = set()
+    saw_authoritative_metadata = False
+    saw_complete_floor_graph = False
 
-    def _inspect_graph(graph: Any) -> bool:
+    def _inspect_graph(graph: Any) -> Tuple[bool, bool]:
+        nonlocal saw_authoritative_metadata, saw_complete_floor_graph
         if not isinstance(graph, dict):
-            return False
+            return False, False
         features = graph.get("node_features")
         if features is None:
-            return False
+            return False, False
         tensor = torch.as_tensor(features)
         if tensor.dim() != 2 or int(tensor.shape[1]) <= floor_index:
             raise ValueError(
                 "Floor conditioning requires node_features with at least "
                 f"{floor_index + 1} columns; got {tuple(tensor.shape)}."
             )
-        observed_floor_values.update(
+        floor_values = graph.get("floor_values")
+        labels_present = graph.get("floor_labels_present")
+        if floor_values is None or labels_present is None:
+            return True, False
+        saw_authoritative_metadata = True
+        values = list(floor_values)
+        present = [bool(value) for value in labels_present]
+        node_count = int(tensor.shape[0])
+        if len(values) != node_count or len(present) != node_count or not all(present):
+            return True, False
+        saw_complete_floor_graph = True
+        graph_values = {
             round(float(value), 8)
-            for value in tensor[:, floor_index].detach().cpu().float().tolist()
-        )
-        return True
+            for value in values
+            if np.isfinite(float(value))
+        }
+        observed_floor_values.update(graph_values)
+        if len(graph_values) >= 2:
+            return True, True
+        return True, False
 
     observed_graph = False
     stored_graphs = getattr(dataset, "graphs", None)
     if isinstance(stored_graphs, list) and stored_graphs:
         for graph in stored_graphs:
-            observed_graph = observed_graph or _inspect_graph(graph)
-            if len(observed_floor_values) >= 2:
+            inspected, valid_multi_floor = _inspect_graph(graph)
+            observed_graph = observed_graph or inspected
+            if valid_multi_floor:
                 return
     else:
         for sample_idx in range(len(dataset)):
             sample = dataset[sample_idx]
             graph = sample[1] if isinstance(sample, (tuple, list)) and len(sample) > 1 else None
-            observed_graph = observed_graph or _inspect_graph(graph)
-            if len(observed_floor_values) >= 2:
+            inspected, valid_multi_floor = _inspect_graph(graph)
+            observed_graph = observed_graph or inspected
+            if valid_multi_floor:
                 return
 
-    detail = (
-        f"fewer than two distinct floor labels were observed ({sorted(observed_floor_values)})"
-        if observed_graph
-        else "no graph features were observed"
-    )
+    if not observed_graph:
+        detail = "no graph features were observed"
+    elif not saw_authoritative_metadata:
+        detail = "authoritative raw floor metadata was not preserved"
+    elif not saw_complete_floor_graph:
+        detail = "no dungeon had floor labels for every conditioned node"
+    else:
+        detail = (
+            "fewer than two distinct floor labels were observed within any one "
+            f"dungeon ({sorted(observed_floor_values)})"
+        )
     raise ValueError(
         "node_feature_dim enables neural floor conditioning, but "
         f"{detail}. Use the 14-feature baseline for single-floor data or provide "

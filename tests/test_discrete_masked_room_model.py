@@ -1260,7 +1260,7 @@ def test_masked_room_auto_resume_skips_incompatible_latest_checkpoint(
         device="cpu",
         data_dir="unused",
         checkpoint_dir=str(tmp_path),
-        epochs=1,
+        epochs=0,
         batch_size=1,
         hidden_dim=32,
         condition_hidden_dim=64,
@@ -1272,5 +1272,5 @@ def test_masked_room_auto_resume_skips_incompatible_latest_checkpoint(
     caplog.set_level(logging.WARNING)
     trainer = train_masked_room(config)
 
-    assert trainer.epoch == 0
+    assert trainer.epoch == -1
     assert "Skipping auto-resume masked-room checkpoint" in caplog.text

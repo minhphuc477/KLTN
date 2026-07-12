@@ -394,6 +394,9 @@ class NeuralSymbolicDungeonPipeline(metaclass=_PipelineFacadeMeta):
             .contiguous()
         )
         z_q, _ = vqvae.encode(x_0)
+        diffusion = getattr(self, "diffusion", None)
+        if diffusion is not None and hasattr(diffusion, "scale_first_stage_latent"):
+            z_q = diffusion.scale_first_stage_latent(z_q)
         return z_q.detach()
 
     def prepare_dungeon_generation(self, *args: Any, **kwargs: Any) -> PreparedDungeonGeneration:
