@@ -51,6 +51,16 @@ VARIANTS: List[Dict[str, Any]] = [
         "description": "Disable graph-node to grid-position attention alignment.",
         "overrides": {"diffusion": {"graph_spatial_alignment_weight": 0.0}},
     },
+    {
+        "name": "sparse_graph_bellman_ford",
+        "description": (
+            "Replace dense mission-graph Bellman-Ford with the edge-sparse, "
+            "mathematically aligned backend; keep every loss weight unchanged."
+        ),
+        "overrides": {
+            "diffusion": {"logic_graph_pathfinder": "sparse_bellman_ford"}
+        },
+    },
 ]
 
 
@@ -110,7 +120,9 @@ def build_manifest(args: argparse.Namespace) -> Dict[str, Any]:
         "seed": int(args.seed),
         "notes": (
             "Run each variant with identical train/test splits and seeds. Report Dungeon 9 holdout "
-            "solvability, key-lock violation rate, tile-pattern JS divergence, and paired deltas vs full."
+            "solvability, key-lock violation rate, tile-pattern JS divergence, peak accelerator memory, "
+            "LogicNet step time, and paired deltas vs full. The sparse backend is a scaling ablation, "
+            "not a new solvability objective."
         ),
         "runs": runs,
     }

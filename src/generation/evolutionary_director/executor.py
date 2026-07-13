@@ -470,7 +470,9 @@ class GraphGrammarExecutor:
                             log_failures=False,
                         )
                     )
-                    if self.enforce_generation_constraints and (not lock_ok or not prog_ok):
+                    if self.enforce_generation_constraints and (
+                        not lock_ok or not prog_ok
+                    ):
                         generation_constraint_rejections += 1
                         if self.allow_candidate_repairs:
                             candidate = self._constraint_grammar.fix_lock_key_ordering(candidate)

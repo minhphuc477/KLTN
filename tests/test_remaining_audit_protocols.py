@@ -87,6 +87,29 @@ def test_runtime_map_elites_rejects_infeasible_macro_descriptor_path():
     assert "graph_descriptor_feasible" not in metrics
 
 
+def test_runtime_map_elites_does_not_archive_infeasible_mission_economy():
+    graph = nx.DiGraph()
+    graph.add_node(0, label="START")
+    graph.add_node(1, label="GOAL")
+    graph.add_edge(0, 1, edge_type="LOCKED", key_required="missing_key")
+    evaluator = MAPElitesEvaluator(enable_advanced_archive=False, descriptor_mode="hybrid")
+
+    metrics = evaluator.add_dungeon(
+        dungeon=_grid(),
+        grid=_grid(),
+        solver_result={
+            "solvable": True,
+            "path_length": 2,
+            "path": [(1, 1), (1, 2)],
+            "quality_score": 1.0,
+        },
+        mission_graph=graph,
+    )
+
+    assert metrics["archive_rejected_graph_progression"] == 1.0
+    assert evaluator.grid == {}
+
+
 def test_runtime_map_elites_does_not_collect_required_item_as_provider():
     graph = nx.DiGraph()
     graph.add_node(0, label="START")

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 import networkx as nx
 import numpy as np
@@ -14,10 +14,12 @@ from src.core import ROOM_HEIGHT, ROOM_WIDTH
 from src.core.definitions import DOOR_POSITIONS
 from src.core.neural_guided_repair import NeuralGuidedRepair
 from src.core.vqvae import canonical_latent_shape
+from src.evaluation.topology_betti import betti_curve, normalized_betti_curve_distance
 from src.pipeline.block_contracts import BlockShapeContract, validate_tensor_contract
 from src.pipeline.repair_feedback import build_neighbor_boundary_inpaint_inputs
 from src.pipeline.types import RoomGenerationResult
 from src.utils.stable_seed import stable_seed_offset
+from src.simulation.state import WALKABLE_IDS
 from src.zelda_data.vglc_utils import validate_room_dimensions
 
 logger = logging.getLogger(__name__)
@@ -37,9 +39,77 @@ _NEIGHBOR_OPPOSITE_SLICES = {
 }
 
 
+class PuzzleStageSemanticsValidationError(RuntimeError):
+    """Raised when an explicitly enabled selective semantics gate rejects a room."""
+
+
 def _record_stage_time(stage_times: Dict[str, float], key: str, started_at: float) -> None:
     """Accumulate low-overhead stage timings for generation ablations."""
     stage_times[key] = float(stage_times.get(key, 0.0)) + float(time.perf_counter() - started_at)
+
+
+def _score_puzzle_stage_semantics(
+    pipeline: Any,
+    logits: torch.Tensor,
+    graph_data: Mapping[str, Any],
+    *,
+    room_id: Any,
+) -> Dict[str, float]:
+    """Report or selectively reject pre-repair logits using the trained auxiliary head."""
+    mode = str(
+        getattr(pipeline, "default_puzzle_stage_semantics_validation_mode", "off") or "off"
+    ).strip().lower()
+    if mode == "off":
+        return {}
+    if mode not in {"report", "reject"}:
+        raise ValueError(f"Unsupported puzzle-stage semantics validation mode: {mode!r}.")
+
+    condition = graph_data.get("puzzle_stage_condition") if isinstance(graph_data, Mapping) else None
+    condition_available = float(isinstance(condition, Mapping) and bool(condition))
+    head = getattr(pipeline, "puzzle_stage_semantics_head", None)
+    metrics = {
+        "puzzle_stage_semantics_condition_available": condition_available,
+        "puzzle_stage_semantics_head_loaded": float(head is not None),
+    }
+    if condition_available == 0.0:
+        return metrics
+    if head is None:
+        if mode == "reject":
+            raise PuzzleStageSemanticsValidationError(
+                "Puzzle-stage semantics reject mode has no loaded auxiliary head."
+            )
+        return metrics
+
+    scores = head.score_expected_semantics(logits, [condition])
+    scalar_keys = {
+        "joint_confidence": "puzzle_stage_semantics_joint_confidence",
+        "gate_confidence": "puzzle_stage_semantics_gate_confidence",
+        "sequence_confidence": "puzzle_stage_semantics_sequence_confidence",
+        "count_confidence": "puzzle_stage_semantics_count_confidence",
+        "slot_confidence": "puzzle_stage_semantics_slot_confidence",
+        "exact_match": "puzzle_stage_semantics_exact_match",
+    }
+    for source_key, metric_key in scalar_keys.items():
+        value = scores[source_key]
+        if not isinstance(value, torch.Tensor) or value.numel() != 1:
+            raise RuntimeError(
+                f"Puzzle-stage semantics head returned invalid {source_key!r} shape."
+            )
+        metrics[metric_key] = float(value.detach().float().item())
+
+    if mode == "reject":
+        threshold = getattr(pipeline, "default_puzzle_stage_semantics_min_confidence", None)
+        if threshold is None:
+            raise PuzzleStageSemanticsValidationError(
+                "Puzzle-stage semantics reject mode requires a calibrated confidence threshold."
+            )
+        if metrics["puzzle_stage_semantics_joint_confidence"] < float(threshold):
+            raise PuzzleStageSemanticsValidationError(
+                f"Room {room_id!r} puzzle-stage semantics confidence "
+                f"{metrics['puzzle_stage_semantics_joint_confidence']:.6f} is below "
+                f"the calibrated threshold {float(threshold):.6f}."
+            )
+    return metrics
 
 
 def _unpack_masked_sample(sample_output: Any) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Dict[str, float]]:
@@ -1060,6 +1130,13 @@ def generate_room(
             int(semantic_decode_stats.get("planned_markers", 0)),
         )
 
+    puzzle_stage_semantics_metrics = _score_puzzle_stage_semantics(
+        pipeline,
+        logits,
+        graph_data,
+        room_id=room_id,
+    )
+
     neural_grid = logits.argmax(dim=1).detach().cpu().numpy()[0]  # (16, 11)
     if effective_room_generator_mode == "discrete_masked" and sampled_tokens is not None:
         raw_neural_grid = sampled_tokens.detach().cpu().numpy()[0].astype(np.int32, copy=False).copy()
@@ -1579,6 +1656,35 @@ def generate_room(
         marker_plan=final_marker_plan,
         scaffold_stats=final_puzzle_scaffold,
     )
+    topology_betti_metrics: Dict[str, float] = {}
+    if bool(getattr(pipeline, "default_topology_betti_metrics_enabled", False)):
+        walkable_channels = [
+            int(tile_id)
+            for tile_id in sorted(WALKABLE_IDS)
+            if 0 <= int(tile_id) < int(neural_probs.shape[0])
+        ]
+        neural_walkability = (
+            neural_probs[walkable_channels].sum(axis=0)
+            if walkable_channels
+            else np.zeros_like(final_grid, dtype=np.float32)
+        )
+        final_walkability = np.isin(
+            final_grid,
+            np.asarray(sorted(WALKABLE_IDS), dtype=np.int32),
+        ).astype(np.float32)
+        neural_betti = betti_curve(neural_walkability)
+        final_betti = betti_curve(final_walkability)
+        topology_betti_metrics = {
+            "neural_walkability_beta0_curve_mean": neural_betti.beta0_auc,
+            "neural_walkability_beta1_curve_mean": neural_betti.beta1_auc,
+            "final_walkability_beta0_curve_mean": final_betti.beta0_auc,
+            "final_walkability_beta1_curve_mean": final_betti.beta1_auc,
+            "neural_final_betti_curve_distance": normalized_betti_curve_distance(
+                neural_betti,
+                final_betti,
+                grid_size=int(final_grid.size),
+            ),
+        }
 
     # VGLC Compliance: Validate room dimensions
     valid_dims, dim_msg = validate_room_dimensions(final_grid)
@@ -1603,6 +1709,8 @@ def generate_room(
 
     metrics = {
         'room_id': room_id,
+        **puzzle_stage_semantics_metrics,
+        **topology_betti_metrics,
         'neural_grid_entropy': entropy_val,
         'was_repaired': was_repaired,
         'repair_count': int(bool(was_repaired)),

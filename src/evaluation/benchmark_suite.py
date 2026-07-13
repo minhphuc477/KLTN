@@ -51,7 +51,12 @@ from src.generation.evolutionary_director import (
     EvolutionaryTopologyGenerator,
     networkx_to_mission_graph,
 )
-from src.generation.grammar import EdgeType, MissionGrammar, NodeType
+from src.generation.grammar import (
+    EdgeType,
+    MissionGrammar,
+    NodeType,
+    validate_exact_progression,
+)
 from src.generation.realism_profiles import (
     get_realism_tuning_profile,
     list_realism_tuning_profiles,
@@ -752,6 +757,7 @@ def _mission_constraints_valid(G: nx.Graph, grammar: MissionGrammar) -> bool:
         return bool(
             grammar.validate_lock_key_ordering(mission_graph)
             and grammar.validate_progression_constraints(mission_graph)
+            and validate_exact_progression(mission_graph)
         )
     except Exception:
         return False

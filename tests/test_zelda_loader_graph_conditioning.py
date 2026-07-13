@@ -14,6 +14,7 @@ from src.core.definitions import (
     ROOM_WIDTH,
     SEMANTIC_PALETTE,
 )
+from src.generation.grammar import EdgeType
 from src.pipeline.graph_features import compute_rrwp_edge_features
 from src.pipeline.spatial_utils import fit_room_grid
 from src.pipeline.room_topology_conditioning import (
@@ -38,6 +39,30 @@ from src.zelda_data.zelda_loader import (
     _extract_graph_from_dungeon,
     graph_collate_fn,
 )
+from src.zelda_data.features.ml_features import MLFeatureExtractor
+
+
+def test_laplacian_pe_parses_enum_and_string_gate_semantics_identically():
+    def _graph(edge_type):
+        graph = nx.Graph()
+        graph.add_nodes_from(range(4))
+        graph.add_edge(0, 1, edge_type=edge_type)
+        graph.add_edge(1, 2, edge_type="path")
+        graph.add_edge(1, 3, edge_type="path")
+        return graph
+
+    enum_pe, _ = MLFeatureExtractor.compute_laplacian_pe(
+        _graph(EdgeType.LOCKED),
+        k_dim=3,
+    )
+    string_pe, _ = MLFeatureExtractor.compute_laplacian_pe(
+        _graph("locked"),
+        k_dim=3,
+    )
+
+    # Eigenvector columns may differ by sign, but enum and serialized graph
+    # representations must encode the same weighted topology.
+    assert np.allclose(np.abs(enum_pe), np.abs(string_pe), atol=1e-6)
 
 
 def test_dungeon_dataset_getitem_preserves_spatial_graph_fields():
@@ -241,6 +266,27 @@ def test_dataset_graph_extraction_pairs_identified_key_with_locked_gate():
     assert extracted["key_lock_pairs"] == [
         (extracted["node_to_idx"][20], extracted["node_to_idx"][30])
     ]
+
+
+def test_dataset_graph_extraction_stably_indexes_mixed_node_id_types():
+    graph = nx.DiGraph()
+    graph.add_node("goal", label="t", type="GOAL", is_triforce=True)
+    graph.add_node(10, label="s", type="START", is_start=True)
+    graph.add_edge(10, "goal", edge_type="PATH")
+    dungeon = SimpleNamespace(
+        graph=graph,
+        rooms={
+            (0, 0): SimpleNamespace(graph_node_id=10),
+            (0, 1): SimpleNamespace(graph_node_id="goal"),
+        },
+    )
+
+    extracted = _extract_graph_from_dungeon(dungeon)
+
+    assert extracted["node_to_idx"] == {10: 0, "goal": 1}
+    assert extracted["edge_index"].tolist() == [[0], [1]]
+    assert extracted["start_node_id"] == 0
+    assert extracted["target_idx"] == 1
 
 
 def test_room_graph_sample_resolves_symbolic_sector_theme_into_style_id():

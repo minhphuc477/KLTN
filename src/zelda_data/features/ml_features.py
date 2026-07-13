@@ -8,6 +8,7 @@ import networkx as nx
 import numpy as np
 
 from src.core.definitions import parse_edge_type_tokens, parse_node_label_tokens
+from src.pipeline.spatial_utils import stable_node_sort_key
 
 LOCKED_EDGE_WEIGHT_TYPES = frozenset({"locked", "bombable", "boss_locked", "soft_locked"})
 
@@ -20,7 +21,7 @@ class MLFeatureExtractor:
         """Compute topology-aware positional encodings from Laplacian eigenvectors."""
         G_undirected = G.to_undirected() if G.is_directed() else G
 
-        nodes = sorted(G_undirected.nodes())
+        nodes = sorted(G_undirected.nodes(), key=stable_node_sort_key)
         n = len(nodes)
         node_to_idx = {node: i for i, node in enumerate(nodes)}
 
@@ -32,8 +33,23 @@ class MLFeatureExtractor:
         for u, v, data in G_undirected.edges(data=True):
             idx_u, idx_v = node_to_idx[u], node_to_idx[v]
 
-            edge_type = data.get("edge_type", "open")
-            weight = 0.5 if edge_type in LOCKED_EDGE_WEIGHT_TYPES else 1.0
+            edge_tokens = set(
+                parse_edge_type_tokens(
+                    label=str(data.get("label", "") or ""),
+                    edge_type=str(
+                        getattr(
+                            data.get("edge_type", data.get("type", "open")),
+                            "name",
+                            data.get("edge_type", data.get("type", "open")),
+                        )
+                    ),
+                )
+            )
+            weight = (
+                0.5
+                if edge_tokens.intersection(LOCKED_EDGE_WEIGHT_TYPES)
+                else 1.0
+            )
 
             adj[idx_u, idx_v] = weight
             adj[idx_v, idx_u] = weight

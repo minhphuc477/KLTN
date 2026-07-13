@@ -91,7 +91,7 @@ def test_advanced_pipeline_module_imports_and_config_defaults():
 
     cfg = AdvancedPipelineConfig()
     assert cfg.enable_seam_smoothing is True
-    assert cfg.enable_global_state is True
+    assert cfg.enable_global_state is False
     assert cfg.calculate_fun_metrics is True
     assert isinstance(cfg.boss_arena_size, tuple)
 
@@ -105,6 +105,53 @@ def test_state_aware_room_generator_applies_canonical_water_state():
 
     assert np.all(high[3:] == int(SEMANTIC_PALETTE["ELEMENT"]))
     assert np.array_equal(low, room)
+
+
+def test_global_state_progression_requires_reachable_transition_before_gate():
+    import networkx as nx
+
+    from src.validation.global_state import validate_global_state_progression
+
+    graph = nx.DiGraph()
+    graph.add_node(0, type="START")
+    graph.add_node(1, type="SWITCH")
+    graph.add_node(2, type="GOAL")
+    graph.add_edges_from([(0, 1), (1, 2)])
+    valid = {
+        "variables": [{"name": "water_level", "initial": "high"}],
+        "transitions": [
+            {
+                "from_room": 1,
+                "trigger": "switch_pulled",
+                "changes": {"water_level": "low"},
+            }
+        ],
+        "edge_requirements": [
+            {"source": 1, "target": 2, "requires": {"water_level": "low"}}
+        ],
+    }
+    accepted = validate_global_state_progression(graph, valid)
+    assert accepted.accepted is True
+    assert accepted.solution_actions == (
+        "move:0->1",
+        "trigger:switch_pulled",
+        "move:1->2",
+    )
+
+    deadlocked = {
+        **valid,
+        "transitions": [
+            {
+                "from_room": 2,
+                "trigger": "switch_pulled",
+                "changes": {"water_level": "low"},
+            }
+        ],
+    }
+    rejected = validate_global_state_progression(graph, deadlocked)
+    assert rejected.accepted is False
+    assert rejected.goal_reachable is False
+    assert rejected.unreachable_transition_indices == (0,)
 
 
 def test_pipeline_block_timeout_path():

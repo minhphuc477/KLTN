@@ -513,6 +513,146 @@ class DifferentiablePathfinder(nn.Module):
         return distances
 
 
+class SparseDifferentiablePathfinder(DifferentiablePathfinder):
+    """Edge-sparse Bellman-Ford relaxation for large mission graphs.
+
+    Grid inputs retain the canonical dense implementation. Graph inputs gather
+    only real edges and reduce incoming candidates by destination, reducing a
+    full-coverage pass from ``O(N^3)`` dense work to ``O(N E)`` for ``N`` nodes
+    and ``E`` directed edges. The conservative log-mean-exp reduction matches
+    :func:`conservative_soft_min` without introducing entropy-driven negative
+    cycles.
+    """
+
+    def _sparse_graph_relax_step(
+        self,
+        distances: Tensor,
+        src: Tensor,
+        dst: Tensor,
+        edge_weights: Tensor,
+        source_mask: Tensor,
+    ) -> Tensor:
+        node_count = int(distances.shape[0])
+        inf = float(self.inf_distance)
+        if src.numel() == 0:
+            return torch.where(source_mask.bool(), torch.zeros_like(distances), distances)
+
+        candidates = (distances.index_select(0, src) + edge_weights).clamp(-inf, inf)
+        hard_min = torch.full_like(distances, inf).scatter_reduce(
+            0,
+            dst,
+            candidates,
+            reduce="amin",
+            include_self=True,
+        )
+        finite_edge = candidates < (inf - 1e-6)
+        centered = torch.where(
+            finite_edge,
+            candidates - hard_min.index_select(0, dst),
+            torch.zeros_like(candidates),
+        )
+        stabilized = (
+            torch.exp(-centered / max(float(self.temperature), 1e-6))
+            * finite_edge.to(dtype=candidates.dtype)
+        )
+        exp_sum = torch.zeros_like(distances).scatter_add(0, dst, stabilized)
+        counts = torch.bincount(dst[finite_edge], minlength=node_count).to(
+            device=distances.device,
+            dtype=distances.dtype,
+        )
+        has_candidate = counts > 0
+        mean_exp = exp_sum / counts.clamp_min(1.0)
+        relaxed = hard_min - max(float(self.temperature), 1e-6) * torch.log(
+            mean_exp.clamp_min(torch.finfo(mean_exp.dtype).tiny)
+        )
+        relaxed = torch.where(has_candidate, relaxed, torch.full_like(relaxed, inf))
+        updated = torch.minimum(distances, relaxed).clamp(0.0, inf)
+        return torch.where(source_mask.bool(), torch.zeros_like(updated), updated)
+
+    def _forward_sparse_graph(
+        self,
+        adjacency: Tensor,
+        edge_weights: Tensor,
+        source_mask: Tensor,
+    ) -> Tensor:
+        if adjacency.ndim != 2 or adjacency.shape[0] != adjacency.shape[1]:
+            raise ValueError(f"Sparse graph adjacency must be square [N,N], got {tuple(adjacency.shape)}.")
+        if edge_weights.shape != adjacency.shape:
+            raise ValueError(
+                f"Sparse graph weight shape {tuple(edge_weights.shape)} must match adjacency {tuple(adjacency.shape)}."
+            )
+        node_count = int(adjacency.shape[0])
+        if source_mask.shape != (node_count,):
+            raise ValueError(
+                f"Sparse graph source mask must have shape ({node_count},), got {tuple(source_mask.shape)}."
+            )
+
+        adjacency = adjacency.float()
+        weights = edge_weights.float()
+        source = source_mask.float()
+        edge_index = torch.nonzero(adjacency > 0, as_tuple=False)
+        src = edge_index[:, 0].to(dtype=torch.long)
+        dst = edge_index[:, 1].to(dtype=torch.long)
+        sparse_weights = weights[src, dst]
+        distances = torch.where(
+            source.bool(),
+            torch.zeros(node_count, device=adjacency.device, dtype=weights.dtype),
+            torch.full((node_count,), float(self.inf_distance), device=adjacency.device, dtype=weights.dtype),
+        )
+        use_checkpoint = self._should_checkpoint_relaxation(sparse_weights, source)
+        for _ in range(self._iteration_limit(node_count)):
+            previous = distances
+            if use_checkpoint:
+                distances = checkpoint(
+                    self._sparse_graph_relax_step,
+                    distances,
+                    src,
+                    dst,
+                    sparse_weights,
+                    source,
+                    use_reentrant=False,
+                )
+            else:
+                distances = self._sparse_graph_relax_step(
+                    distances,
+                    src,
+                    dst,
+                    sparse_weights,
+                    source,
+                )
+            if self._has_converged(previous, distances):
+                break
+        return distances
+
+    def forward(
+        self,
+        adjacency: Tensor,
+        edge_weights: Tensor,
+        source_mask: Tensor,
+    ) -> Tensor:
+        batched_graph = (
+            adjacency.ndim == 3
+            and edge_weights.ndim == 3
+            and source_mask.ndim == 2
+        )
+        if batched_graph:
+            if adjacency.shape != edge_weights.shape or source_mask.shape != adjacency.shape[:2]:
+                raise ValueError(
+                    "Batched sparse graph inputs require adjacency/weights [B,N,N] "
+                    "and source_mask [B,N]."
+                )
+            return torch.stack(
+                [
+                    self._forward_sparse_graph(adjacency[i], edge_weights[i], source_mask[i])
+                    for i in range(int(adjacency.shape[0]))
+                ],
+                dim=0,
+            )
+        if adjacency.ndim == 2 and edge_weights.ndim == 2 and source_mask.ndim == 1:
+            return self._forward_sparse_graph(adjacency, edge_weights, source_mask)
+        return super().forward(adjacency, edge_weights, source_mask)
+
+
 class ConvolutionalPathfinder(nn.Module):
     """
     CNN-based differentiable pathfinder for grid-based rooms.
@@ -691,6 +831,7 @@ class LearnableGridPathfinder(nn.Module):
         num_classes: int = 44,
         num_actions: int = 4,
         inf_distance: float = 20.0,
+        full_coverage: bool = True,
     ) -> None:
         super().__init__()
         self.num_iterations = int(max(1, num_iterations))
@@ -698,6 +839,7 @@ class LearnableGridPathfinder(nn.Module):
         self.num_classes = int(max(1, num_classes))
         self.num_actions = int(max(1, num_actions))
         self.inf_distance = float(max(1.0, inf_distance))
+        self.full_coverage = bool(full_coverage)
 
         self.reward_proj = nn.Sequential(
             nn.Conv2d(self.num_classes + 2, 32, kernel_size=3, padding=1),
@@ -765,7 +907,13 @@ class LearnableGridPathfinder(nn.Module):
         reward = reward + 5.0 * source - 5.0 * (1.0 - walk)
 
         value = torch.zeros_like(source)
-        for _ in range(self.num_iterations):
+        spatial_nodes = int(room_grid.shape[-2]) * int(room_grid.shape[-1])
+        iteration_limit = (
+            max(self.num_iterations, max(1, spatial_nodes - 1))
+            if self.full_coverage
+            else self.num_iterations
+        )
+        for _ in range(iteration_limit):
             q_values = self.transition(torch.cat([reward, value], dim=1))
             updated = soft_max(q_values, dim=1, temperature=max(self.temperature, 1e-4)).unsqueeze(1)
             value = torch.maximum(value, reward + updated)
@@ -1263,6 +1411,7 @@ class LogicNet(nn.Module):
         global_reach_weight: float = 1.0,
         global_room_weight: float = 0.25,
         grid_pathfinder_type: str = "bellman_ford",
+        graph_pathfinder_type: str = "dense_bellman_ford",
         resource_gate_mode: str = "hard_ordered",
         full_coverage: bool = True,
         # --- Phase 1D: Temperature annealing (Jang et al., 2017) ---
@@ -1286,6 +1435,15 @@ class LogicNet(nn.Module):
         self.global_reach_weight = float(max(0.0, global_reach_weight))
         self.global_room_weight = float(max(0.0, global_room_weight))
         self.grid_pathfinder_type = str(grid_pathfinder_type).strip().lower()
+        self.graph_pathfinder_type = str(graph_pathfinder_type).strip().lower().replace("-", "_")
+        if self.graph_pathfinder_type in {"dense", "bellman_ford"}:
+            self.graph_pathfinder_type = "dense_bellman_ford"
+        elif self.graph_pathfinder_type in {"sparse", "edge_sparse", "sparse_edge"}:
+            self.graph_pathfinder_type = "sparse_bellman_ford"
+        if self.graph_pathfinder_type not in {"dense_bellman_ford", "sparse_bellman_ford"}:
+            raise ValueError(
+                "graph_pathfinder_type must be 'dense_bellman_ford' or 'sparse_bellman_ford'."
+            )
         self.resource_gate_mode = str(resource_gate_mode).strip().lower()
         if self.resource_gate_mode not in {"hard_ordered", "soft_ordered"}:
             raise ValueError(
@@ -1345,6 +1503,7 @@ class LogicNet(nn.Module):
                 num_iterations=num_iterations,
                 temperature=temperature,
                 num_classes=num_classes,
+                full_coverage=self.full_coverage,
             )
         elif self.grid_pathfinder_type == "perturb_and_map":
             self.grid_pathfinder = PerturbAndMAPGridPathfinder(
@@ -1360,7 +1519,12 @@ class LogicNet(nn.Module):
             )
         
         # Graph-level pathfinder
-        self.graph_pathfinder = DifferentiablePathfinder(
+        graph_pathfinder_cls = (
+            SparseDifferentiablePathfinder
+            if self.graph_pathfinder_type == "sparse_bellman_ford"
+            else DifferentiablePathfinder
+        )
+        self.graph_pathfinder = graph_pathfinder_cls(
             num_iterations=num_iterations,
             temperature=temperature,
             full_coverage=self.full_coverage,

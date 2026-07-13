@@ -22,6 +22,60 @@ class FrozenLatentCache:
     def __len__(self) -> int:
         return len(self._items)
 
+    def clear(self, *, reset_stats: bool = False) -> None:
+        """Discard cached latents, optionally resetting observability counters."""
+        self._items.clear()
+        if reset_stats:
+            self.hits = 0
+            self.misses = 0
+
+    @staticmethod
+    def module_version_token(module: Any) -> Tuple[Any, ...]:
+        """Return a cheap token that changes after ordinary in-place state updates."""
+        named_parameters = getattr(module, "named_parameters", None)
+        named_buffers = getattr(module, "named_buffers", None)
+        if not callable(named_parameters) or not callable(named_buffers):
+            return (type(module).__module__, type(module).__qualname__, id(module))
+        entries = []
+        for kind, iterator in (
+            ("parameter", named_parameters()),
+            ("buffer", named_buffers()),
+        ):
+            for name, tensor in iterator:
+                entries.append(
+                    (
+                        kind,
+                        str(name),
+                        id(tensor),
+                        int(getattr(tensor, "_version", 0)),
+                        tuple(int(dim) for dim in tensor.shape),
+                        str(tensor.dtype),
+                    )
+                )
+        return tuple(entries)
+
+    @staticmethod
+    def module_state_fingerprint(module: Any) -> str:
+        """Hash the actual module state once for cache namespace isolation."""
+        digest = hashlib.blake2b(digest_size=20)
+        digest.update(f"{type(module).__module__}.{type(module).__qualname__}".encode("utf-8"))
+        state_dict = getattr(module, "state_dict", None)
+        if not callable(state_dict):
+            digest.update(str(id(module)).encode("ascii"))
+            return digest.hexdigest()
+
+        for name, value in state_dict().items():
+            digest.update(str(name).encode("utf-8"))
+            if not isinstance(value, torch.Tensor):
+                digest.update(repr(value).encode("utf-8"))
+                continue
+            sample = value.detach().to(device="cpu").contiguous()
+            digest.update(str(tuple(int(dim) for dim in sample.shape)).encode("ascii"))
+            digest.update(str(sample.dtype).encode("ascii"))
+            if sample.numel() > 0:
+                digest.update(sample.reshape(-1).view(torch.uint8).numpy().tobytes())
+        return digest.hexdigest()
+
     def key_for_tensor(
         self,
         tensor: torch.Tensor,

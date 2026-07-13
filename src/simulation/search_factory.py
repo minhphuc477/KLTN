@@ -14,6 +14,7 @@ from src.simulation.dfs_search import DFSGameStateSolver
 from src.simulation.dijkstra_search import DijkstraGameStateSolver
 from src.simulation.dstar_search import DStarLiteGameStateSolver
 from src.simulation.greedy_search import GreedyGameStateSolver
+from src.simulation.learned_astar_search import LearnedTieBreakAStarGameStateSolver
 from src.simulation.search_base import GameStateSearchConfig, GameStateSearchResult
 from src.simulation.validator import CONDITIONAL_IDS, PICKUP_IDS, PUSHABLE_IDS, WATER_IDS, SEMANTIC_PALETTE
 
@@ -37,6 +38,7 @@ GAME_STATE_ALGORITHM_SPECS: Tuple[GameStateAlgorithmSpec, ...] = (
     GameStateAlgorithmSpec(index=4, key="dstar_lite", label="D* Lite", validation_role="replanning_diagnostic", canonical_use="incremental_replanning"),
     GameStateAlgorithmSpec(index=5, key="dfs_iddfs", label="DFS/IDDFS", validation_role="bounded_exhaustive_probe", canonical_use="exhaustive_probe"),
     GameStateAlgorithmSpec(index=6, key="bidirectional_astar", label="Bidirectional A*", validation_role="reversible_grid_diagnostic", canonical_use="reversible_grid_comparison"),
+    GameStateAlgorithmSpec(index=7, key="learned_tiebreak_astar", label="A* + Learned Tie-Break", validation_role="learned_guidance_ablation", canonical_use="equal_f_plateau_ordering"),
 )
 
 SUPPORTED_GAME_STATE_ALGORITHMS: Dict[int, str] = {
@@ -168,6 +170,7 @@ def run_game_state_solver(
     - 4: D* Lite
     - 5: DFS / IDDFS
     - 6: Bidirectional A*
+    - 7: A* with learned equal-f tie-breaking
     """
     if algorithm_idx == 0:
         return AStarGameStateSolver(env, config).solve()
@@ -183,5 +186,7 @@ def run_game_state_solver(
         return DFSGameStateSolver(env, config).solve()
     if algorithm_idx == 6:
         return BidirectionalAStarGameStateSolver(env, config).solve()
+    if algorithm_idx == 7:
+        return LearnedTieBreakAStarGameStateSolver(env, config).solve()
     raise ValueError(f"Unsupported game-state algorithm index: {algorithm_idx}")
 

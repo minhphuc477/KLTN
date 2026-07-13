@@ -1,0 +1,5 @@
+config_version: 1
+
+generation:
+  end_to_end_validation_mode: reject
+  verify_solver_consistency: true

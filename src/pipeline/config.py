@@ -138,6 +138,11 @@ class GraphConfig:
     default_validator_plan_max_states: int = DEFAULT_VALIDATOR_PLAN_MAX_STATES
     default_puzzle_stage_topology_enabled: bool = False
     default_puzzle_stage_trace_decay: float = DEFAULT_PUZZLE_STAGE_TRACE_DECAY
+    default_puzzle_stage_semantics_validation_mode: str = "off"
+    default_puzzle_stage_semantics_min_confidence: Optional[float] = None
+    default_end_to_end_validation_mode: str = "report"
+    default_verify_solver_consistency: bool = False
+    default_topology_betti_metrics_enabled: bool = False
     default_deterministic_graph_marker_overlay_enabled: bool = True
     topology_default_target_curve: Optional[List[float]] = None
     topology_num_rooms: int = 8
@@ -157,7 +162,7 @@ class GraphConfig:
     topology_qd_autosave_archive: bool = False
     topology_max_lock_key_rules: int = 3
     topology_enable_rule_credit_assignment: bool = False
-    topology_enforce_generation_constraints: bool = False
+    topology_enforce_generation_constraints: bool = True
     topology_allow_candidate_repairs: bool = False
     symbolic_max_repair_attempts: int = 5
     symbolic_repair_margin: int = 2

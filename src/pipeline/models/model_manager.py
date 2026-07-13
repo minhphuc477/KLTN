@@ -21,10 +21,61 @@ from src.core import (
 from src.core.definitions import GRAPH_EDGE_FEATURE_DIM, GRAPH_NODE_FEATURE_DIM
 from src.core.symbolic_refiner import DEFAULT_ADJACENCY
 from src.core.discrete_masked_model import DiscreteMaskedRoomModel
+from src.core.puzzle_stage_semantics import (
+    DEFAULT_PUZZLE_STAGE_MAX_SEQUENCE_LENGTH,
+    DEFAULT_PUZZLE_STAGE_SEMANTICS_HIDDEN_DIM,
+    PuzzleStageSemanticsHead,
+)
 from src.pipeline.block_contracts import summarize_missing_keys
 from src.pipeline.room_topology_conditioning import ROOM_TOPOLOGY_CHANNEL_COUNT
 
 logger = logging.getLogger(__name__)
+
+
+def _bind_puzzle_stage_semantics_head(
+    pipeline: Any,
+    checkpoint: Optional[Dict[str, Any]],
+    checkpoint_config: Dict[str, Any],
+    *,
+    source: str,
+) -> None:
+    """Load a bundled auxiliary semantics head for runtime reporting/rejection."""
+    active_source = (
+        "masked_room"
+        if str(getattr(pipeline, "room_generator_mode", "latent_diffusion")).strip().lower()
+        == "discrete_masked"
+        else "diffusion"
+    )
+    if source != active_source or not isinstance(checkpoint, dict):
+        return
+    state = checkpoint.get("puzzle_stage_semantics_head_state_dict")
+    if not isinstance(state, dict):
+        return
+    head = PuzzleStageSemanticsHead(
+        num_tile_classes=int(
+            checkpoint_config.get(
+                "num_classes",
+                getattr(getattr(pipeline, "vqvae", None), "num_classes", 44),
+            )
+        ),
+        hidden_dim=int(
+            checkpoint_config.get(
+                "puzzle_stage_semantics_hidden_dim",
+                DEFAULT_PUZZLE_STAGE_SEMANTICS_HIDDEN_DIM,
+            )
+        ),
+        max_sequence_length=int(
+            checkpoint_config.get(
+                "puzzle_stage_semantics_max_sequence_length",
+                DEFAULT_PUZZLE_STAGE_MAX_SEQUENCE_LENGTH,
+            )
+        ),
+    ).to(pipeline.device)
+    head.load_state_dict(state, strict=True)
+    head.eval()
+    head.requires_grad_(False)
+    pipeline.puzzle_stage_semantics_head = head
+    pipeline.puzzle_stage_semantics_head_source = source
 
 
 def _require_all_learned_parameters(
@@ -357,6 +408,7 @@ def load_condition_encoder(
 
 def load_diffusion(pipeline, checkpoint_path: Optional[str]) -> LatentDiffusionModel:
     """Load or create latent diffusion model."""
+    checkpoint: Optional[Dict[str, Any]] = None
     checkpoint_config: Dict[str, Any] = {}
     checkpoint_state: Optional[Dict[str, Any]] = None
     fallback_config = dict(pipeline.diffusion_fallback_config)
@@ -579,6 +631,12 @@ def load_diffusion(pipeline, checkpoint_path: Optional[str]) -> LatentDiffusionM
                 fast_ckpt_path,
             )
 
+    _bind_puzzle_stage_semantics_head(
+        pipeline,
+        checkpoint,
+        checkpoint_config,
+        source="diffusion",
+    )
     return model
 
 def load_logic_net(pipeline, checkpoint_path: Optional[str]) -> Optional[LogicNet]:
@@ -608,6 +666,7 @@ def load_logic_net(pipeline, checkpoint_path: Optional[str]) -> Optional[LogicNe
         num_classes=default_num_classes,
         num_iterations=int(fallback_config.get("num_logic_iterations", 20)),
         grid_pathfinder_type=str(fallback_config.get("logic_grid_pathfinder", "bellman_ford")),
+        graph_pathfinder_type=str(fallback_config.get("logic_graph_pathfinder", "dense_bellman_ford")),
         resource_gate_mode=str(fallback_config.get("logic_resource_gate_mode", "hard_ordered")),
         full_coverage=bool(fallback_config.get("logic_full_coverage", True)),
         initial_temperature=float(fallback_config.get("logic_initial_temperature", 1.0)),
@@ -641,6 +700,7 @@ def load_logic_net(pipeline, checkpoint_path: Optional[str]) -> Optional[LogicNe
             num_classes=int(checkpoint_config.get("num_classes", architecture.get("num_classes", default_num_classes))),
             num_iterations=int(checkpoint_config.get("num_logic_iterations", 20)),
             grid_pathfinder_type=str(checkpoint_config.get("logic_grid_pathfinder", fallback_config.get("logic_grid_pathfinder", "bellman_ford"))),
+            graph_pathfinder_type=str(checkpoint_config.get("logic_graph_pathfinder", fallback_config.get("logic_graph_pathfinder", "dense_bellman_ford"))),
             resource_gate_mode=str(checkpoint_config.get("logic_resource_gate_mode", fallback_config.get("logic_resource_gate_mode", "hard_ordered"))),
             full_coverage=bool(checkpoint_config.get("logic_full_coverage", fallback_config.get("logic_full_coverage", True))),
             initial_temperature=float(checkpoint_config.get("logic_initial_temperature", fallback_config.get("logic_initial_temperature", 1.0))),
@@ -848,6 +908,12 @@ def load_masked_room_model(
         if pipeline.room_generator_mode == "discrete_masked":
             logger.warning("No discrete masked room checkpoint provided, using random initialization")
 
+    _bind_puzzle_stage_semantics_head(
+        pipeline,
+        checkpoint,
+        checkpoint_config,
+        source="masked_room",
+    )
     return model
 
 def create_refiner(

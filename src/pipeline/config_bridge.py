@@ -170,6 +170,25 @@ def generation_runtime_kwargs_from_resolved_config(config: Dict[str, Any]) -> Di
             "puzzle_stage_trace_decay",
             DEFAULT_PUZZLE_STAGE_TRACE_DECAY,
         ),
+        "default_puzzle_stage_semantics_validation_mode": stage.get(
+            "puzzle_stage_semantics_validation_mode",
+            "off",
+        ),
+        "default_puzzle_stage_semantics_min_confidence": stage.get(
+            "puzzle_stage_semantics_min_confidence",
+        ),
+        "default_end_to_end_validation_mode": stage.get(
+            "end_to_end_validation_mode",
+            "report",
+        ),
+        "default_verify_solver_consistency": stage.get(
+            "verify_solver_consistency",
+            False,
+        ),
+        "default_topology_betti_metrics_enabled": stage.get(
+            "topology_betti_metrics_enabled",
+            False,
+        ),
         "default_deterministic_graph_marker_overlay_enabled": stage.get(
             "deterministic_graph_marker_overlay_enabled",
             True,
@@ -331,6 +350,10 @@ def pipeline_kwargs_from_resolved_config(config: Dict[str, Any]) -> Dict[str, An
                 "num_classes": config["dataset"]["num_classes"],
                 "num_logic_iterations": diffusion["num_logic_iterations"],
                 "logic_grid_pathfinder": diffusion.get("logic_grid_pathfinder", "bellman_ford"),
+                "logic_graph_pathfinder": diffusion.get(
+                    "logic_graph_pathfinder",
+                    "dense_bellman_ford",
+                ),
                 "logic_resource_gate_mode": diffusion.get("logic_resource_gate_mode", "hard_ordered"),
                 "logic_full_coverage": diffusion.get("logic_full_coverage", True),
                 "logic_initial_temperature": diffusion.get("logic_initial_temperature", 1.0),

@@ -25,6 +25,7 @@ from src.generation.grammar import (
     MissionGrammar,
     NodeType,
     StartRule,
+    validate_exact_progression,
 )
 from src.pipeline.config_bridge import pipeline_kwargs_from_resolved_config
 from src.pipeline.dungeon_pipeline import NeuralSymbolicDungeonPipeline
@@ -74,6 +75,10 @@ def build_protocol_graph(seed: int) -> MissionGraph:
         raise RuntimeError("Protocol graph violates key-before-lock ordering.")
     if not grammar.validate_progression_constraints(graph, log_failures=True):
         raise RuntimeError("Protocol graph violates progression constraints.")
+    if not validate_exact_progression(graph):
+        raise RuntimeError(
+            "Protocol graph is not solvable under the consumable-resource oracle."
+        )
     return graph
 
 

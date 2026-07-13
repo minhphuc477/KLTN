@@ -1928,8 +1928,9 @@ class AddHazardGateRule(ProductionRule):
     """
     ADVANCED RULE #9: Soft Gates with Risk-Reward
     
-    Creates traversable but costly paths (lava, spikes) with optional
-    protection items that eliminate damage.
+    Creates protection-gated paths (lava, spikes) with a reachable mitigation
+    item. The current exact state model has no health budget, so this rule must
+    not claim optional damage traversal until that state variable is modeled.
     
     Example: Zelda's lava rooms (cross with damage or get fire tunic first).
     
@@ -1940,11 +1941,17 @@ class AddHazardGateRule(ProductionRule):
         super().__init__("AddHazardGate", weight=0.25)
     
     def can_apply(self, graph: MissionGraph, context: Dict[str, Any]) -> bool:
-        """Can apply if we have normal edges."""
+        """Require both a candidate path and a legal provider anchor."""
         if len(graph.nodes) < 4:
             return False
         normal_edges = [e for e in graph.edges if e.edge_type == EdgeType.PATH]
-        return len(normal_edges) >= 2
+        provider_anchors = [
+            node
+            for node in graph.nodes.values()
+            if graph.get_node_degree(node.id) <= 2
+            and node.node_type in {NodeType.EMPTY, NodeType.ENEMY, NodeType.PUZZLE}
+        ]
+        return len(normal_edges) >= 2 and bool(provider_anchors)
     
     def apply(self, graph: MissionGraph, context: Dict[str, Any]) -> MissionGraph:
         """Add hazard path with optional protection."""
@@ -1974,35 +1981,56 @@ class AddHazardGateRule(ProductionRule):
         )
         protection_item = f"{hazard_type}_PROTECTION"  # e.g., LAVA_PROTECTION (fire tunic)
         
-        # Convert edge to HAZARD
+        # The provider must be reachable while the candidate hazard edge stays
+        # closed. Otherwise the rule creates the same item-behind-own-gate
+        # deadlock as a malformed lock/key pair.
+        start = graph.get_start_node()
+        reachable_pre_gate = (
+            graph.get_reachable_nodes(
+                start.id,
+                excluded_edges={(hazard_edge.source, hazard_edge.target)},
+            )
+            if start is not None
+            else set()
+        )
+        side_nodes = [
+            n for n in graph.nodes.values()
+            if n.id in reachable_pre_gate
+            and graph.get_node_degree(n.id) <= 2
+            and n.node_type in {NodeType.EMPTY, NodeType.ENEMY, NodeType.PUZZLE}
+        ]
+        if not side_nodes:
+            return graph
+
+        side_node = rng.choice(side_nodes)
         graph.edges[hazard_edge_idx].edge_type = EdgeType.HAZARD
         graph.edges[hazard_edge_idx].hazard_damage = rng.randint(1, 3)
         graph.edges[hazard_edge_idx].protection_item_id = protection_item
-        
-        # Place protection item in a side branch (optional)
-        # Find a node not on critical path
-        side_nodes = [
-            n for n in graph.nodes.values()
-            if (graph.get_node_degree(n.id) <= 2 and
-                n.node_type in [NodeType.EMPTY, NodeType.ENEMY, NodeType.PUZZLE])
-        ]
-        
-        if side_nodes:
-            side_node = rng.choice(side_nodes)
-            
-            # Create protection item node
-            protection_id = max(graph.nodes.keys()) + 1
-            protection_node = MissionNode(
-                id=protection_id,
-                node_type=NodeType.PROTECTION_ITEM,
-                position=side_node.position,
-                difficulty=context.get('difficulty', 0.5) * 0.5,
-                item_type=protection_item,
-            )
-            graph.add_node(protection_node)
-            graph.add_edge(side_node.id, protection_id, EdgeType.PATH)
-            
-            logger.info(f"AddHazardGateRule: {hazard_type} hazard at {hazard_edge.source}->{hazard_edge.target}, protection at {protection_id}")
+
+        protection_id = max(graph.nodes.keys()) + 1
+        protection_node = MissionNode(
+            id=protection_id,
+            node_type=NodeType.PROTECTION_ITEM,
+            position=_bounded_free_position(
+                graph,
+                side_node.position,
+                [(0, 1), (1, 0), (0, -1), (-1, 0), (1, 1), (-1, -1)],
+                rng,
+                context,
+            ),
+            difficulty=context.get('difficulty', 0.5) * 0.5,
+            item_type=protection_item,
+        )
+        graph.add_node(protection_node)
+        graph.add_edge(side_node.id, protection_id, EdgeType.PATH)
+
+        logger.info(
+            "AddHazardGateRule: %s hazard at %s->%s, protection at %s",
+            hazard_type,
+            hazard_edge.source,
+            hazard_edge.target,
+            protection_id,
+        )
         
         return graph
 

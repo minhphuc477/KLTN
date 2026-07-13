@@ -258,12 +258,14 @@ class GlobalStateManager:
 
 class StateAwareRoomGenerator:
     """
-    Extends room generation to respect global state.
+    Applies explicit global state as deterministic room transformations.
     
     Key Innovation:
-    - Inject global state as additional conditioning
     - Modify tile generation based on state (e.g., water level)
     - Support conditional re-rendering
+
+    The current trained room models do not expose an authoritative global-state
+    feature schema. This class therefore does not claim learned conditioning.
     """
     
     def __init__(self, base_pipeline):
@@ -295,13 +297,11 @@ class StateAwareRoomGenerator:
         Returns:
             RoomGenerationResult
         """
-        # Encode global state as additional conditioning
-        state_embedding = self._encode_global_state(global_state)
-        
-        # Inject into graph context
+        # Keep state as provenance only. Passing an untrained auxiliary vector
+        # into the condition encoder would create a silent train/inference
+        # schema mismatch.
         graph_context = graph_context.copy()
-        if 'global_state' not in graph_context:
-            graph_context['global_state'] = state_embedding
+        graph_context['global_state_metadata'] = dict(global_state)
         
         # Generate room with state conditioning
         result = self.pipeline.generate_room(
@@ -320,9 +320,7 @@ class StateAwareRoomGenerator:
         return result
     
     def _encode_global_state(self, global_state: Dict[str, Any]) -> np.ndarray:
-        """Encode global state as feature vector."""
-        # Simple encoding: hash state to fixed-size vector
-        # In production, use learned embedding
+        """Encode state for diagnostics; this is not a learned model input."""
         
         embedding = np.zeros(16, dtype=np.float32)
         
@@ -377,119 +375,3 @@ class StateAwareRoomGenerator:
     ) -> np.ndarray:
         """Backward-compatible alias for the public state transformation."""
         return self.apply_state_modifications(room_grid, global_state)
-
-
-# ============================================================================
-# INTEGRATION EXAMPLE
-# ============================================================================
-
-"""
-# In src/pipeline/dungeon_pipeline.py:
-
-from src.generation.global_state import (
-    GlobalStateManager,
-    GlobalStateType,
-    StateAwareRoomGenerator
-)
-
-class NeuralSymbolicDungeonPipeline:
-    def __init__(self, ...):
-        # ... existing init ...
-        self.global_state_manager = GlobalStateManager()
-        self.state_aware_generator = StateAwareRoomGenerator(self)
-    
-    def generate_dungeon_with_global_state(
-        self,
-        mission_graph: nx.Graph,
-        state_config: Optional[Dict] = None,
-        **kwargs
-    ):
-        '''
-        Generate dungeon with multi-room gimmicks.
-        
-        Args:
-            mission_graph: Mission graph
-            state_config: {
-                'variables': [
-                    {'name': 'water_level', 'type': 'water_level', 'initial': 'high'},
-                    {'name': 'switch_1', 'type': 'switch_lever', 'initial': False}
-                ],
-                'transitions': [
-                    {
-                        'from_room': 3,
-                        'trigger': 'switch_pulled',
-                        'changes': {'water_level': 'low'},
-                        'affects': [5, 7, 9]
-                    }
-                ]
-            }
-        '''
-        # Setup global state
-        if state_config:
-            for var_config in state_config.get('variables', []):
-                self.global_state_manager.add_state_variable(
-                    name=var_config['name'],
-                    state_type=GlobalStateType(var_config['type']),
-                    initial_value=var_config['initial']
-                )
-            
-            for trans_config in state_config.get('transitions', []):
-                self.global_state_manager.add_transition(
-                    from_room=trans_config['from_room'],
-                    trigger_condition=trans_config['trigger'],
-                    state_changes=trans_config['changes'],
-                    affected_rooms=set(trans_config['affects'])
-                )
-        
-        # Generate rooms with initial state
-        rooms = {}
-        for room_id in nx.topological_sort(mission_graph):
-            global_state = self.global_state_manager.get_state()
-            
-            room_result = self.state_aware_generator.generate_room_with_state(
-                room_id=room_id,
-                neighbor_latents=self._get_neighbor_latents(room_id, mission_graph, rooms),
-                graph_context=self._prepare_graph_context(mission_graph),
-                global_state=global_state,
-                **kwargs
-            )
-            
-            rooms[room_id] = room_result
-        
-        return rooms, self.global_state_manager
-
-
-# Usage example - dungeon with water level puzzle:
-
-state_config = {
-    'variables': [
-        {'name': 'water_level', 'type': 'water_level', 'initial': 'high'}
-    ],
-    'transitions': [
-        {
-            'from_room': 3,  # Room 3 has water control switch
-            'trigger': 'switch_pulled',
-            'changes': {'water_level': 'low'},
-            'affects': [4, 5, 6]  # These rooms have passages revealed when water lowers
-        }
-    ]
-}
-
-rooms, state_manager = pipeline.generate_dungeon_with_global_state(
-    mission_graph=graph,
-    state_config=state_config
-)
-
-# Simulate player pulling switch in room 3
-affected_rooms = state_manager.apply_transition(room_id=3, trigger='switch_pulled')
-
-# Re-generate affected rooms with new state
-for room_id in affected_rooms:
-    new_state = state_manager.get_state()
-    rooms[room_id] = pipeline.state_aware_generator.generate_room_with_state(
-        room_id=room_id,
-        neighbor_latents=...,
-        graph_context=...,
-        global_state=new_state
-    )
-"""

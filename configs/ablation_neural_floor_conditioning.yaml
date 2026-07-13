@@ -1,0 +1,11 @@
+# Multi-floor graph-conditioning ablation.
+# Requires authoritative within-dungeon floor/z labels. The trainer intentionally
+# rejects flat data or variation that exists only between separate dungeons.
+config_version: 1
+
+training:
+  stage: diffusion
+
+dataset:
+  schema_profile: zelda_multifloor_v1
+  node_feature_dim: 15

@@ -1,4 +1,6 @@
 # Replace FSQ-style reduced codebook defaults with the VQ codebook baseline.
+config_version: 1
+
 training:
   stage: all
 
@@ -6,4 +8,3 @@ vqvae:
   architecture: vqvae
   codebook_size: 512
   dead_code_reset_interval: 100
-

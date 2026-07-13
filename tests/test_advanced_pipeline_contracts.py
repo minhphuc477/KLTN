@@ -188,6 +188,22 @@ def test_advanced_pipeline_fallback_preserves_locked_exit_and_key_marker():
     assert int(np.sum(room == int(SEMANTIC_PALETTE["KEY_SMALL"]))) == 1
 
 
+def test_advanced_graph_oracle_rejects_unreachable_side_room_contract():
+    pipeline = object.__new__(AdvancedNeuralSymbolicPipeline)
+    pipeline.config = SimpleNamespace(graph_oracle_max_states=10_000)
+    graph = nx.DiGraph()
+    graph.add_node(0, type="START", is_start=True)
+    graph.add_node(1, type="GOAL", is_goal=True)
+    graph.add_node(2, type="ENEMY")
+    graph.add_edge(0, 1, edge_type="PATH")
+
+    result = pipeline._validate_mission_graph(graph)
+
+    assert result["solvable"] is True
+    assert result["all_rooms_reachable"] is False
+    assert result["unreachable_rooms"] == [2]
+
+
 def test_advanced_pipeline_disables_requested_lcm_without_real_backend():
     """Requested LCM-LoRA should not activate when only the experimental path exists."""
     pipeline = AdvancedNeuralSymbolicPipeline(_make_test_config())

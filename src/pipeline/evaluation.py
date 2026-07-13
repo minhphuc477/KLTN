@@ -13,6 +13,10 @@ from src.core import SEMANTIC_PALETTE
 from src.evaluation.tile_distribution import compare_tile_pattern_distributions
 from src.pipeline.spatial_utils import coerce_bool, fit_room_grid
 from src.pipeline.types import DungeonGenerationResult, MissingPipelineComponentError, RoomGenerationResult
+from src.validation.end_to_end import build_end_to_end_validation_report
+from src.validation.global_state import validate_attached_global_state_contract
+from src.validation.pacing import evaluate_solution_path_pacing
+from src.validation.topology import evaluate_graph_topology_characteristics
 from src.zelda_data.vglc_utils import get_physical_start_node
 
 logger = logging.getLogger(__name__)
@@ -545,11 +549,62 @@ def repair_and_stitch_dungeon(
         )
     )
     hard_verdict = _hard_oracle_verdict(hard_validation)
+    from src.pipeline.room_stitching import validate_connection_realizations
+    from src.pipeline.stitching.dungeon_assembler import _validate_mission_graph_exact
+
+    graph_validation = _validate_mission_graph_exact(pipeline, mission_graph)
+    global_state_result = validate_attached_global_state_contract(
+        mission_graph,
+        max_states=int(max(1, getattr(pipeline, "graph_oracle_max_states", 200_000))),
+    )
+    spatial_validation = validate_connection_realizations(
+        dungeon_grid,
+        dict(getattr(stitched_layout, "connection_realizations", {}) or {}),
+    )
     try:
         logic_solvability = pipeline.evaluate_dungeon_solvability(normalized_rooms, mission_graph)
     except (RuntimeError, ValueError, TypeError) as exc:
         logger.debug("LogicNet symbolic dungeon solvability metrics failed: %s", exc)
         logic_solvability = {}
+    logicnet_hard_agreement = _logicnet_hard_agreement(
+        logic_solvability,
+        hard_validation,
+    )
+    validation_report = build_end_to_end_validation_report(
+        dungeon_grid=dungeon_grid,
+        graph_validation=graph_validation,
+        global_state_validation=(
+            global_state_result.to_dict() if global_state_result is not None else None
+        ),
+        spatial_validation={
+            **dict(getattr(stitched_layout, "realization_metrics", {}) or {}),
+            **spatial_validation,
+        },
+        tile_validation=hard_validation,
+        logicnet_agreement=logicnet_hard_agreement,
+        advisory_metrics={
+            **evaluate_solution_path_pacing(
+                mission_graph,
+                graph_validation.get("solution_path", []) or [],
+            ),
+            **evaluate_graph_topology_characteristics(
+                mission_graph,
+                graph_validation.get("solution_path", []) or [],
+            ),
+        },
+    )
+    validation_mode = str(
+        getattr(pipeline, "default_end_to_end_validation_mode", "report") or "report"
+    ).strip().lower()
+    if validation_mode == "reject":
+        validation_report.require_accepted()
+    elif validation_mode not in {"off", "report"}:
+        raise ValueError(
+            "default_end_to_end_validation_mode must be off, report, or reject."
+        )
+    validation_contract_metrics = (
+        {} if validation_mode == "off" else validation_report.to_metrics()
+    )
     metrics = {
         "num_rooms": len(normalized_rooms),
         "total_tiles_repaired": sum(r.metrics.get("tiles_changed", 0) for r in normalized_rooms.values()),
@@ -565,6 +620,8 @@ def repair_and_stitch_dungeon(
         "logicnet_lock_loss": float(logic_solvability.get("lock_loss", 0.0)),
         "logicnet_global_logic_loss": float(logic_solvability.get("global_logic_loss", 0.0)),
         "logicnet_num_failing_rooms": float(logic_solvability.get("num_failing", 0.0)),
+        **spatial_validation,
+        **validation_contract_metrics,
         "final_hard_solvable": hard_verdict,
         "final_hard_validation_status": str(
             hard_validation.get("termination_status", "unknown")
@@ -575,10 +632,7 @@ def repair_and_stitch_dungeon(
         "final_hard_states_explored": int(
             hard_validation.get("states_explored", 0) or 0
         ),
-        "logicnet_hard_agreement": _logicnet_hard_agreement(
-            logic_solvability,
-            hard_validation,
-        ),
+        "logicnet_hard_agreement": logicnet_hard_agreement,
         **dict(getattr(stitched_layout, "realization_metrics", {}) or {}),
     }
     return DungeonGenerationResult(
@@ -638,6 +692,9 @@ def _validate_dungeon(
             node_to_room=node_to_room,
             solver_timeout=int(max(1, int(getattr(pipeline, "tile_oracle_max_states", 200_000)))),
             room_puzzle_metadata=room_puzzle_metadata,
+            verify_dijkstra_consistency=bool(
+                getattr(pipeline, "default_verify_solver_consistency", False)
+            ),
         )
 
         path_length = int(result.path_length) if result.is_solvable else 0
@@ -694,6 +751,18 @@ def _validate_dungeon(
             'proven_unsolvable': bool(getattr(result, 'proven_unsolvable', False)),
             'final_inventory': dict(getattr(result, 'final_inventory', {}) or {}),
             'path_interactions': dict(getattr(result, 'path_interactions', {}) or {}),
+            'solver_consistency_status': str(
+                getattr(result, 'solver_consistency_status', 'not_requested')
+            ),
+            'solver_consistent': getattr(result, 'solver_consistent', None),
+            'solver_consistency_path_length': getattr(
+                result,
+                'solver_consistency_path_length',
+                None,
+            ),
+            'solver_consistency_states_explored': int(
+                getattr(result, 'solver_consistency_states_explored', 0) or 0
+            ),
             'is_exact': True,
         }
     except (AttributeError, RuntimeError, ValueError, TypeError) as e:
@@ -720,6 +789,10 @@ def _validate_dungeon(
             'states_explored': 0,
             'termination_status': 'validator_error',
             'proven_unsolvable': False,
+            'solver_consistency_status': 'not_run',
+            'solver_consistent': None,
+            'solver_consistency_path_length': None,
+            'solver_consistency_states_explored': 0,
             'is_exact': False,
         }
 

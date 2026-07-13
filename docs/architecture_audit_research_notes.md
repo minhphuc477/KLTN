@@ -1311,11 +1311,14 @@ Verified corrections:
 
 Rejected or narrowed audit claims:
 
-- The reported two-lock deadlock bypass is stale. Mission-grammar reachability
-  resolves resources iteratively and keeps every unresolved lock closed while
-  checking a provider. A mutually locked two-key cycle is rejected. Excluding
-  every lock unconditionally would be incorrect because it would also reject
-  valid nested progressions such as key1 -> lock1 -> key2 -> lock2.
+- The reported two-lock deadlock bypass was valid in the local
+  `validate_lock_key_ordering` prefilter: checking each lock independently
+  could accept two keys hidden behind one another's locks. The validator now
+  performs a fixed-point acquisition pass. Every lock starts closed; reachable
+  keys open one wave of locks; the process repeats until all locks open or no
+  progress is possible. A mutually locked cycle is rejected, while valid
+  `key1 -> lock1 -> key2 -> lock2` progression remains accepted. Merely
+  excluding every lock globally would reject that valid staged case.
 - LogicNet is not truncated at its configured default iteration count when
   full coverage is enabled. It runs at least `N-1` graph relaxations or `H*W`
   grid relaxations and checkpoints larger differentiable rollouts. Exact
@@ -1352,3 +1355,230 @@ Deferred by scientific design rather than missing code:
   an untrained input branch. Implement it only with a corpus containing the
   same room under multiple authoritative global states and report it as an
   ablation against deterministic state compilation.
+
+Repository modularization boundary:
+
+- Search state and movement semantics have been extracted from the validator
+  god module into `src/simulation/state.py`: `Action`, `GameState`, canonical
+  movement costs and tile sets, dynamic block/bridge geometry, immutable state
+  keys, and dominance pruning now have one owner. `validator.py` re-exports the
+  same names so existing callers and old pickle lookup paths remain valid. This
+  reduced the validator by roughly 350 lines without changing solver behavior;
+  36 state-space, block-push, search-factory, and block-integration tests pass.
+- Validation result, solver-option, diagnostics, and batch-result contracts now
+  live in `src/simulation/validation_types.py`. `validator.py` re-exports the
+  same class objects, preserving imports and serialized class identity while
+  removing another dependency-light responsibility from the simulator/search
+  implementation.
+- The apparent `src/gui/services`, `src/gui/controls`, and selected
+  `src/gui/overlay` "dead files" are documented compatibility shims that
+  re-export canonical modules under `src/gui/solver`, `src/gui/gameplay`, and
+  `src/gui/control_panel`. Tests intentionally exercise those public paths.
+  Deleting them is a versioned API-removal decision, not dead-code cleanup.
+  The remaining production import through `controls/control_panel_logic` was
+  migrated to the canonical `control_panel.logic` path. A future major release
+  may remove shims after a deprecation window and import-usage telemetry.
+- `train_diffusion.py` remains oversized. Frozen VQ-VAE checkpoint metadata,
+  architecture resolution, and legacy-state compatibility now live in
+  `src/training/diffusion_checkpoint_contracts.py`, with compatibility aliases
+  retained by the CLI module. The complete diffusion configuration schema,
+  resolved-config bridge, and CLI override builder now live in
+  `src/training/diffusion_config.py`; `src/train_diffusion.py` re-exports the
+  established public names. Its remaining safe extraction order is checkpoint
+  I/O, validation/sampling, then the trainer core.
+  Moving thousands of lines in one patch would obscure behavioral review and
+  break downstream imports. Continue as compatibility-preserving module
+  extractions with the public script re-exporting established names; do not use
+  file length itself as evidence of duplicated scientific logic.
+
+Quality-Diversity feasibility boundary:
+
+- The runtime MAP-Elites adapter already computed an inventory-aware macro
+  path for graph descriptors, but previously fell back to grid descriptors
+  when that graph path was infeasible. Hybrid mode now rejects archive
+  admission in that case. The explicit `legacy` mode remains the grid-only
+  ablation. This prevents a tile-solvable rendering from becoming an elite
+  when its intended mission key/item economy is impossible.
+
+### Multi-Floor Conditioning And LogicNet Scaling (2026-07-13)
+
+- Neural floor conditioning was already implemented as an appended normalized
+  graph-node coordinate at feature index 14, propagated through the dataset,
+  all three trainers, checkpoint architecture inference, and runtime graph
+  construction. The branch was nevertheless unreachable through the strict
+  config system because the only registered schema required 14 features.
+  `zelda_multifloor_v1` now locks the complete 15-feature contract while
+  `zelda_v1` remains the checkpoint-compatible default.
+- Enabling the multi-floor profile is intentionally fail-closed. Training must
+  observe at least one dungeon whose every conditioned node has authoritative
+  floor metadata and which spans at least two floor values. Zero padding,
+  variation between unrelated single-floor dungeons, and inferred labels do
+  not count as evidence for the ablation.
+- LogicNet's dense mission-graph Bellman-Ford backend performs `N-1` rounds over
+  an `N x N` matrix under full coverage. A new opt-in
+  `sparse_bellman_ford` backend performs the same conservative soft relaxation
+  over real directed edges, changing the planning work from dense `O(N^3)` to
+  `O(N E)` for sparse mission graphs. Dense remains the baseline; the sparse
+  backend is wired through diffusion, masked-room training, checkpoint
+  reconstruction, CLI/config resolution, and the LogicNet ablation manifest.
+- Numerical verification compares the dense and sparse distance fields and
+  edge-weight gradients on the same branching graph. Focused LogicNet tests
+  pass (115 pre-change and 35 sparse/config tests after integration). A local
+  CPU probe measured approximately 0.092 s dense versus 0.046 s sparse at 100
+  nodes and 0.262 s sparse at 500 nodes. These timings are engineering probes,
+  not evidence claims; matched-device repeated timing, peak memory, holdout
+  solvability, and key-lock violations remain required in the ablation.
+
+Research basis:
+
+- [Value Iteration Networks](https://arxiv.org/abs/1602.02867) motivates an
+  explicit differentiable planning computation rather than an unconstrained
+  proxy.
+- [Generalized Value Iteration Networks](https://arxiv.org/abs/1706.02416)
+  extends that planning bias to irregular graphs.
+- [Graph neural induction of value iteration](https://arxiv.org/abs/2009.12604)
+  supports direct algorithmic supervision on graph planning steps.
+- [DataSP](https://proceedings.mlr.press/v244/lahoud24a.html) is relevant to a
+  future learned contextual-cost ablation, but it is not silently substituted
+  for the current single-source resource-aware objective.
+
+### Publication Validator And Pacing Contract (2026-07-13)
+
+- Final generation now emits one staged end-to-end report with four hard
+  evidence boundaries: semantic-grid representation, exact resource-aware
+  graph progression plus all-room reachability, graph-to-grid connection
+  realization, and exact full-state tile solvability. Canonical generation
+  uses `generation.end_to_end_validation_mode: reject`; an exhausted exact
+  oracle is indeterminate and cannot be relabeled unsolvable or accepted.
+- LogicNet remains advisory evidence. Its agreement with the exact oracle is
+  reported, but a differentiable probability is never used as a proof of
+  mechanical feasibility.
+- Grammar edge gates now receive a collective fixed-point progression closure
+  after their per-gate schema/provider checks. This catches dependency cycles
+  in which a provider is only reachable after assuming a different unresolved
+  gate is open. The final exact oracle still owns consumable-resource proofs.
+- Exact graph solution paths now produce advisory pacing evidence: normalized
+  landmark positions, edge-spacing variation, setup-before-gate-before-climax
+  ordering, unsmoothed tension-event positions, rest count, revisit ratio, and
+  revisit depth. These fields are not hard rejection thresholds and are not
+  human-fun measurements. They are suitable response variables for matched
+  controllability experiments and later human calibration.
+- A nondifferentiable digital Betti-curve ablation reports raw-neural versus
+  final-map connected-component and loop drift across thresholds. It is an
+  image-topology descriptor, not a stateful Zelda solvability proof. Persistent
+  topology should enter the training objective only as a separately matched
+  ablation with measured gradient/runtime cost and final hard-oracle rates.
+- The GUI services/controls/overlay deletion proposal was rejected after
+  import tracing: those files are exercised compatibility paths. The obsolete
+  `src/zelda_data/modules` re-export package was unreferenced and was removed.
+
+Research interpretation follows the evaluation-taxonomy warning that no single
+automatic metric establishes generator quality
+([Withington et al., 2024](https://arxiv.org/abs/2404.18657)). Constraint-aware
+QD is consistent with treating feasibility separately from diversity/local
+competition ([Gravina et al., 2019](https://arxiv.org/abs/1907.04053)). The
+locked-door literature likewise validates both mission feasibility and spatial
+fit rather than weak connectivity alone
+([Pereira et al., 2021](https://doi.org/10.1016/j.eswa.2021.115009)).
+
+### Validator Hardening Follow-up (2026-07-13)
+
+Current-source verification rejected several stale audit claims:
+
+- lock-node ordering already uses a least fixed-point acquisition process that
+  keeps every unresolved lock closed; globally excluding every lock in one
+  pass would incorrectly reject valid staged progression;
+- the advanced room fallback is opt-in and topology-preserving rather than an
+  empty all-zero room;
+- the boss gauntlet excludes every incoming boss-door approach when placing
+  the Big Key;
+- `LightweightGCNLayer` already batches disjoint graphs with offset indices and
+  `index_add_`, without a Python batch loop;
+- `src/gui/services` and the legacy `src/gui/ai` names are compatibility APIs,
+  not an unreferenced 45-file graveyard. The catalog's one nonexistent legacy
+  service entry was removed, but tested shims remain until a versioned API
+  removal.
+
+The deeper pass found and corrected real contract gaps:
+
+- `LOCK` and `BOSS_DOOR` nodes without a key identity, or without a correctly
+  typed `KEY`/`BIG_KEY` provider, now fail schema validation. A malformed lock
+  can no longer become an implicitly open room.
+- benchmark, ablation, and master-integration `constraint_valid` results now
+  include the exact consumable-resource oracle. The monotone grammar closure
+  remains a fast diagnostic prefilter; it is not relabeled as an exact proof
+  because it does not spend small keys.
+- final evolutionary repairs are transactional. If descriptor-oriented repair
+  invalidates the selected feasible phenotype, the repair is rolled back. Node
+  cap and connectivity transformations are followed by a fresh exact graph
+  oracle and all-room reachability proof on the artifact that is actually
+  exported.
+- the advanced pipeline now requires exact all-room progression reachability,
+  not only START-to-GOAL reachability. Its graph proof, optional finite
+  global-state proof, spatial realization, final tile oracle, and optional
+  Dijkstra consistency comparison are emitted through the same staged
+  end-to-end report as the canonical pipeline.
+- an attached global-state contract is revalidated against the current graph;
+  stale stored validation payloads are never trusted after graph mutation.
+- `GraphGuidedValidator` and `GraphValidationResult` now live in
+  `src/simulation/graph_validator.py`; `validator.py` re-exports the identical
+  class objects for compatibility. This removes a self-contained graph/room
+  validation responsibility from the validator god module without changing
+  serialized or import-facing contracts.
+- Laplacian graph positional encoding now parses enum-valued and serialized
+  edge semantics through the canonical edge-token parser. Locked edges no
+  longer become open-weight edges merely because a loader used `EdgeType`
+  rather than a lowercase string.
+- switch-conditioned puzzle traces now distinguish explicit/observed
+  block-on-switch structure from ordinary step-on switches. Ambiguous
+  `switch_locked` metadata no longer silently fabricates a block interaction.
+
+Scientific boundary:
+
+- Automatic validation can establish representation integrity, finite-state
+  graph progression, graph-to-grid realization, and exact tile-state
+  solvability within a declared complete search budget.
+- It cannot establish enjoyment, perceived pacing, or human-likeness without
+  calibrated player evidence. The 2024 evaluation survey explicitly warns
+  against treating one automatic metric as a universal quality measure
+  ([Withington et al., 2024](https://arxiv.org/abs/2404.18657)).
+- BSP is not a mandatory scientific stage. It is a layout baseline or
+  alternative compiler and should be added only as a matched placement
+  ablation against the current strict graph-aware stitcher, reporting success
+  rate, topology preservation, runtime, and final oracle validity.
+- Persistent-homology guidance is still a hypothesis. Current code reports a
+  nondifferentiable Betti-curve preservation ablation; topology-aware graph
+  diffusion work supports investigating learned guidance, but it does not make
+  such a loss a correctness oracle
+  ([TAGG, NeurIPS 2025](https://papers.nips.cc/paper_files/paper/2025/hash/bb88dfbebcb21022d32086bed631bfc5-Abstract-Conference.html)).
+
+Focused evidence after this integration: 33 end-to-end/grammar tests, 16 room
+stitching tests, 37 evaluation tests, and 110 configuration/trainer-shape tests
+passed. The evolutionary suite passed 44 of 45 checks; one seeded 20-generation
+run obtained quality `0.481` against a test-local `0.5` threshold. This is a
+quality-convergence result to report and investigate, not grounds to weaken the
+new feasibility closure or claim full-suite success.
+
+### Topology Evidence Hardening (2026-07-13)
+
+- Spatial graph preservation now has an exact verdict in addition to its
+  descriptive composite score. Node/edge/component counts, cycle rank,
+  branch nodes, articulation nodes, and biconnected-component count must all
+  agree. A high average can no longer conceal one destroyed invariant in the
+  end-to-end hard contract.
+- Final artifacts now report graph node/edge/component counts, normalized cycle
+  rank, branch/leaf counts, articulation ratio, biconnected-region count,
+  START-to-GOAL node connectivity, mandatory articulation checkpoints, and
+  their positions on the exact solution path.
+- These graph characteristics remain advisory controls. Articulation points
+  and low redundancy are not automatically defects in lock-and-key dungeons;
+  hard validity continues to come from progression, realization, and tile-state
+  oracles. This follows controllable graph-PCG work, which treats requested
+  graph properties as explicit controls rather than universal quality labels
+  ([G-PCGRL, 2024](https://arxiv.org/abs/2407.10483)).
+- Current automated evidence is still not a replacement for player data.
+  PCGRL-style metric optimization demonstrates controllability under computable
+  objectives, not perceived fun ([PCGRL](https://arxiv.org/abs/2001.09212));
+  scale and out-of-distribution generalization require dedicated experiments
+  rather than inference from in-distribution validity
+  ([PCGRL+, 2024](https://arxiv.org/abs/2408.12525)).

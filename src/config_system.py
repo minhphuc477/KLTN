@@ -41,6 +41,9 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+CURRENT_CONFIG_VERSION = 1
+LEGACY_CONFIG_VERSION = 0
+
 DEFAULT_DATASET_SCHEMA_PROFILE = "zelda_v1"
 DATASET_SCHEMA_PROFILES: Dict[str, Dict[str, int]] = {
     DEFAULT_DATASET_SCHEMA_PROFILE: {
@@ -48,6 +51,14 @@ DATASET_SCHEMA_PROFILES: Dict[str, Dict[str, int]] = {
         "room_height": int(ROOM_HEIGHT),
         "room_width": int(ROOM_WIDTH),
         "node_feature_dim": int(GRAPH_NODE_FEATURE_DIM),
+        "edge_feature_dim": int(GRAPH_EDGE_FEATURE_DIM),
+        "tpe_dim": int(GRAPH_TPE_DIM),
+    },
+    "zelda_multifloor_v1": {
+        "num_classes": int(max(int(v) for v in SEMANTIC_PALETTE.values()) + 1),
+        "room_height": int(ROOM_HEIGHT),
+        "room_width": int(ROOM_WIDTH),
+        "node_feature_dim": int(GRAPH_NODE_FEATURE_DIM + 1),
         "edge_feature_dim": int(GRAPH_EDGE_FEATURE_DIM),
         "tpe_dim": int(GRAPH_TPE_DIM),
     },
@@ -92,6 +103,13 @@ class ConfigField:
 
 
 CONFIG_FIELDS: List[ConfigField] = [
+    ConfigField(
+        "config_version",
+        int,
+        CURRENT_CONFIG_VERSION,
+        "Version of the resolved experiment configuration contract.",
+        choices=(CURRENT_CONFIG_VERSION,),
+    ),
     ConfigField("training.stage", str, "all", "Training stage selector.", choices=("all", "vqvae", "diffusion", "fast_sampler", "masked_room")),
     ConfigField("runtime.experiment_name", str, "zelda_hmolqd", "Human-readable experiment name."),
     ConfigField("runtime.output_dir", str, "outputs/zelda_hmolqd", "Output directory for checkpoints, logs, and config snapshots."),
@@ -247,6 +265,7 @@ CONFIG_FIELDS: List[ConfigField] = [
     ConfigField("diffusion.logic_learning_rate", float, None, "Optional LogicNet-specific optimizer learning rate. Null reuses diffusion.learning_rate.", min_value=1e-8, allow_none=True),
     ConfigField("diffusion.logic_lr_warmup_epochs", int, 5, "Epochs used to linearly warm up only the LogicNet optimizer group.", min_value=0),
     ConfigField("diffusion.logic_grid_pathfinder", str, "bellman_ford", "Grid-level LogicNet pathfinder ablation.", choices=("cnn", "bellman_ford", "bellman-ford", "soft_bellman_ford", "soft-bellman-ford", "vin", "value_iteration", "value-iteration", "perturb_and_map", "perturb-and-map", "perturb_map", "pmap")),
+    ConfigField("diffusion.logic_graph_pathfinder", str, "dense_bellman_ford", "Mission-graph LogicNet backend. sparse_bellman_ford preserves the Bellman objective while scaling with real edges.", choices=("dense_bellman_ford", "sparse_bellman_ford")),
     ConfigField("diffusion.logic_resource_gate_mode", str, "hard_ordered", "Ordered graph resource-gating ablation. soft_ordered preserves gradients through key acquisition; hard_ordered is the legacy discrete rollout.", choices=("hard_ordered", "soft_ordered")),
     ConfigField("diffusion.logic_full_coverage", bool, True, "Use complete Bellman coverage; false is the truncated-planning ablation."),
     ConfigField("diffusion.num_logic_iterations", int, 30, "LogicNet message-passing iterations.", min_value=1),
@@ -308,7 +327,7 @@ CONFIG_FIELDS: List[ConfigField] = [
     ConfigField("topology.qd_autosave_archive", bool, False, "Persist topology.qd_archive_path during and after CVT-emitter search."),
     ConfigField("topology.max_lock_key_rules", int, 3, "Hard cap on progression key/lock-style rule applications per genome execution.", min_value=0),
     ConfigField("topology.enable_rule_credit_assignment", bool, False, "Enable adaptive rule-credit assignment during topology search."),
-    ConfigField("topology.enforce_generation_constraints", bool, False, "Reject intermediate topology candidates that violate progression constraints."),
+    ConfigField("topology.enforce_generation_constraints", bool, True, "Reject intermediate topology candidates that violate progression constraints before fitness evaluation."),
     ConfigField("topology.allow_candidate_repairs", bool, False, "Attempt local repairs when topology generation constraints fail."),
     ConfigField("generation.room_generator_mode", str, "latent_diffusion", "Runtime room generator branch.", choices=("latent_diffusion", "discrete_masked")),
     ConfigField("generation.guidance_scale", float, 3.0, "Default classifier-free guidance scale for runtime generation; matches the distilled/validated teacher regime.", min_value=0.0),
@@ -357,6 +376,11 @@ CONFIG_FIELDS: List[ConfigField] = [
     ConfigField("generation.validator_plan_max_states", int, 512, "Maximum validator search states explored per room-local topology-prior segment before falling back to the simpler geometric traversability trace.", min_value=32, max_value=4096),
     ConfigField("generation.puzzle_stage_topology_enabled", bool, False, "Inject ordered multi-step puzzle traces into runtime room-topology priors. Enable only with retrained stage-conditioned checkpoints."),
     ConfigField("generation.puzzle_stage_trace_decay", float, 0.75, "Per-stage decay used when converting ordered puzzle stages into runtime topology traces.", min_value=0.05, max_value=1.0),
+    ConfigField("generation.puzzle_stage_semantics_validation_mode", str, "off", "Runtime use of the trained puzzle-stage semantics head: off, report confidence only, or reject low-confidence rooms.", choices=("off", "report", "reject")),
+    ConfigField("generation.puzzle_stage_semantics_min_confidence", float, None, "Calibrated joint-confidence threshold for reject mode. Must be explicitly set when rejection is enabled.", min_value=0.0, max_value=1.0, allow_none=True),
+    ConfigField("generation.end_to_end_validation_mode", str, "report", "Final artifact contract: off, report staged evidence, or reject any failed/indeterminate applicable hard-validation stage.", choices=("off", "report", "reject")),
+    ConfigField("generation.verify_solver_consistency", bool, False, "Run an independent full-state Dijkstra comparator after A*. When enabled, mismatch or comparator indeterminacy becomes an applicable end-to-end validation stage."),
+    ConfigField("generation.topology_betti_metrics_enabled", bool, False, "Report raw-neural versus final-room digital Betti curves as an offline topology-preservation ablation. This is not a solvability proof."),
     ConfigField("generation.deterministic_graph_marker_overlay_enabled", bool, True, "Apply deterministic graph-owned semantic marker overlay after generation/repair. Disable only for purely-neural semantic ablations."),
     ConfigField("generation.fast_sampler_teacher_fallback_enabled", bool, False, "Allow fast-sampler rooms to fall back to the full diffusion teacher when runtime quality guards trigger. Defaults off so student quality is exposed unless an ablation opts in."),
     ConfigField("generation.masked_room_teacher_fallback_enabled", bool, False, "Allow masked-room outputs with obvious structural noise to fall back to the diffusion teacher during runtime generation. Defaults off so masked-room quality is exposed unless an ablation opts in."),
@@ -443,6 +467,7 @@ CONFIG_FIELDS: List[ConfigField] = [
     ConfigField("masked_room.logic_topology_trace_weight", float, 0.25, "Weight for topology-trace walkability anchors in masked-room LogicNet supervision.", min_value=0.0),
     ConfigField("masked_room.logic_topology_anchor_weight", float, 0.25, "Weight for sparse topology-anchor walkability terms in masked-room LogicNet supervision.", min_value=0.0),
     ConfigField("masked_room.logic_grid_pathfinder", str, "bellman_ford", "Grid pathfinder used by masked-room LogicNet ablations.", choices=("bellman_ford", "conv", "cnn", "vin", "learnable", "perturb_and_map")),
+    ConfigField("masked_room.logic_graph_pathfinder", str, "dense_bellman_ford", "Mission-graph LogicNet backend for masked-room ablations.", choices=("dense_bellman_ford", "sparse_bellman_ford")),
     ConfigField("masked_room.logic_resource_gate_mode", str, "hard_ordered", "Ordered resource-gating ablation for masked-room LogicNet.", choices=("hard_ordered", "soft_ordered")),
     ConfigField("masked_room.logic_full_coverage", bool, True, "Use complete Bellman coverage for masked-room LogicNet."),
     ConfigField("masked_room.num_logic_iterations", int, 30, "Number of LogicNet pathfinding iterations for masked-room ablations.", min_value=1),
@@ -513,7 +538,47 @@ def load_yaml_config(path: Optional[str]) -> Dict[str, Any]:
         payload = yaml.safe_load(handle) or {}
     if not isinstance(payload, dict):
         raise ValueError(f"Config file {cfg_path} must contain a YAML mapping at the root.")
-    return payload
+    return migrate_config_payload(payload, source=str(cfg_path))
+
+
+def migrate_config_payload(
+    payload: Dict[str, Any],
+    *,
+    source: str = "config payload",
+) -> Dict[str, Any]:
+    """Upgrade a configuration payload to the current explicit contract.
+
+    Version 0 is the pre-versioning schema. It has no renamed fields, so its
+    migration is intentionally limited to adding the version marker; existing
+    unknown-field validation still rejects stale or misspelled keys.
+    """
+    if not isinstance(payload, dict):
+        raise TypeError(f"{source} must be a mapping, got {type(payload).__name__}.")
+    migrated = copy.deepcopy(payload)
+    raw_version = migrated.get("config_version", LEGACY_CONFIG_VERSION)
+    if isinstance(raw_version, bool):
+        raise TypeError(f"{source} config_version must be an integer, got bool.")
+    try:
+        version = int(raw_version)
+    except (TypeError, ValueError) as exc:
+        raise TypeError(
+            f"{source} config_version must be an integer, got {raw_version!r}."
+        ) from exc
+    if version < LEGACY_CONFIG_VERSION:
+        raise ValueError(f"{source} has invalid negative config_version={version}.")
+    if version > CURRENT_CONFIG_VERSION:
+        raise ValueError(
+            f"{source} requires config_version={version}, but this checkout supports "
+            f"at most {CURRENT_CONFIG_VERSION}. Upgrade the code before loading it."
+        )
+    if version == LEGACY_CONFIG_VERSION:
+        logger.warning(
+            "%s has no config_version; treating it as legacy version 0 and migrating to version %d.",
+            source,
+            CURRENT_CONFIG_VERSION,
+        )
+        migrated["config_version"] = CURRENT_CONFIG_VERSION
+    return migrated
 
 
 def _normalize_bool(value: Any) -> bool:
@@ -881,7 +946,7 @@ def load_resolved_config_for_artifact(start_path: Optional[str | Path]) -> Optio
     if suffix == ".json":
         with open(resolved_path, "r", encoding="utf-8") as handle:
             payload = json.load(handle)
-        return validate_config(payload)
+        return validate_config(migrate_config_payload(payload, source=str(resolved_path)))
     raise ValueError(f"Unsupported resolved config format: {resolved_path}")
 
 
@@ -939,6 +1004,7 @@ def save_reproducibility_snapshot(config: Dict[str, Any], *, argv: Optional[List
 
     metadata = {
         "saved_at_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        "config_version": int(config["config_version"]),
         "seed": int(config["runtime"]["seed"]),
         "git_commit": get_git_commit(cwd=str(Path(__file__).resolve().parent.parent)),
         "command": list(argv or sys.argv),

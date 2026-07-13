@@ -2,6 +2,8 @@
 # Every field below is part of the validated schema and can also be overridden
 # from the CLI via `python main.py train --config configs/zelda_hmolqd.yaml ...`.
 
+config_version: 1
+
 training:
   stage: all  # type=str, default=all, valid={all,vqvae,diffusion,fast_sampler,masked_room}
 
@@ -32,7 +34,7 @@ distributed:
 
 dataset:
   data_dir: Data/The Legend of Zelda  # type=str, default=Data/The Legend of Zelda, valid=dataset root path
-  schema_profile: zelda_v1  # type=str, default=zelda_v1, valid={zelda_v1}; explicit repository schema lock
+  schema_profile: zelda_v1  # zelda_v1=14 features; zelda_multifloor_v1=15 features with authoritative floor/z
   batch_size: 4  # type=int, default=4, valid>=1; only used when dungeon_batch_mode=false. With dungeon_batch_mode=true, effective batch is all rooms in the sampled dungeon variant
   num_workers: 0  # type=int, default=0, valid>=0
   pin_memory: true  # type=bool, default=true, valid={true,false}
@@ -167,6 +169,7 @@ diffusion:
   logic_learning_rate: null  # type=float|null, default=null, valid>=1e-8; optional LogicNet-specific LR
   logic_lr_warmup_epochs: 5  # type=int, default=5, valid>=0; linearly warm up only the LogicNet optimizer group
   logic_grid_pathfinder: bellman_ford  # type=str, default=bellman_ford, valid={cnn,bellman_ford,vin,perturb_and_map}; grid-pathfinder ablation
+  logic_graph_pathfinder: dense_bellman_ford  # dense baseline; sparse_bellman_ford scales with mission-graph edges
   logic_resource_gate_mode: hard_ordered  # type=str, default=hard_ordered, valid={hard_ordered,soft_ordered}; explicit differentiable resource-rollout ablation
   logic_full_coverage: true  # type=bool, default=true; false is the explicitly truncated Bellman-planning ablation
   num_logic_iterations: 30  # type=int, default=30, valid>=1
@@ -224,7 +227,7 @@ topology:
   qd_autosave_archive: false  # type=bool, default=false; persist the archive during and after search
   max_lock_key_rules: 3  # type=int, default=3, valid>=0
   enable_rule_credit_assignment: false  # type=bool, default=false, valid={true,false}
-  enforce_generation_constraints: false  # type=bool, default=false, valid={true,false}
+  enforce_generation_constraints: true  # type=bool, default=true, valid={true,false}; reject deadlocked intermediate grammar phenotypes before fitness evaluation
   allow_candidate_repairs: false  # type=bool, default=false, valid={true,false}
 
 generation:
@@ -275,6 +278,11 @@ generation:
   validator_plan_max_states: 512  # type=int, default=512, valid=32..4096; cap room-local validator search used for topology priors so complex puzzle/key rooms fall back to the geometric trace instead of stalling generation
   puzzle_stage_topology_enabled: false  # type=bool, default=false, valid={true,false}; enable only with retrained stage-conditioned checkpoints because it changes runtime topology priors toward ordered multi-step puzzle traces
   puzzle_stage_trace_decay: 0.75  # type=float, default=0.75, valid=0.05..1; decay applied when rasterizing ordered puzzle stages into runtime topology priors
+  puzzle_stage_semantics_validation_mode: "off"  # type=str, default=off, valid={off,report,reject}; quoted because YAML 1.1 otherwise parses off as boolean false
+  puzzle_stage_semantics_min_confidence: null  # type=float|null, default=null, valid=0..1; calibrated threshold required explicitly by reject mode
+  end_to_end_validation_mode: reject  # type=str, default=report, valid={off,report,reject}; canonical generation fails closed unless representation, graph, spatial-edge, and tile-oracle stages all pass
+  verify_solver_consistency: false  # type=bool, default=false; expensive A* versus full-state Dijkstra agreement ablation, enabled only in matched solver-consistency runs
+  topology_betti_metrics_enabled: true  # type=bool, default=false; publication ablation reporting for raw-neural versus repaired H0/H1 curves, never used as a hard solvability oracle
   deterministic_graph_marker_overlay_enabled: true  # type=bool, default=true, valid={true,false}; keep enabled for the production hybrid path, disable only for purely-neural semantic ablations
   fast_sampler_teacher_fallback_enabled: false  # type=bool, default=false, valid={true,false}; strict default exposes fast-sampler standalone quality instead of rerouting to the teacher
   masked_room_teacher_fallback_enabled: false  # type=bool, default=false, valid={true,false}; strict default exposes masked-room standalone quality instead of rerouting noisy outputs to the teacher
@@ -363,6 +371,7 @@ masked_room:
   logic_topology_trace_weight: 0.25  # type=float, default=0.25, valid>=0
   logic_topology_anchor_weight: 0.25  # type=float, default=0.25, valid>=0
   logic_grid_pathfinder: bellman_ford  # type=str, default=bellman_ford, valid={bellman_ford,conv,cnn,vin,learnable,perturb_and_map}
+  logic_graph_pathfinder: dense_bellman_ford  # dense baseline; sparse_bellman_ford is the large-graph ablation
   logic_resource_gate_mode: hard_ordered  # type=str, default=hard_ordered, valid={hard_ordered,soft_ordered}
   logic_full_coverage: true  # type=bool, default=true; false is the truncated Bellman-planning ablation
   num_logic_iterations: 30  # type=int, default=30, valid>=1

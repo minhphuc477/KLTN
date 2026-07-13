@@ -35,6 +35,10 @@ from src.pipeline.types import (
     RoomGenerationResult,
 )
 from src.utils.graph_utils import validate_graph_topology
+from src.validation.end_to_end import build_end_to_end_validation_report
+from src.validation.global_state import validate_attached_global_state_contract
+from src.validation.pacing import evaluate_solution_path_pacing
+from src.validation.topology import evaluate_graph_topology_characteristics
 from src.zelda_data.vglc_utils import filter_virtual_nodes, get_physical_start_node
 
 logger = logging.getLogger(__name__)
@@ -1156,6 +1160,53 @@ def generate_dungeon(
         logic_solvability = {}
     _record_stage_time(stage_times, "evaluate_dungeon_solvability_time_sec", stage_started_at)
 
+    graph_oracle_validation = dict(
+        prepared.graph_data.get("graph_oracle_validation", {}) or {}
+    )
+    logicnet_hard_agreement = _logicnet_hard_agreement(
+        logic_solvability,
+        hard_validation,
+    )
+    global_state_result = validate_attached_global_state_contract(
+        prepared.mission_graph_physical,
+        max_states=int(max(1, getattr(pipeline, "graph_oracle_max_states", 200_000))),
+    )
+    validation_report = build_end_to_end_validation_report(
+        dungeon_grid=dungeon_grid,
+        graph_validation=graph_oracle_validation,
+        global_state_validation=(
+            global_state_result.to_dict() if global_state_result is not None else None
+        ),
+        spatial_validation={
+            **dict(getattr(stitched_layout, "realization_metrics", {}) or {}),
+            **final_edge_integrity,
+        },
+        tile_validation=hard_validation,
+        logicnet_agreement=logicnet_hard_agreement,
+        advisory_metrics={
+            **evaluate_solution_path_pacing(
+                prepared.mission_graph_physical,
+                graph_oracle_validation.get("solution_path", []) or [],
+            ),
+            **evaluate_graph_topology_characteristics(
+                prepared.mission_graph_physical,
+                graph_oracle_validation.get("solution_path", []) or [],
+            ),
+        },
+    )
+    validation_mode = str(
+        getattr(pipeline, "default_end_to_end_validation_mode", "report") or "report"
+    ).strip().lower()
+    if validation_mode == "reject":
+        validation_report.require_accepted()
+    elif validation_mode not in {"off", "report"}:
+        raise ValueError(
+            "default_end_to_end_validation_mode must be off, report, or reject."
+        )
+    validation_contract_metrics = (
+        {} if validation_mode == "off" else validation_report.to_metrics()
+    )
+
     # Compute overall metrics
     generation_time = time.time() - start_time
     num_rooms_generated = len(room_set.rooms)
@@ -1163,9 +1214,6 @@ def generate_dungeon(
     alignment_metrics = pipeline._aggregate_room_alignment_metrics(room_metric_dicts)
     room_stage_times = _aggregate_room_stage_times(room_metric_dicts)
     masked_sampling_metrics = _aggregate_masked_sampling_metrics(room_metric_dicts)
-    graph_oracle_validation = dict(
-        prepared.graph_data.get("graph_oracle_validation", {}) or {}
-    )
     generation_telemetry = _generation_telemetry_summary(prepared.mission_graph)
     stage_times["generation_total_time_sec"] = float(generation_time)
     metrics = {
@@ -1228,6 +1276,7 @@ def generate_dungeon(
         'logicnet_lock_loss': float(logic_solvability.get('lock_loss', 0.0)),
         'logicnet_global_logic_loss': float(logic_solvability.get('global_logic_loss', 0.0)),
         'logicnet_num_failing_rooms': float(logic_solvability.get('num_failing', 0.0)),
+        **validation_contract_metrics,
         'final_hard_solvable': hard_verdict,
         'final_hard_validation_status': str(
             hard_validation.get('termination_status', 'unknown')
@@ -1238,10 +1287,7 @@ def generate_dungeon(
         'final_hard_states_explored': int(
             hard_validation.get('states_explored', 0) or 0
         ),
-        'logicnet_hard_agreement': _logicnet_hard_agreement(
-            logic_solvability,
-            hard_validation,
-        ),
+        'logicnet_hard_agreement': logicnet_hard_agreement,
         **dict(getattr(stitched_layout, 'realization_metrics', {}) or {}),
         **alignment_metrics,
         **masked_sampling_metrics,

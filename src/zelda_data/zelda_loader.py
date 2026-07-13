@@ -26,26 +26,6 @@ import torch
 from torch.utils.data import Dataset, DataLoader, Sampler
 from src.utils.data_loading import seed_dataloader_worker
 
-logger = logging.getLogger(__name__)
-
-# =============================================================================
-# TILE MAPPINGS
-# =============================================================================
-
-# Simple ASCII mapping for basic text files (legacy support)
-TILE_MAPPING = {
-    'F': 0,   # Floor
-    'W': 1,   # Wall
-    'D': 2,   # Door
-    'K': 3,   # Key
-    'L': 4,   # Locked door
-    'E': 5,   # Enemy
-    'S': 6,   # Start
-    'G': 7,   # Goal/Triforce
-    '.': 0,   # Floor (alternate)
-    '-': -1,  # Void
-}
-
 # Import semantic palette from local zelda_core module
 from .zelda_core import (
     ZeldaDungeonAdapter
@@ -85,9 +65,26 @@ from src.pipeline.room_topology_conditioning import (
     infer_puzzle_room_structure_enabled,
     nearest_walkable_point,
 )
-from src.pipeline.spatial_utils import clamp_room_coord, parse_room_coord
+from src.pipeline.spatial_utils import clamp_room_coord, parse_room_coord, stable_node_sort_key
 from src.utils.style_tokens import iter_style_metadata_candidates, resolve_style_token_id
 from src.zelda_data.splits import DEFAULT_TRAIN_DUNGEONS, normalize_dungeon_ids, normalize_variants
+
+logger = logging.getLogger(__name__)
+
+# Simple ASCII mapping for basic text files (legacy support).
+TILE_MAPPING = {
+    'F': 0,
+    'W': 1,
+    'D': 2,
+    'K': 3,
+    'L': 4,
+    'E': 5,
+    'S': 6,
+    'G': 7,
+    '.': 0,
+    '-': -1,
+}
+
 VGLC_AVAILABLE = True
 logger.info("VGLC adapter available via zelda_core")
 
@@ -235,7 +232,8 @@ def _extract_graph_from_dungeon(
             room_position_by_graph_node[graph_node_id] = (int(room_pos[0]), int(room_pos[1]))
 
     idx = 0
-    for node_id, data in sorted(graph.nodes(data=True)):
+    ordered_node_rows = sorted(graph.nodes(data=True), key=lambda item: stable_node_sort_key(item[0]))
+    for node_id, data in ordered_node_rows:
         if data.get('is_start_pointer', False):
             continue
 
@@ -300,7 +298,11 @@ def _extract_graph_from_dungeon(
         device=torch.device("cpu"),
     )
 
-    filtered_nodes = [node_id for node_id in sorted(graph.nodes()) if node_id in node_id_to_idx]
+    filtered_nodes = [
+        node_id
+        for node_id in sorted(graph.nodes(), key=stable_node_sort_key)
+        if node_id in node_id_to_idx
+    ]
     tpe_tensor = compute_tpe_features(
         graph=graph.subgraph(filtered_nodes).copy(),
         node_order=filtered_nodes,

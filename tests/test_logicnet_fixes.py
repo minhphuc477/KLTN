@@ -25,6 +25,7 @@ from src.core.logic_net import (
     PerturbAndMAPGridPathfinder,
     SemanticEdgeEncoder,
     SoftBellmanFordGridPathfinder,
+    SparseDifferentiablePathfinder,
     ValueIterationGridPathfinder,
     WalkabilityPredictor,
 )
@@ -32,6 +33,56 @@ from src.core.perturb_and_map import perturb_and_map_distance
 from src.core.symbolic_refiner import PathAnalyzer, WaveFunctionCollapse
 from src.pipeline.graph_features import build_key_lock_pairs, extract_node_feature_vector
 from src.pipeline.spatial_utils import parse_label_tokens
+
+
+def test_sparse_graph_pathfinder_matches_dense_distances_and_weight_gradients():
+    adjacency = torch.tensor(
+        [
+            [0.0, 1.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+            [0.0, 0.0, 0.0, 1.0],
+            [0.0, 0.0, 0.0, 0.0],
+        ]
+    )
+    source = torch.tensor([1.0, 0.0, 0.0, 0.0])
+    dense_weights = adjacency.clone().requires_grad_(True)
+    sparse_weights = adjacency.clone().requires_grad_(True)
+    dense = DifferentiablePathfinder(
+        num_iterations=4,
+        temperature=0.2,
+        full_coverage=True,
+    )
+    sparse = SparseDifferentiablePathfinder(
+        num_iterations=4,
+        temperature=0.2,
+        full_coverage=True,
+    )
+
+    dense_distances = dense(adjacency, dense_weights, source)
+    sparse_distances = sparse(adjacency, sparse_weights, source)
+    assert torch.allclose(sparse_distances, dense_distances, atol=1e-6, rtol=1e-6)
+
+    dense_distances[-1].backward()
+    sparse_distances[-1].backward()
+    edge_mask = adjacency.bool()
+    assert torch.isfinite(sparse_weights.grad[edge_mask]).all()
+    assert torch.allclose(
+        sparse_weights.grad[edge_mask],
+        dense_weights.grad[edge_mask],
+        atol=1e-5,
+        rtol=1e-5,
+    )
+
+
+def test_logicnet_exposes_sparse_graph_backend_as_opt_in_ablation():
+    logic_net = LogicNet(
+        latent_dim=4,
+        num_tile_classes=5,
+        graph_pathfinder_type="sparse_bellman_ford",
+    )
+
+    assert logic_net.graph_pathfinder_type == "sparse_bellman_ford"
+    assert isinstance(logic_net.graph_pathfinder, SparseDifferentiablePathfinder)
 
 
 def test_key_lock_pair_builder_orders_gates_and_does_not_reuse_small_keys():

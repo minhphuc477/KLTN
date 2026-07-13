@@ -864,6 +864,16 @@ def _compare_spatial_topology_invariants(
             ]
         )
     )
+    exact_invariants_preserved = bool(
+        source_signature["node_count"] == realized_signature["node_count"]
+        and source_signature["edge_count"] == realized_signature["edge_count"]
+        and source_signature["component_count"] == realized_signature["component_count"]
+        and source_signature["cycle_rank"] == realized_signature["cycle_rank"]
+        and source_signature["branch_nodes"] == realized_signature["branch_nodes"]
+        and source_signature["articulation_nodes"] == realized_signature["articulation_nodes"]
+        and source_signature["biconnected_component_count"]
+        == realized_signature["biconnected_component_count"]
+    )
     return {
         "spatial_topology_reference_node_count": int(source_signature["node_count"]),
         "spatial_topology_reference_edge_count": int(source_signature["edge_count"]),
@@ -883,6 +893,7 @@ def _compare_spatial_topology_invariants(
         "spatial_topology_branch_jaccard": branch_agreement,
         "spatial_topology_articulation_jaccard": articulation_agreement,
         "spatial_topology_invariant_preservation_score": invariant_score,
+        "spatial_topology_exact_invariants_preserved": exact_invariants_preserved,
         "spatial_topology_scope": "flat_undirected_spatial_edges_only",
     }
 
@@ -1422,6 +1433,39 @@ def build_room_canvas_from_slots(
             slot_positions=dict(slot_positions),
             room_offsets={},
             layout_map={},
+        )
+
+    missing_slots = sorted(
+        (room_id for room_id in room_grids if room_id not in slot_positions),
+        key=stable_node_sort_key,
+    )
+    unknown_slots = sorted(
+        (room_id for room_id in slot_positions if room_id not in room_grids),
+        key=stable_node_sort_key,
+    )
+    if missing_slots or unknown_slots:
+        raise ValueError(
+            "Room-grid/slot contract mismatch: "
+            f"missing_slots={missing_slots}, unknown_slots={unknown_slots}."
+        )
+
+    rooms_by_slot: Dict[Tuple[int, int], List[Any]] = {}
+    for room_id, raw_slot in slot_positions.items():
+        if not isinstance(raw_slot, (tuple, list)) or len(raw_slot) != 2:
+            raise ValueError(
+                f"Room {room_id!r} slot must be a (row, col) pair, got {raw_slot!r}."
+            )
+        slot = (int(raw_slot[0]), int(raw_slot[1]))
+        rooms_by_slot.setdefault(slot, []).append(room_id)
+    duplicate_slots = {
+        slot: sorted(room_ids, key=stable_node_sort_key)
+        for slot, room_ids in rooms_by_slot.items()
+        if len(room_ids) > 1
+    }
+    if duplicate_slots:
+        raise ValueError(
+            "Room placement contains overlapping slot assignments: "
+            f"{duplicate_slots}."
         )
 
     rows = sorted({row for row, _ in slot_positions.values()})

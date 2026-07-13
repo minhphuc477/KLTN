@@ -1,4 +1,6 @@
 # Stochastic differentiable black-box planner ablation.
+config_version: 1
+
 training:
   stage: diffusion
 

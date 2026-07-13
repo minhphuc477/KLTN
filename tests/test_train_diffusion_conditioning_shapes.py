@@ -1056,6 +1056,44 @@ def test_encode_to_latent_reuses_frozen_vqvae_cache_for_repeated_maps():
     assert trainer._latent_cache.hits == 2
 
 
+def test_encode_to_latent_invalidates_cache_when_vqvae_state_changes():
+    class _ParametricVQVAE(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.num_classes = 44
+            self.scale = torch.nn.Parameter(torch.tensor(1.0), requires_grad=False)
+            self.encode_calls = 0
+
+        def encode(self, x_onehot):
+            self.encode_calls += 1
+            value = x_onehot.mean(dim=(1, 2, 3), keepdim=True) * self.scale
+            latent = value.expand(-1, 4, 2, 2).contiguous()
+            return latent, torch.zeros(x_onehot.shape[0], dtype=torch.long)
+
+    trainer = DiffusionTrainer.__new__(DiffusionTrainer)
+    trainer.device = torch.device("cpu")
+    trainer.config = SimpleNamespace(
+        latent_cache_enabled=True,
+        latent_cache_max_items=8,
+        vqvae_checkpoint="replaceable-vqvae.pth",
+        vqvae_architecture="vqvae",
+        num_classes=44,
+    )
+    trainer.vqvae = _ParametricVQVAE()
+    trainer._latent_cache = FrozenLatentCache(enabled=True, max_items=8)
+    room = torch.full((1, 1, ROOM_HEIGHT, ROOM_WIDTH), 0.5, dtype=torch.float32)
+
+    before = DiffusionTrainer.encode_to_latent(trainer, room)
+    cached = DiffusionTrainer.encode_to_latent(trainer, room)
+    with torch.no_grad():
+        trainer.vqvae.scale.fill_(2.0)
+    after = DiffusionTrainer.encode_to_latent(trainer, room)
+
+    assert torch.allclose(before, cached)
+    assert not torch.allclose(before, after)
+    assert trainer.vqvae.encode_calls == 2
+
+
 def test_stack_diffusion_graph_batch_canonicalizes_mixed_anchor_semantics():
     trainer = _make_stub_trainer(context_dim=8)
 

@@ -1,4 +1,6 @@
 # DiT + continuous Flow Matching ablation.
+config_version: 1
+
 training:
   stage: diffusion
 

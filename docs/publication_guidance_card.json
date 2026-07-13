@@ -109,6 +109,11 @@
       "post_pcbs_valid_rate",
       "repair_rate",
       "tiles_repaired_mean",
+      "graph_progression_solved_rate",
+      "spatial_realization_intact_rate",
+      "tile_oracle_indeterminate_rate",
+      "pacing_landmark_spacing_cv",
+      "pacing_setup_before_gate_before_climax_score",
       "generation_time_sec",
       "diversity",
       "controllability_error"
@@ -149,7 +154,10 @@
     "oracle_timeout",
     "pcbs_timeout",
     "teacher_fallback_used",
-    "invalid_checkpoint"
+    "invalid_checkpoint",
+    "graph_oracle_indeterminate",
+    "spatial_realization_broken",
+    "tile_oracle_indeterminate"
   ],
   "human_calibration": {
     "status": "proxy_only",

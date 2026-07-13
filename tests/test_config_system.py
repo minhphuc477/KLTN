@@ -12,11 +12,14 @@ import yaml
 import main
 import src.train as legacy_train
 from src.core.vqvae import create_vqvae
+from src.core.definitions import GRAPH_NODE_FEATURE_DIM
 from src.config_system import (
+    CURRENT_CONFIG_VERSION,
     cli_overrides_from_namespace,
     find_resolved_config_path,
     load_resolved_config_for_artifact,
     merge_config,
+    migrate_config_payload,
     seed_everything,
 )
 from src.pipeline import (
@@ -453,6 +456,7 @@ def test_stage_helpers_forward_checkpoint_retention_and_resume_defaults():
     assert diffusion_kwargs["use_amp"] is False
     assert diffusion_kwargs["amp_mixed_precision"] == "fp16"
     assert diffusion_kwargs["use_accelerate"] is False
+    assert diffusion_kwargs["logic_graph_pathfinder"] == "dense_bellman_ford"
     assert fast_sampler_kwargs["keep_last"] == 2
     assert fast_sampler_kwargs["ema_decay"] == pytest.approx(0.95)
     assert fast_sampler_kwargs["auto_resume"] is True
@@ -480,6 +484,7 @@ def test_stage_helpers_forward_checkpoint_retention_and_resume_defaults():
     assert masked_room_kwargs["logic_global_reach_weight"] == pytest.approx(1.0)
     assert masked_room_kwargs["logic_global_room_weight"] == pytest.approx(0.25)
     assert masked_room_kwargs["logic_grid_pathfinder"] == "bellman_ford"
+    assert masked_room_kwargs["logic_graph_pathfinder"] == "dense_bellman_ford"
     assert masked_room_kwargs["num_logic_iterations"] == 30
     assert masked_room_kwargs["validation_fraction"] == pytest.approx(0.1)
     assert masked_room_kwargs["validation_max_batches"] == 16
@@ -968,12 +973,53 @@ def test_run_training_from_args_writes_snapshots(monkeypatch: pytest.MonkeyPatch
     metadata = json.loads((out_dir / "run_metadata.json").read_text(encoding="utf-8"))
     assert "seed" in metadata
     assert "command" in metadata
+    assert metadata["config_version"] == CURRENT_CONFIG_VERSION
     assert metadata["dataset_schema_profile"] == "zelda_v1"
     assert "num_classes=44" in metadata["dataset_schema_lock"]
     assert "room_shape=16x11" in metadata["dataset_schema_lock"]
 
     resolved = yaml.safe_load((out_dir / "resolved_config.yaml").read_text(encoding="utf-8"))
     assert resolved["dataset"]["schema_profile"] == "zelda_v1"
+
+
+def test_multifloor_schema_profile_enables_floor_feature_without_weakening_schema_lock():
+    resolved = merge_config(
+        cli_overrides={
+            "dataset": {
+                "schema_profile": "zelda_multifloor_v1",
+                "node_feature_dim": GRAPH_NODE_FEATURE_DIM + 1,
+            }
+        }
+    )
+
+    assert resolved["dataset"]["schema_profile"] == "zelda_multifloor_v1"
+    assert resolved["dataset"]["node_feature_dim"] == GRAPH_NODE_FEATURE_DIM + 1
+
+    with pytest.raises(ValueError, match="schema-locked"):
+        merge_config(
+            cli_overrides={
+                "dataset": {
+                    "schema_profile": "zelda_multifloor_v1",
+                    "node_feature_dim": GRAPH_NODE_FEATURE_DIM,
+                }
+            }
+        )
+
+
+def test_config_version_is_explicit_and_future_versions_fail_closed(tmp_path: Path):
+    resolved = merge_config()
+    assert resolved["config_version"] == CURRENT_CONFIG_VERSION
+
+    legacy = migrate_config_payload({"training": {"stage": "diffusion"}}, source="legacy-test")
+    assert legacy["config_version"] == CURRENT_CONFIG_VERSION
+
+    future_path = tmp_path / "future.yaml"
+    future_path.write_text(
+        f"config_version: {CURRENT_CONFIG_VERSION + 1}\ntraining:\n  stage: diffusion\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="Upgrade the code"):
+        merge_config(yaml_path=str(future_path))
 
 
 def test_run_diffusion_stage_uses_canonical_vqvae_checkpoint_when_present(

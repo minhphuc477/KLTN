@@ -13,7 +13,6 @@ from the GUI (optional plotting via matplotlib when available).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from collections import deque
 import json
 import math
 import logging
@@ -250,139 +249,42 @@ class MAPElitesEvaluator:
             tokens.update({'t', 'goal', 'triforce'})
         return tokens
 
-    @classmethod
+    @staticmethod
     def _progression_feasible_path(
-        cls,
         mission_graph: nx.Graph,
         start: Any,
         goal: Any,
         *,
         max_states: int = 100_000,
     ) -> Optional[Tuple[List[Any], Dict[str, int], int, int]]:
-        """Find a shortest macro path while respecting consumable and persistent gates."""
+        """Compatibility adapter backed by the canonical resource oracle."""
+        from src.evaluation.validator import ExternalValidator
 
-        def normalize(value: Any) -> str:
-            return str(value or '').strip().lower()
-
-        def target_requirement(edge_data: Dict[str, Any], target: Any) -> Dict[str, Any]:
-            normalized = dict(edge_data or {})
-            target_data = dict(mission_graph.nodes[target])
-            target_role = normalize(target_data.get('type', target_data.get('label', '')))
-            edge_tokens = set(parse_edge_type_tokens(
-                label=str(normalized.get('label', '') or ''),
-                edge_type=str(normalized.get('edge_type', normalized.get('type', '')) or ''),
-            ))
-            lock_type = normalize(normalized.get('lock_type'))
-            is_key_gate = lock_type in {'locked', 'key_locked'} or {'locked', 'key_locked'} & edge_tokens
-            is_boss_gate = lock_type == 'boss' or {'boss_locked', 'boss_lock'} & edge_tokens
-            is_item_gate = bool(normalize(normalized.get('item_required'))) or 'item_gate' in edge_tokens
-
-            if (is_key_gate or is_boss_gate) and not normalize(normalized.get('key_required', normalized.get('key_id'))):
-                target_key = normalize(target_data.get('key_id'))
-                if target_key and ('lock' in target_role or 'door' in target_role):
-                    normalized['key_required'] = target_key
-            if is_item_gate and not normalize(normalized.get('item_required')):
-                required_item = normalize(target_data.get('required_item'))
-                if required_item:
-                    normalized['item_required'] = required_item
-            return normalized
-
-        def collect(node: Any, inventory: Dict[str, int], collected: frozenset) -> Tuple[Dict[str, int], frozenset, int]:
-            if node in collected:
-                return inventory, collected, 0
-            data = dict(mission_graph.nodes[node])
-            updated = dict(inventory)
-            gained_keys = 0
-            role = normalize(data.get('type', data.get('label', '')))
-            key_id = normalize(data.get('key_id'))
-            key_count = max(1, int(data.get('key_count_hint', data.get('key_count', 0)) or 0))
-            consumer_role = 'lock' in role or 'door' in role
-            if key_id and not consumer_role:
-                updated[key_id] = updated.get(key_id, 0) + key_count
-                gained_keys += key_count
-            elif data.get('has_key') or role in {'key', 'k'}:
-                updated['key_generic'] = updated.get('key_generic', 0) + key_count
-                gained_keys += key_count
-            if role in {'big_key', 'boss_key'}:
-                updated['key_boss'] = 1
-            for field in ('item_type', 'drops_resource'):
-                item = normalize(data.get(field))
-                if item:
-                    updated[item] = updated.get(item, 0) + 1
-            for item in data.get('items', []) or []:
-                item_id = normalize(item)
-                if item_id:
-                    updated[item_id] = updated.get(item_id, 0) + 1
-            return updated, collected | {node}, gained_keys
-
-        def traverse(data: Dict[str, Any], inventory: Dict[str, int]) -> Optional[Tuple[Dict[str, int], int]]:
-            updated = dict(inventory)
-            edge_tokens = set(parse_edge_type_tokens(
-                label=str(data.get('label', '') or ''),
-                edge_type=str(data.get('edge_type', data.get('type', '')) or ''),
-            ))
-            lock_type = normalize(data.get('lock_type'))
-            required_item = normalize(data.get('item_required'))
-            if required_item or 'item_gate' in edge_tokens:
-                if not required_item or updated.get(required_item, 0) <= 0:
-                    return None
-                return updated, 1
-            if lock_type == 'boss' or {'boss_locked', 'boss_lock'} & edge_tokens:
-                if updated.get('key_boss', 0) <= 0:
-                    return None
-                return updated, 1
-            if lock_type == 'bomb' or {'bomb', 'bombable', 'bomb_locked'} & edge_tokens:
-                bomb_id = next((name for name in ('item_bomb', 'bomb', 'bombs') if updated.get(name, 0) > 0), None)
-                if bomb_id is None:
-                    return None
-                updated[bomb_id] -= 1
-                return updated, 1
-            if lock_type in {'locked', 'key_locked'} or {'locked', 'key_locked'} & edge_tokens:
-                key_id = normalize(data.get('key_required', data.get('key_id'))) or 'key_generic'
-                required = max(1, int(data.get('requires_key_count', 1) or 1))
-                if updated.get(key_id, 0) < required:
-                    return None
-                updated[key_id] -= required
-                return updated, required
-            return updated, 0
-
-        initial_inventory, initial_collected, initial_keys = collect(start, {}, frozenset())
-        initial = (start, tuple(sorted(initial_inventory.items())), initial_collected)
-        queue = deque([initial])
-        parents: Dict[Tuple[Any, Tuple[Tuple[str, int], ...], frozenset], Optional[Tuple[Any, Tuple[Tuple[str, int], ...], frozenset]]] = {initial: None}
-        path_stats = {initial: (initial_keys, 0)}
-
-        while queue and len(parents) <= int(max_states):
-            state = queue.popleft()
-            node, inventory_items, collected = state
-            inventory = dict(inventory_items)
-            if node == goal:
-                path: List[Any] = []
-                cursor = state
-                while cursor is not None:
-                    path.append(cursor[0])
-                    cursor = parents[cursor]
-                keys_collected, keys_consumed = path_stats[state]
-                return list(reversed(path)), inventory, keys_collected, keys_consumed
-
-            for neighbor in mission_graph.neighbors(node):
-                edge_data = target_requirement(
-                    dict(mission_graph.get_edge_data(node, neighbor, {}) or {}),
-                    neighbor,
-                )
-                traversed = traverse(edge_data, inventory)
-                if traversed is None:
-                    continue
-                next_inventory, consumed = traversed
-                next_inventory, next_collected, gained = collect(neighbor, next_inventory, collected)
-                next_state = (neighbor, tuple(sorted((k, v) for k, v in next_inventory.items() if v > 0)), next_collected)
-                if next_state in parents:
-                    continue
-                parents[next_state] = state
-                prior_gained, prior_consumed = path_stats[state]
-                path_stats[next_state] = (prior_gained + gained, prior_consumed + consumed)
-                queue.append(next_state)
-        return None
+        result = ExternalValidator(mode="full").validate(
+            mission_graph,
+            start_node=start,
+            goal_node=goal,
+            max_states=int(max_states),
+        )
+        if not result.is_solvable:
+            return None
+        keys_collected = 0
+        for key_node in list(result.key_collection_order or []):
+            if key_node not in mission_graph:
+                continue
+            data = dict(mission_graph.nodes[key_node])
+            keys_collected += max(
+                1,
+                int(data.get("key_count_hint", data.get("key_count", 0)) or 0),
+            )
+        keys_consumed = int(dict(result.metrics or {}).get("keys_used", 0) or 0)
+        final_inventory = {"key_surplus": max(0, keys_collected - keys_consumed)}
+        return (
+            list(result.solution_path or []),
+            final_inventory,
+            int(keys_collected),
+            int(keys_consumed),
+        )
 
     def _extract_graph_behavior_metrics(self, mission_graph: Optional[nx.Graph]) -> Dict[str, float]:
         """Extract dungeon-level descriptors from the macro mission graph."""
@@ -413,6 +315,8 @@ class MAPElitesEvaluator:
             if feasible is None:
                 return {}
             critical_path, final_inventory, path_keys_collected, path_keys_consumed = feasible
+            if not critical_path:
+                return {}
             critical_path_length = max(0, len(critical_path) - 1)
             critical_path_ratio = self._clip01(len(critical_path) / max(1, n_nodes))
 
@@ -610,6 +514,16 @@ class MAPElitesEvaluator:
             solver_result=solver_result,
             mission_graph=mission_graph,
         )
+        if (
+            mission_graph is not None
+            and self.descriptor_mode != "legacy"
+            and descriptor_metrics.get("graph_descriptor_feasible") != 1.0
+        ):
+            # A tile-level route cannot certify the intended mission economy.
+            # Keep legacy mode as the explicit grid-only ablation, but never
+            # admit a hybrid elite whose keys/items cannot satisfy its graph.
+            descriptor_metrics["archive_rejected_graph_progression"] = 1.0
+            return descriptor_metrics
         lin = descriptor_metrics['linearity']
         len_score = descriptor_metrics['leniency']
         if not all(math.isfinite(float(value)) for value in (*features, lin, len_score)):

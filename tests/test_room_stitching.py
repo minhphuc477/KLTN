@@ -1,5 +1,6 @@
 import networkx as nx
 import numpy as np
+import pytest
 
 from src.core.definitions import ROOM_HEIGHT, ROOM_WIDTH, SEMANTIC_PALETTE
 from src.pipeline.spatial_utils import carve_room_connection
@@ -40,6 +41,34 @@ def test_build_room_canvas_from_slots_returns_offsets_and_layout():
     assert stitched.room_offsets["b"] == (0, 3)
     assert stitched.layout_map["a"] == (0, 0, 2, 3)
     assert stitched.layout_map["b"] == (3, 0, 7, 3)
+
+
+def test_build_room_canvas_rejects_duplicate_slots_instead_of_overwriting():
+    room_grids = {
+        "a": np.full((4, 3), 1, dtype=np.int32),
+        "b": np.full((4, 3), 2, dtype=np.int32),
+    }
+
+    with pytest.raises(ValueError, match="overlapping slot assignments"):
+        build_room_canvas_from_slots(
+            room_grids=room_grids,
+            slot_positions={"a": (0, 0), "b": (0, 0)},
+            fill_tile=0,
+        )
+
+
+def test_build_room_canvas_rejects_incomplete_slot_mapping():
+    room_grids = {
+        "a": np.full((4, 3), 1, dtype=np.int32),
+        "b": np.full((4, 3), 2, dtype=np.int32),
+    }
+
+    with pytest.raises(ValueError, match="missing_slots=.*b"):
+        build_room_canvas_from_slots(
+            room_grids=room_grids,
+            slot_positions={"a": (0, 0)},
+            fill_tile=0,
+        )
 
 
 def test_build_global_grid_from_rooms_uses_shared_canvas_builder():
@@ -378,8 +407,10 @@ def test_spatial_topology_metrics_detect_lost_cycle_after_partial_carving():
     assert partial["spatial_topology_realized_cycle_rank"] == 0
     assert partial["spatial_topology_cycle_rank_agreement"] == 0.0
     assert partial["spatial_topology_invariant_preservation_score"] < 1.0
+    assert partial["spatial_topology_exact_invariants_preserved"] is False
     assert complete["spatial_topology_realized_cycle_rank"] == 1
     assert complete["spatial_topology_invariant_preservation_score"] == 1.0
+    assert complete["spatial_topology_exact_invariants_preserved"] is True
 
 
 def test_fallback_corridor_does_not_claim_a_blocked_connection():

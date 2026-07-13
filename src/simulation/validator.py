@@ -15,15 +15,10 @@ This module provides:
 import os
 import heapq
 import logging
+import math
 import numpy as np
-import networkx as nx
 from typing import Dict, List, Tuple, Optional, Set, Any, FrozenSet, Mapping
-from dataclasses import dataclass, field
 from collections import defaultdict, deque
-from enum import IntEnum
-
-# Configure logging for this module
-logger = logging.getLogger(__name__)
 
 # Import semantic palette from CANONICAL source: src.core.definitions
 from src.core.definitions import (
@@ -44,503 +39,38 @@ from src.simulation.validation_helpers import (
     MetricsEngine,
     DiversityEvaluator,
 )
+from src.simulation.state import (  # noqa: F401 - compatibility re-exports
+    ACTION_DELTAS,
+    BLOCKING_IDS,
+    BRIDGE_FILL_IDS,
+    CARDINAL_COST,
+    CONDITIONAL_IDS,
+    DIAGONAL_COST,
+    EDGE_TYPE_MAP,
+    PICKUP_IDS,
+    PUSHABLE_IDS,
+    TRANSITION_IDS,
+    WALKABLE_IDS,
+    WATER_IDS,
+    Action,
+    GameState,
+    dominates,
+    dynamic_geometry_key,
+    game_state_key,
+    graph_node_role_tokens as _graph_node_role_tokens,
+    has_pushed_block_at,
+    is_push_destination_available,
+    was_block_vacated,
+)
+from src.simulation.validation_types import (  # noqa: F401 - compatibility re-exports
+    BatchValidationResult,
+    SolverDiagnostics,
+    SolverOptions,
+    ValidationResult,
+)
 
-
-# ==========================================
-# CONSTANTS
-# ==========================================
-
-# Tile categories for movement logic
-WALKABLE_IDS = {
-    SEMANTIC_PALETTE['FLOOR'],
-    SEMANTIC_PALETTE['DOOR_OPEN'],
-    SEMANTIC_PALETTE['DOOR_SOFT'],  # One-way passable
-    SEMANTIC_PALETTE['START'],
-    SEMANTIC_PALETTE['TRIFORCE'],
-    SEMANTIC_PALETTE['KEY_SMALL'],
-    SEMANTIC_PALETTE['KEY_BOSS'],
-    SEMANTIC_PALETTE['KEY_ITEM'],
-    SEMANTIC_PALETTE['ITEM_MINOR'],
-    SEMANTIC_PALETTE['ELEMENT_FLOOR'],
-    SEMANTIC_PALETTE['STAIR'],
-    SEMANTIC_PALETTE['ENEMY'],  # CRITICAL FIX: Enemies are walkable (fought or avoided)
-    SEMANTIC_PALETTE['BOSS'],   # Boss enemies are walkable (must be fought)
-    SEMANTIC_PALETTE['PUZZLE'], # Puzzle elements are walkable (interact to solve)
-}
-
-BLOCKING_IDS = {
-    SEMANTIC_PALETTE['VOID'],
-    SEMANTIC_PALETTE['WALL'],
-    # BLOCK removed - now handled as PUSHABLE
-    # ELEMENT removed - now handled as conditional (needs KEY_ITEM/Ladder)
-}
-
-# Transition tiles - tiles where teleportation/warping is allowed
-# Player must be standing on these tiles or at room boundary to use stairs/warps
-TRANSITION_IDS = {
-    SEMANTIC_PALETTE['STAIR'],
-    SEMANTIC_PALETTE['DOOR_OPEN'],
-    SEMANTIC_PALETTE['DOOR_SOFT'],
-}
-
-CONDITIONAL_IDS = {
-    SEMANTIC_PALETTE['DOOR_LOCKED'],   # Needs key
-    SEMANTIC_PALETTE['DOOR_BOMB'],     # Needs bomb
-    SEMANTIC_PALETTE['DOOR_BOSS'],     # Needs boss key
-    SEMANTIC_PALETTE['DOOR_PUZZLE'],   # Needs puzzle solved
-}
-
-PUSHABLE_IDS = {
-    SEMANTIC_PALETTE['BLOCK'],  # Can be pushed if space behind is empty
-}
-
-WATER_IDS = {
-    SEMANTIC_PALETTE['ELEMENT'],  # Water/lava - needs KEY_ITEM (Ladder) to cross
-}
-
-BRIDGE_FILL_IDS = {
-    SEMANTIC_PALETTE['ELEMENT'],  # Push a block into water/lava to create ELEMENT_FLOOR.
-}
-
-PICKUP_IDS = {
-    SEMANTIC_PALETTE['KEY_SMALL'],
-    SEMANTIC_PALETTE['KEY_BOSS'],
-    SEMANTIC_PALETTE['KEY_ITEM'],
-    SEMANTIC_PALETTE['ITEM_MINOR'],
-}
-
-# Edge types for graph-based navigation
-EDGE_TYPE_MAP = {
-    'locked': 'key_locked',
-    'k': 'key_locked',
-    'key_locked': 'key_locked',
-    'bomb': 'bombable',
-    'b': 'bombable',
-    'bombable': 'bombable',
-    'boss': 'boss_locked',
-    'K': 'boss_locked',
-    'boss_locked': 'boss_locked',
-    'puzzle': 'switch',
-    'S': 'switch',
-    'S1': 'switch',
-    'switch': 'switch',
-    'I': 'item_locked',
-    'item_locked': 'item_locked',
-    'l': 'soft_locked',
-    'soft_locked': 'soft_locked',
-    's': 'stair',
-    'stair': 'stair',
-    'open': 'open',
-    '': 'open',  # Default for unlabeled edges
-}
-
-
-def _graph_node_role_tokens(node_data: Mapping[str, Any]) -> Set[str]:
-    """Normalize node role hints from heterogeneous graph schemas."""
-    tokens: Set[str] = set()
-    for key in ("type", "label", "node_type", "stage"):
-        raw = str(node_data.get(key, "") or "").strip().lower()
-        if raw:
-            tokens.add(raw)
-    contents = node_data.get("contents", ())
-    if isinstance(contents, (list, tuple, set, frozenset)):
-        for item in contents:
-            raw = str(item or "").strip().lower()
-            if raw:
-                tokens.add(raw)
-    return tokens
-
-
-def _is_graph_start_node(node_data: Mapping[str, Any]) -> bool:
-    if bool(node_data.get("is_start", False)):
-        return True
-    return "start" in _graph_node_role_tokens(node_data)
-
-
-def _is_graph_goal_node(node_data: Mapping[str, Any]) -> bool:
-    if bool(node_data.get("has_triforce", False)) or bool(node_data.get("has_goal", False)):
-        return True
-    tokens = _graph_node_role_tokens(node_data)
-    return bool(tokens & {"goal", "triforce"})
-
-# Action enumeration
-class Action(IntEnum):
-    UP = 0
-    DOWN = 1
-    LEFT = 2
-    RIGHT = 3
-    UP_LEFT = 4     # Diagonal movement
-    UP_RIGHT = 5    # Diagonal movement
-    DOWN_LEFT = 6   # Diagonal movement  
-    DOWN_RIGHT = 7  # Diagonal movement
-
-ACTION_DELTAS = {
-    Action.UP: (-1, 0),
-    Action.DOWN: (1, 0),
-    Action.LEFT: (0, -1),
-    Action.RIGHT: (0, 1),
-    Action.UP_LEFT: (-1, -1),
-    Action.UP_RIGHT: (-1, 1),
-    Action.DOWN_LEFT: (1, -1),
-    Action.DOWN_RIGHT: (1, 1),
-}
-
-# Movement costs. Diagonals use unit Chebyshev cost so every solver and
-# heuristic agrees when diagonal movement is enabled.
-CARDINAL_COST = 1.0      # UP/DOWN/LEFT/RIGHT
-DIAGONAL_COST = 1.0
-
-
-# ==========================================
-# DATA STRUCTURES
-# ==========================================
-
-@dataclass
-class GameState:
-    """Represents the complete state of the game at a point in time.
-    
-    TIER 2 Enhancement: Multi-floor support added (current_floor field).
-    """
-    position: Tuple[int, int]
-    keys: int = 0
-    bomb_count: int = 0  # Consumable bombs (was has_bomb: bool)
-    has_boss_key: bool = False
-    has_item: bool = False
-    opened_doors: Set[Tuple[int, int]] = field(default_factory=set)
-    collected_items: Set[Tuple[int, int]] = field(default_factory=set)
-    pushed_blocks: Set[Tuple[Tuple[int, int], Tuple[int, int]]] = field(default_factory=set)  # (from_pos, to_pos)
-    filled_block_origins: Set[Tuple[int, int]] = field(default_factory=set)
-    bridged_tiles: Set[Tuple[int, int]] = field(default_factory=set)
-    defeated_enemies: Set[Tuple[int, int]] = field(default_factory=set)
-    completed_puzzle_stages: Set[Tuple[str, int]] = field(default_factory=set)
-    current_floor: int = 0  # NEW: Multi-floor dungeon support
-    opened_graph_edges: Set[Tuple[Any, Any]] = field(default_factory=set)
-
-    # Backward-compatible property: has_bomb -> bomb_count > 0
-    @property
-    def has_bomb(self) -> bool:
-        return self.bomb_count > 0
-
-    @has_bomb.setter
-    def has_bomb(self, value: bool):
-        """Legacy setter: True sets bomb_count to max(1, current), False sets to 0."""
-        if value and self.bomb_count <= 0:
-            self.bomb_count = 1
-        elif not value:
-            self.bomb_count = 0
-    
-    def __hash__(self):
-        # Include pushed_blocks to preserve correctness for block-pushing puzzles.
-        # Without this, distinct world states can alias and prune valid solutions.
-        return hash((
-            self.position,
-            self.keys,
-            self.bomb_count,
-            self.has_boss_key,
-            self.has_item,
-            frozenset(self.opened_doors),
-            frozenset(self.collected_items),
-            frozenset(self.pushed_blocks),
-            frozenset(self.filled_block_origins),
-            frozenset(self.bridged_tiles),
-            frozenset(self.defeated_enemies),
-            frozenset(self.completed_puzzle_stages),
-            self.current_floor,
-            frozenset(self.opened_graph_edges),
-        ))
-    
-    def __eq__(self, other):
-        if not isinstance(other, GameState):
-            return False
-        return (
-            self.position == other.position and
-            self.keys == other.keys and
-            self.bomb_count == other.bomb_count and
-            self.has_boss_key == other.has_boss_key and
-            self.has_item == other.has_item and
-            self.opened_doors == other.opened_doors and
-            self.collected_items == other.collected_items and
-            self.pushed_blocks == other.pushed_blocks and
-            self.filled_block_origins == other.filled_block_origins and
-            self.bridged_tiles == other.bridged_tiles and
-            self.defeated_enemies == other.defeated_enemies and
-            self.completed_puzzle_stages == other.completed_puzzle_stages and
-            self.current_floor == other.current_floor and
-            self.opened_graph_edges == other.opened_graph_edges
-        )
-    
-    def copy(self) -> 'GameState':
-        return GameState(
-            position=self.position,
-            keys=self.keys,
-            bomb_count=self.bomb_count,
-            has_boss_key=self.has_boss_key,
-            has_item=self.has_item,
-            opened_doors=self.opened_doors.copy(),
-            collected_items=self.collected_items.copy(),
-            # Use set() to safely copy both set and frozenset types
-            pushed_blocks=set(self.pushed_blocks),
-            filled_block_origins=set(self.filled_block_origins),
-            bridged_tiles=set(self.bridged_tiles),
-            defeated_enemies=set(self.defeated_enemies),
-            completed_puzzle_stages=set(self.completed_puzzle_stages),
-            current_floor=self.current_floor,
-            opened_graph_edges=set(self.opened_graph_edges),
-        )
-
-
-def game_state_key(state: GameState) -> Tuple[Any, ...]:
-    """Immutable value key for search maps; safe under Python hash collisions."""
-    return (
-        state.position,
-        state.keys,
-        state.bomb_count,
-        state.has_boss_key,
-        state.has_item,
-        frozenset(state.opened_doors),
-        frozenset(state.collected_items),
-        frozenset(state.pushed_blocks),
-        frozenset(state.filled_block_origins),
-        frozenset(state.bridged_tiles),
-        frozenset(state.defeated_enemies),
-        frozenset(state.completed_puzzle_stages),
-        state.current_floor,
-        frozenset(state.opened_graph_edges),
-    )
-
-
-def has_pushed_block_at(state: GameState, pos: Tuple[int, int]) -> bool:
-    """Return whether a dynamically moved block currently occupies ``pos``."""
-    return any(to_pos == pos for _, to_pos in state.pushed_blocks)
-
-
-def was_block_vacated(state: GameState, pos: Tuple[int, int]) -> bool:
-    """Return whether the static block originally at ``pos`` has moved away."""
-    return tuple(pos) in state.filled_block_origins or any(
-        from_pos == pos for from_pos, _ in state.pushed_blocks
-    )
-
-
-def dynamic_geometry_key(state: GameState) -> Tuple[FrozenSet, FrozenSet, FrozenSet]:
-    """Canonical dynamic-geometry key for block movement and bridge filling."""
-    return (
-        frozenset(state.pushed_blocks),
-        frozenset(state.filled_block_origins),
-        frozenset(state.bridged_tiles),
-    )
-
-
-def is_push_destination_available(state: GameState, pos: Tuple[int, int], static_tile: int) -> bool:
-    """Check dynamic block occupancy before falling back to the immutable grid."""
-    return (
-        not has_pushed_block_at(state, pos)
-        and (
-            int(static_tile) in WALKABLE_IDS
-            or int(static_tile) in BRIDGE_FILL_IDS
-            or was_block_vacated(state, pos)
-            or tuple(pos) in state.bridged_tiles
-        )
-    )
-
-
-# ==========================================
-# STATE DOMINATION (PRUNING OPTIMIZATION)
-# ==========================================
-# Research: Felner et al. (2012) - "Partial Expansion A*"
-# Haslum & Geffner (2000) - "State Domination in Planning"
-
-def dominates(state_a: GameState, state_b: GameState) -> bool:
-    """
-    Returns True if state A dominates state B.
-    
-    Domination criteria (all must be satisfied):
-    1. Same position
-    2. A has at least as many keys as B
-    3. A has all items that B has (superset)
-    4. A has opened at least as many doors as B
-    5. A has collected at least as many items as B
-    
-    Scientific basis: If A dominates B, then any path reachable from B
-    is also reachable from A with equal or better cost. Therefore, B can
-    be safely pruned without affecting optimality.
-    
-    Performance: Reduces search space by 20-40% on dungeons with multiple keys.
-    
-    Args:
-        state_a: Potentially dominating state
-        state_b: Potentially dominated state
-    
-    Returns:
-        True if A dominates B, False otherwise
-    """
-    # Fast check: must be at same position
-    if state_a.position != state_b.position:
-        return False
-    
-    # Keys: A must have at least as many as B
-    if state_a.keys < state_b.keys:
-        return False
-    
-    # Bombs: A must have at least as many as B (consumable)
-    if state_a.bomb_count < state_b.bomb_count:
-        return False
-    if not state_a.has_boss_key and state_b.has_boss_key:
-        return False
-    if not state_a.has_item and state_b.has_item:
-        return False
-    
-    # Opened doors: A's doors must be superset of B's doors
-    if not state_a.opened_doors.issuperset(state_b.opened_doors):
-        return False
-    if not state_a.opened_graph_edges.issuperset(state_b.opened_graph_edges):
-        return False
-    
-    # Collected pickups include consumable keys and bombs. A state that already
-    # consumed a pickup cannot dominate a state that intentionally left it for
-    # later, even when their current inventories are equal.
-    if state_a.collected_items != state_b.collected_items:
-        return False
-
-    # Defeated enemies: required for strict-original shutter-door semantics.
-    if not state_a.defeated_enemies.issuperset(state_b.defeated_enemies):
-        return False
-
-    # Puzzle progression: A must have completed at least the stages B has.
-    if not state_a.completed_puzzle_stages.issuperset(state_b.completed_puzzle_stages):
-        return False
-
-    # Block-pushing changes world geometry; only identical block histories are
-    # comparable without a full canonical dynamic-grid representation.
-    if state_a.pushed_blocks != state_b.pushed_blocks:
-        return False
-    if state_a.filled_block_origins != state_b.filled_block_origins:
-        return False
-    if state_a.bridged_tiles != state_b.bridged_tiles:
-        return False
-    
-    # All checks passed: A dominates B
-    return True
-
-
-@dataclass
-class ValidationResult:
-    """Results from validating a single map."""
-    is_solvable: bool
-    is_valid_syntax: bool
-    reachability: float
-    path_length: int
-    backtracking_score: float
-    logical_errors: List[str]
-    path: List[Tuple[int, int]] = field(default_factory=list)
-    error_message: str = ""
-    solver_used: str = "astar"
-    primary_solver_solved: Optional[bool] = None
-    primary_solver_error: str = ""
-    states_explored: int = 0
-    termination_status: str = "unknown"
-    proven_unsolvable: bool = False
-    final_inventory: Optional[Dict[str, Any]] = None
-    path_interactions: Dict[str, int] = field(default_factory=dict)
-    
-    def to_dict(self) -> Dict:
-        return {
-            'is_solvable': self.is_solvable,
-            'is_valid_syntax': self.is_valid_syntax,
-            'reachability': self.reachability,
-            'path_length': self.path_length,
-            'backtracking_score': self.backtracking_score,
-            'logical_errors': self.logical_errors,
-            'error_message': self.error_message,
-            'termination_status': self.termination_status,
-            'proven_unsolvable': self.proven_unsolvable,
-            'final_inventory': dict(self.final_inventory or {}),
-            'path_interactions': dict(self.path_interactions or {}),
-        }
-
-
-@dataclass
-class SolverOptions:
-    """Configuration options for the solver.
-    
-    Allows customization of starting inventory and solver behavior.
-    """
-    start_keys: int = 0
-    start_bombs: int = 1  # Default: 1 bomb to pass bomb doors (Zelda style)
-    start_boss_key: bool = False
-    start_item: bool = False  # Ladder/raft
-    timeout: int = 200000  # Increased for complex dungeons with many virtual node paths
-    allow_diagonals: bool = False
-    heuristic_mode: str = "balanced"  # "balanced", "speedrunner", "completionist"
-    rules_profile: str = "vglc_strict"  # vglc_strict | extended | strict_original
-    
-    @classmethod
-    def for_level(cls, level_type: str = "normal") -> 'SolverOptions':
-        """Factory method for common level configurations."""
-        if level_type == "bomb_heavy":
-            return cls(start_bombs=3)
-        elif level_type == "key_heavy":
-            return cls(start_keys=1, start_bombs=1)
-        elif level_type == "speedrun":
-            return cls(start_bombs=1, allow_diagonals=True, heuristic_mode="speedrunner")
-        return cls()  # Default
-
-
-@dataclass
-class SolverDiagnostics:
-    """Detailed diagnostics from a solver run.
-    
-    Provides statistics for debugging and performance analysis.
-    """
-    success: bool
-    states_explored: int
-    states_pruned_dominated: int = 0
-    max_queue_size: int = 0
-    time_taken_ms: float = 0.0
-    failure_reason: str = ""
-    path_length: int = 0
-    final_inventory: Optional[Dict[str, Any]] = None
-    termination_status: str = "unknown"
-    
-    def summary(self) -> str:
-        """Human-readable summary of solver performance."""
-        status = "SUCCESS" if self.success else f"FAILED: {self.failure_reason}"
-        return f"""
-=== Solver Diagnostics ===
-Status: {status}
-States Explored: {self.states_explored:,}
-States Pruned (dominated): {self.states_pruned_dominated:,}
-Pruning Efficiency: {100.0 * self.states_pruned_dominated / max(1, self.states_explored + self.states_pruned_dominated):.1f}%
-Max Queue Size: {self.max_queue_size:,}
-Time Taken: {self.time_taken_ms:.1f}ms
-Path Length: {self.path_length}
-=========================="""
-
-
-@dataclass
-class BatchValidationResult:
-    """Results from validating a batch of maps."""
-    total_maps: int
-    valid_syntax_count: int
-    solvable_count: int
-    solvability_rate: float
-    avg_reachability: float
-    avg_path_length: float
-    avg_backtracking: float
-    diversity_score: float
-    individual_results: List[ValidationResult] = field(default_factory=list)
-    
-    def summary(self) -> str:
-        return f"""
-=== Batch Validation Summary ===
-Total Maps: {self.total_maps}
-Valid Syntax: {self.valid_syntax_count} ({100*self.valid_syntax_count/max(1,self.total_maps):.1f}%)
-Solvable: {self.solvable_count} ({100*self.solvability_rate:.1f}%)
-Avg Reachability: {100*self.avg_reachability:.1f}%
-Avg Path Length: {self.avg_path_length:.1f}
-Avg Backtracking: {self.avg_backtracking:.2f}
-Diversity Score: {self.diversity_score:.3f}
-================================
-"""
+# Configure logging after imports so the module remains statically analyzable.
+logger = logging.getLogger(__name__)
 
 
 # ==========================================
@@ -1777,6 +1307,14 @@ class StateSpaceAStar:
         self.representation = rep_raw
         self.tie_break = bool(self.priority_options.get('tie_break', False))
         self.key_boost = bool(self.priority_options.get('key_boost', False))
+        secondary_heuristic = self.priority_options.get('secondary_heuristic')
+        if secondary_heuristic is not None and not callable(secondary_heuristic):
+            raise TypeError("priority_options['secondary_heuristic'] must be callable.")
+        self.secondary_heuristic = secondary_heuristic
+        self.secondary_heuristic_name = str(
+            self.priority_options.get('secondary_heuristic_name', 'secondary')
+        )
+        self._secondary_heuristic_cache: Dict[Tuple[Any, ...], float] = {}
         self.enable_ara = bool(
             self.priority_options.get(
                 'enable_weighted_astar',
@@ -1985,6 +1523,76 @@ class StateSpaceAStar:
     def _state_key(state: GameState) -> Tuple[Any, ...]:
         """Immutable key for closed/g-score maps; equality handles hash collisions."""
         return game_state_key(state)
+
+    def _secondary_heuristic_score(self, state: GameState) -> float:
+        """Evaluate the optional secondary ordering signal once per state."""
+        if self.secondary_heuristic is None:
+            return 0.0
+        state_key = self._state_key(state)
+        cached = self._secondary_heuristic_cache.get(state_key)
+        if cached is not None:
+            return cached
+        try:
+            score = float(self.secondary_heuristic(state))
+        except Exception as exc:
+            raise RuntimeError(
+                f"Secondary heuristic {self.secondary_heuristic_name!r} failed for state {state_key!r}."
+            ) from exc
+        if not math.isfinite(score):
+            raise ValueError(
+                f"Secondary heuristic {self.secondary_heuristic_name!r} returned non-finite score {score}."
+            )
+        score = max(0.0, score)
+        self._secondary_heuristic_cache[state_key] = score
+        return score
+
+    def _locked_needed_for_state(self, state: GameState) -> int:
+        """Return the graph lower-bound hint used only for queue tie-breaking."""
+        room_pos = None
+        if getattr(self.env, 'room_positions', None):
+            for candidate, (row_offset, col_offset) in self.env.room_positions.items():
+                if (
+                    row_offset <= state.position[0] < row_offset + ROOM_HEIGHT
+                    and col_offset <= state.position[1] < col_offset + ROOM_WIDTH
+                ):
+                    room_pos = candidate
+                    break
+        if room_pos is None or not self.env.room_to_node:
+            return 0
+        node = self.env.room_to_node.get(room_pos)
+        return int(self.min_locked_needed_node.get(node, 0))
+
+    def _make_open_entry(
+        self,
+        *,
+        f_score: float,
+        counter: int,
+        g_score: float,
+        state: GameState,
+        state_key: Tuple[Any, ...],
+        parent_state: Optional[GameState] = None,
+    ) -> Tuple[Any, ...]:
+        """Build one canonical heap entry for every tile-level search path."""
+        use_secondary_priority = bool(
+            self.tie_break or self.key_boost or self.secondary_heuristic is not None
+        )
+        if not use_secondary_priority:
+            return (float(f_score), int(counter), int(counter), float(g_score), state, state_key)
+
+        priority: List[float] = [float(f_score)]
+        if self.secondary_heuristic is not None:
+            priority.append(self._secondary_heuristic_score(state))
+        if self.tie_break:
+            priority.append(float(self._locked_needed_for_state(state)))
+        if self.key_boost:
+            keys_held = int(getattr(state, 'keys', 0) or 0)
+            picked_up_key = bool(
+                parent_state is not None
+                and keys_held > int(getattr(parent_state, 'keys', 0) or 0)
+            )
+            priority.extend([-float(keys_held), -0.01 if picked_up_key else 0.0])
+        priority.append(float(counter))
+        return (tuple(priority), int(counter), float(g_score), state, state_key)
 
     @staticmethod
     def _state_dominates_with_cost(
@@ -3167,7 +2775,15 @@ class StateSpaceAStar:
         else:
             start_f = start_g + start_h  # A*: f = g + h
         
-        open_set = [(start_f, 0, 0, start_g, start_state, start_key)]
+        open_set = [
+            self._make_open_entry(
+                f_score=start_f,
+                counter=0,
+                g_score=start_g,
+                state=start_state,
+                state_key=start_key,
+            )
+        ]
         heapq.heapify(open_set)
         
         closed_set = set()
@@ -3436,38 +3052,17 @@ class StateSpaceAStar:
                 positions[new_key] = new_state.position
                 depths[new_key] = current_depth + 1
 
-                # Priority tuple construction when priority options enabled
-                if self.tie_break or self.key_boost or self.enable_ara:
-                    # derive locked_needed and keys_held for tie-breaking
-                    locked_needed = 0
-                    keys_held = getattr(new_state, 'keys', 0)
-                    # Map state position -> room node -> locked_needed via precomputed mapping
-                    room_pos = None
-                    if getattr(self.env, 'room_positions', None):
-                        for rpos, (r_off, c_off) in self.env.room_positions.items():
-                            r_end = r_off + ROOM_HEIGHT
-                            c_end = c_off + ROOM_WIDTH
-                            if r_off <= new_state.position[0] < r_end and c_off <= new_state.position[1] < c_end:
-                                room_pos = rpos
-                                break
-                    if room_pos and self.env.room_to_node:
-                        node = self.env.room_to_node.get(room_pos)
-                        locked_needed = self.min_locked_needed_node.get(node, 0)
-
-                    # key boost flag
-                    boost = 0
-                    if self.key_boost:
-                        # small negative boost if the move picks up a key
-                        # Detect if new_state has more keys than current_state
-                        if getattr(new_state, 'keys', 0) > getattr(current_state, 'keys', 0):
-                            boost = -0.01
-                    # priority tuple: lower is better
-                    # FIXED: Include g_score in heap entry
-                    priority = (f_score, locked_needed if self.tie_break else 0, -keys_held if self.key_boost else 0, boost, counter)
-                    heapq.heappush(open_set, (priority, counter, g_score, new_state, new_key))
-                else:
-                    # FIXED: Include g_score in heap entry
-                    heapq.heappush(open_set, (f_score, counter, counter, g_score, new_state, new_key))
+                heapq.heappush(
+                    open_set,
+                    self._make_open_entry(
+                        f_score=f_score,
+                        counter=counter,
+                        g_score=g_score,
+                        state=new_state,
+                        state_key=new_key,
+                        parent_state=current_state,
+                    ),
+                )
                 counter += 1
         
         # PERFORMANCE LOGGING: Report pruning statistics
@@ -3550,7 +3145,15 @@ class StateSpaceAStar:
         else:
             start_f = start_g + start_h
 
-        open_set = [(start_f, 0, 0, start_g, start_state, start_key)]
+        open_set = [
+            self._make_open_entry(
+                f_score=start_f,
+                counter=0,
+                g_score=start_g,
+                state=start_state,
+                state_key=start_key,
+            )
+        ]
         heapq.heapify(open_set)
         
         closed_set = set()
@@ -3763,7 +3366,17 @@ class StateSpaceAStar:
                 positions[new_key] = new_state.position
                 depths[new_key] = current_depth + 1
                 
-                heapq.heappush(open_set, (f_score, counter, counter, g_score, new_state, new_key))
+                heapq.heappush(
+                    open_set,
+                    self._make_open_entry(
+                        f_score=f_score,
+                        counter=counter,
+                        g_score=g_score,
+                        state=new_state,
+                        state_key=new_key,
+                        parent_state=current_state,
+                    ),
+                )
                 counter += 1
         
         # Search failed - determine reason
@@ -4608,7 +4221,8 @@ class ZeldaValidator:
                        node_to_room=None,
                        room_puzzle_metadata: Optional[Mapping[str, Any]] = None,
                        solver_timeout: int = 200000,
-                       run_dijkstra_fallback: bool = False) -> ValidationResult:
+                       run_dijkstra_fallback: bool = False,
+                       verify_dijkstra_consistency: bool = False) -> ValidationResult:
         """
         Validate a single map.
         
@@ -4766,6 +4380,36 @@ class ZeldaValidator:
                 final_inventory=dict(getattr(diagnostics, "final_inventory", {}) or {}),
             )
 
+        consistency_status = "not_requested"
+        solver_consistent: Optional[bool] = None
+        consistency_path_length: Optional[int] = None
+        consistency_states_explored = 0
+        if bool(verify_dijkstra_consistency):
+            reference_success, reference_path, reference_diagnostics = _run_solver(
+                "dijkstra"
+            )
+            consistency_states_explored = int(
+                getattr(reference_diagnostics, "states_explored", 0) or 0
+            )
+            if reference_success:
+                consistency_path_length = max(0, len(reference_path) - 1)
+                solver_consistent = bool(
+                    consistency_path_length == max(0, len(path) - 1)
+                )
+                consistency_status = (
+                    "consistent" if solver_consistent else "path_cost_mismatch"
+                )
+            elif str(
+                getattr(reference_diagnostics, "termination_status", "unknown")
+            ) == "budget_exhausted":
+                consistency_status = "indeterminate_budget_exhausted"
+            else:
+                # A* found a solution but exhaustive uniform-cost search did
+                # not. This is a solver-contract disagreement, not proof that
+                # the map itself is unsolvable.
+                solver_consistent = False
+                consistency_status = "reachability_mismatch"
+
         # Step 4: Recreate environment for metrics/rendering on the winning path.
         env = ZeldaLogicEnv(semantic_grid, **env_kwargs)
         try:
@@ -4831,6 +4475,10 @@ class ZeldaValidator:
             termination_status="solved",
             final_inventory=final_inventory,
             path_interactions=path_interactions,
+            solver_consistency_status=consistency_status,
+            solver_consistent=solver_consistent,
+            solver_consistency_path_length=consistency_path_length,
+            solver_consistency_states_explored=consistency_states_explored,
         )
     
     def check_soft_locks(
@@ -5155,499 +4803,12 @@ class ZeldaValidator:
 # MODULE 7: GRAPH-GUIDED VALIDATOR
 # ==========================================
 
-class GraphGuidedValidator:
-    """
-    Validator that uses graph topology to determine dungeon solvability.
-    
-    Instead of pathfinding through a stitched grid (which fails when rooms are missing),
-    this validator:
-    1. Uses the graph to understand logical room connectivity
-    2. Validates that paths exist WITHIN each room
-    3. Verifies that connected rooms have traversable doorways
-    4. Uses graph-based BFS to determine if START can reach TRIFORCE
-    
-    This approach handles the VGLC dataset limitation where some logical rooms
-    are missing from the physical room data.
-    """
-    
-    def __init__(self):
-        """Initialize the graph-guided validator."""
-        self.validation_cache = {}
-    
-    def _normalize_rooms(self, rooms: Dict) -> Dict[int, Any]:
-        """
-        Normalize room dictionary to use integer keys.
-        
-        Handles two input formats:
-        - Dungeon objects: keys are tuples like (0, 0), (0, 1)
-        - DungeonData objects: keys are strings like '0', '1'
-        
-        Args:
-            rooms: Dictionary with either tuple or string keys
-            
-        Returns:
-            Dictionary with integer keys and room data
-        """
-        normalized = {}
-        used_room_ids: Set[int] = set()
-        tuple_key_to_id: Dict[Tuple[Any, ...], int] = {}
-
-        tuple_keys = [key for key in rooms.keys() if isinstance(key, tuple)]
-        for key in rooms.keys():
-            if isinstance(key, str):
-                try:
-                    used_room_ids.add(int(key))
-                except ValueError:
-                    continue
-            elif isinstance(key, int):
-                used_room_ids.add(int(key))
-
-        next_tuple_room_id = (max(used_room_ids) + 1) if used_room_ids else 0
-        for key in sorted(tuple_keys, key=repr):
-            while next_tuple_room_id in used_room_ids:
-                next_tuple_room_id += 1
-            tuple_key_to_id[key] = next_tuple_room_id
-            used_room_ids.add(next_tuple_room_id)
-            next_tuple_room_id += 1
-
-        for key, room_data in rooms.items():
-            try:
-                # Handle tuple keys (e.g., from Dungeon objects)
-                if isinstance(key, tuple):
-                    room_id = tuple_key_to_id[key]
-                    logger.debug("Normalized tuple key %s to %s", key, room_id)
-                # Handle string keys (e.g., from DungeonData)
-                elif isinstance(key, str):
-                    room_id = int(key)
-                # Already an integer
-                elif isinstance(key, int):
-                    room_id = key
-                else:
-                    logger.warning("Unknown room key type: %s, key=%s", type(key), key)
-                    continue
-                    
-                normalized[room_id] = room_data
-            except (ValueError, TypeError) as e:
-                logger.error("Failed to normalize room key %s: %s", key, e)
-                continue
-        
-        return normalized
-    
-    def validate_dungeon_with_graph(self, dungeon_data, stitched_result=None) -> 'GraphValidationResult':
-        """
-        Validate a dungeon using its graph topology.
-        
-        Args:
-            dungeon_data: DungeonData object with rooms and graph
-            stitched_result: Optional StitchedDungeon (for visualization)
-            
-        Returns:
-            GraphValidationResult with detailed analysis
-        """
-        del stitched_result
-        
-        graph = dungeon_data.graph
-        rooms = dungeon_data.rooms
-        
-        # Normalize room keys to handle both Dungeon (tuple keys) and DungeonData (string keys)
-        normalized_rooms = self._normalize_rooms(rooms)
-        existing_room_ids = set(normalized_rooms.keys())
-        
-        logger.debug("Normalized %d rooms to %d integer IDs", len(rooms), len(existing_room_ids))
-        
-        # Step 1: Find START and goal nodes from graph.
-        # Accept both the older explicit flags and the repo's current
-        # START/GOAL typed mission-graph schema used by topology generation.
-        start_node = None
-        triforce_node = None
-        
-        for node_id in graph.nodes():
-            node_data = graph.nodes[node_id]
-            if _is_graph_start_node(node_data):
-                start_node = node_id
-            if _is_graph_goal_node(node_data):
-                triforce_node = node_id
-        
-        if start_node is None or triforce_node is None:
-            return GraphValidationResult(
-                is_solvable=False,
-                graph_path=[],
-                missing_rooms=[],
-                room_validations={},
-                error_message="No START or TRIFORCE node found in graph"
-            )
-        
-        # Step 2: Find shortest path in graph from START to TRIFORCE
-        try:
-            graph_path = nx.shortest_path(graph, source=start_node, target=triforce_node)
-        except nx.NetworkXNoPath:
-            return GraphValidationResult(
-                is_solvable=False,
-                graph_path=[],
-                missing_rooms=[],
-                room_validations={},
-                error_message="No path exists in graph from START to TRIFORCE"
-            )
-        
-        # Step 3: Check which rooms in the path exist
-        missing_rooms = [n for n in graph_path if n not in existing_room_ids]
-        existing_in_path = [n for n in graph_path if n in existing_room_ids]
-        
-        # Step 4: Validate each existing room is internally traversable
-        room_validations = {}
-        for room_id in existing_in_path:
-            room_data = normalized_rooms.get(room_id)
-            if room_data is not None:
-                room_grid = room_data.grid
-                is_traversable, floor_count = self._validate_room_traversability(room_grid)
-                room_validations[room_id] = {
-                    'is_traversable': is_traversable,
-                    'floor_count': floor_count,
-                    'shape': room_grid.shape
-                }
-        
-        # Step 5: Determine solvability based on graph analysis
-        # A dungeon is "graph-solvable" if:
-        # - All existing rooms in the path are internally traversable
-        # - OR we can find an alternate path using only existing rooms
-        
-        all_existing_traversable = all(
-            rv['is_traversable'] for rv in room_validations.values()
-        )
-        
-        # Try to find a path using only existing rooms
-        subgraph_path = self._find_path_in_existing_rooms(
-            graph, start_node, triforce_node, existing_room_ids
-        )
-        if subgraph_path is not None:
-            for room_id in subgraph_path:
-                room_data = normalized_rooms.get(room_id)
-                if room_id in room_validations or room_data is None:
-                    continue
-                room_grid = room_data.grid
-                is_traversable, floor_count = self._validate_room_traversability(room_grid)
-                room_validations[room_id] = {
-                    'is_traversable': is_traversable,
-                    'floor_count': floor_count,
-                    'shape': room_grid.shape,
-                }
-
-        subgraph_traversable = bool(subgraph_path) and all(
-            room_id in existing_room_ids
-            and bool(room_validations.get(room_id, {}).get('is_traversable', False))
-            for room_id in (subgraph_path or [])
-        )
-        is_solvable = bool(
-            (len(missing_rooms) == 0 and all_existing_traversable)
-            or subgraph_traversable
-        )
-        
-        # Calculate graph-based metrics
-        connectivity_score = len(existing_in_path) / len(graph_path) if graph_path else 0
-        
-        return GraphValidationResult(
-            is_solvable=is_solvable,
-            graph_path=graph_path,
-            subgraph_path=subgraph_path or [],
-            missing_rooms=missing_rooms,
-            room_validations=room_validations,
-            connectivity_score=connectivity_score,
-            start_node=start_node,
-            triforce_node=triforce_node,
-            error_message="" if is_solvable else f"Path requires {len(missing_rooms)} missing rooms"
-        )
-    
-    def _validate_room_traversability(self, room_grid: np.ndarray) -> Tuple[bool, int]:
-        """
-        Check if a room is internally traversable.
-        
-        A room is traversable if:
-        - It has floor tiles
-        - Floor tiles form a connected region
-        """
-        floor_mask = np.isin(room_grid, list(WALKABLE_IDS))
-        floor_count = np.sum(floor_mask)
-        
-        if floor_count == 0:
-            return False, 0
-        
-        # Check connectivity using flood fill
-        visited = np.zeros_like(floor_mask, dtype=bool)
-        positions = np.argwhere(floor_mask)
-        
-        if len(positions) == 0:
-            return False, 0
-        
-        # Start flood fill from first floor position
-        start = tuple(positions[0])
-        stack = [start]
-        connected_count = 0
-        
-        while stack:
-            r, c = stack.pop()
-            if visited[r, c]:
-                continue
-            if not floor_mask[r, c]:
-                continue
-            
-            visited[r, c] = True
-            connected_count += 1
-            
-            # Add neighbors
-            for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
-                nr, nc = r + dr, c + dc
-                if 0 <= nr < room_grid.shape[0] and 0 <= nc < room_grid.shape[1]:
-                    if not visited[nr, nc] and floor_mask[nr, nc]:
-                        stack.append((nr, nc))
-        
-        # Room is traversable if most floor tiles are connected
-        is_traversable = connected_count >= 0.5 * floor_count
-        return is_traversable, int(floor_count)
-    
-    def _find_path_in_existing_rooms(self, graph, start_node, end_node, 
-                                     existing_room_ids: Set[int]) -> Optional[List[int]]:
-        """
-        Try to find a path that only uses existing rooms.
-        
-        Uses BFS on the subgraph of existing rooms.
-        """
-        # Create subgraph with only existing rooms
-        existing_nodes = [n for n in graph.nodes() if n in existing_room_ids]
-        
-        if start_node not in existing_nodes or end_node not in existing_nodes:
-            return None
-        
-        subgraph = graph.subgraph(existing_nodes).copy()
-        
-        try:
-            path = nx.shortest_path(subgraph, source=start_node, target=end_node)
-            return path
-        except nx.NetworkXNoPath:
-            return None
-        except nx.NodeNotFound:
-            return None
-    
-    def validate_with_edge_types(self, dungeon_data, inventory_start: Dict = None) -> 'GraphValidationResult':
-        """
-        Validate considering edge types (locked doors, bombable walls, etc.)
-        
-        This performs a state-space search on the GRAPH, where:
-        - States = (current_node, keys_held, bombs_held, doors_opened)
-        - Edges are traversable based on their type and current inventory
-        
-        Args:
-            dungeon_data: DungeonData with rooms and graph
-            inventory_start: Initial inventory (default: no keys, no bombs)
-            
-        Returns:
-            GraphValidationResult with solution path
-        """
-        if inventory_start is None:
-            inventory_start = {'keys': 0, 'bombs': 0, 'boss_key': False}
-        
-        graph = dungeon_data.graph
-        rooms = dungeon_data.rooms
-        
-        # Normalize room keys to handle both Dungeon (tuple keys) and DungeonData (string keys)
-        normalized_rooms = self._normalize_rooms(rooms)
-        existing_room_ids = set(normalized_rooms.keys())
-        
-        logger.debug("Edge-type validation: normalized %d rooms to %d IDs", len(rooms), len(existing_room_ids))
-        
-        # Find START and goal nodes. Accept both explicit flags and the
-        # topology generator's START/GOAL typed schema.
-        start_node = None
-        triforce_node = None
-        key_nodes = []
-        bomb_nodes = []
-        boss_key_nodes = []
-        item_nodes = []
-        
-        for node_id in graph.nodes():
-            node_data = graph.nodes[node_id]
-            if _is_graph_start_node(node_data):
-                start_node = node_id
-            if _is_graph_goal_node(node_data):
-                triforce_node = node_id
-            if node_data.get('has_key', False):
-                key_nodes.append(node_id)
-            node_tokens = " ".join(
-                str(node_data.get(key, ""))
-                for key in ("type", "node_type", "label", "contents", "items")
-            ).lower()
-            if 'bomb' in node_tokens:
-                bomb_nodes.append(node_id)
-            if (
-                bool(node_data.get("has_boss_key", False))
-                or bool(node_data.get("is_boss_key", False))
-                or "boss_key" in node_tokens
-                or "big_key" in node_tokens
-            ):
-                boss_key_nodes.append(node_id)
-            if (
-                bool(node_data.get("has_item", False))
-                or bool(node_data.get("is_item", False))
-                or "key_item" in node_tokens
-                or "item_minor" in node_tokens
-            ):
-                item_nodes.append(node_id)
-        
-        if start_node is None or triforce_node is None:
-            return GraphValidationResult(
-                is_solvable=False,
-                graph_path=[],
-                missing_rooms=[],
-                room_validations={},
-                error_message="No START or TRIFORCE in graph"
-            )
-        
-        # State-space BFS on the graph. Consumable resources are decremented
-        # only when opening a previously unopened edge; boss keys and traversal
-        # items are persistent dungeon affordances.
-        initial_state = (
-            start_node,
-            frozenset(),  # collected items
-            frozenset(),  # opened doors (edge tuples)
-            int(inventory_start.get('keys', 0)),
-            int(inventory_start.get('bombs', 0)),
-            bool(inventory_start.get('boss_key', False)),
-            bool(inventory_start.get('item', False)),
-        )
-        
-        queue = deque([initial_state])
-        visited = {initial_state}
-        parents: Dict[Any, Optional[Any]] = {initial_state: None}
-        nodes_for_state: Dict[Any, Any] = {initial_state: start_node}
-        
-        while queue:
-            state = queue.popleft()
-            current_node, collected, opened, keys, bombs, boss_key, has_item = state
-            
-            # Check win
-            if current_node == triforce_node:
-                path = []
-                key: Optional[Any] = state
-                while key is not None:
-                    path.append(nodes_for_state[key])
-                    key = parents[key]
-                path.reverse()
-                return GraphValidationResult(
-                    is_solvable=True,
-                    graph_path=path,
-                    subgraph_path=path,
-                    missing_rooms=[n for n in path if n not in existing_room_ids],
-                    room_validations={},
-                    connectivity_score=1.0,
-                    start_node=start_node,
-                    triforce_node=triforce_node,
-                    error_message=""
-                )
-            
-            # Collect items at current node
-            new_collected = collected
-            new_keys = keys
-            new_bombs = bombs
-            new_boss_key = boss_key
-            new_has_item = has_item
-            if current_node not in collected and current_node in key_nodes:
-                new_collected = collected | {current_node}
-                new_keys = keys + 1
-            if current_node not in collected and current_node in bomb_nodes:
-                new_collected = new_collected | {current_node}
-                node_data = graph.nodes[current_node]
-                new_bombs += int(max(1, node_data.get("bomb_count", 1)))
-            if current_node not in collected and current_node in boss_key_nodes:
-                new_collected = new_collected | {current_node}
-                new_boss_key = True
-            if current_node not in collected and current_node in item_nodes:
-                new_collected = new_collected | {current_node}
-                new_has_item = True
-            
-            # Explore edges
-            for neighbor in graph.neighbors(current_node):
-                edge_data = graph.get_edge_data(current_node, neighbor) or {}
-                edge_type = edge_type_from_data(edge_data)
-                edge_key = tuple(sorted((current_node, neighbor), key=lambda value: (type(value).__name__, str(value))))
-                
-                can_traverse = False
-                new_opened = opened
-                use_key = False
-                use_bomb = False
-                
-                if edge_type in {'open', '', 'path', 'stair'}:
-                    can_traverse = True
-                elif edge_type in {'locked', 'key_locked'}:
-                    if new_keys > 0 or edge_key in opened:
-                        can_traverse = True
-                        if edge_key not in opened:
-                            new_opened = opened | {edge_key}
-                            use_key = True
-                elif edge_type in {'soft_locked', 'one_way'}:
-                    can_traverse = True  # One-way but passable
-                elif edge_type in {'bomb', 'bombable'}:
-                    if new_bombs > 0 or edge_key in opened:
-                        can_traverse = True
-                        if edge_key not in opened:
-                            new_opened = opened | {edge_key}
-                            use_bomb = True
-                elif edge_type in {'boss', 'boss_locked'}:
-                    can_traverse = bool(new_boss_key)
-                elif edge_type in {'item_locked', 'item_gate'}:
-                    can_traverse = bool(new_has_item)
-                elif edge_type == 'switch':
-                    can_traverse = True
-                else:
-                    # This graph-only validator does not model the resource or
-                    # state needed by the remaining constraints. Fail closed.
-                    can_traverse = False
-                
-                if can_traverse:
-                    final_keys = new_keys - 1 if use_key else new_keys
-                    final_keys = max(0, final_keys)
-                    final_bombs = new_bombs - 1 if use_bomb else new_bombs
-                    final_bombs = max(0, final_bombs)
-                    
-                    new_state = (
-                        neighbor,
-                        new_collected,
-                        new_opened,
-                        final_keys,
-                        final_bombs,
-                        new_boss_key,
-                        new_has_item,
-                    )
-                    if new_state not in visited:
-                        visited.add(new_state)
-                        parents[new_state] = state
-                        nodes_for_state[new_state] = neighbor
-                        queue.append(new_state)
-        
-        # No path found
-        return GraphValidationResult(
-            is_solvable=False,
-            graph_path=[],
-            subgraph_path=[],
-            missing_rooms=[],
-            room_validations={},
-            connectivity_score=0.0,
-            start_node=start_node,
-            triforce_node=triforce_node,
-            error_message="No valid path considering locked doors and keys"
-        )
-
-
-@dataclass
-class GraphValidationResult:
-    """Result of graph-guided validation."""
-    is_solvable: bool
-    graph_path: List[int]  # Path through graph nodes
-    subgraph_path: List[int] = field(default_factory=list)  # Path using only existing rooms
-    missing_rooms: List[int] = field(default_factory=list)
-    room_validations: Dict[int, Dict] = field(default_factory=dict)
-    connectivity_score: float = 0.0
-    start_node: Optional[int] = None
-    triforce_node: Optional[int] = None
-    error_message: str = ""
+# Compatibility re-exports. Existing imports and serialized references through
+# src.simulation.validator continue to resolve to the canonical class objects.
+from src.simulation.graph_validator import (  # noqa: E402, F401
+    GraphGuidedValidator,
+    GraphValidationResult,
+)
 
 
 # ==========================================

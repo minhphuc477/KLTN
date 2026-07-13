@@ -1548,10 +1548,19 @@ def build_puzzle_stage_condition_metadata(
 
     gate_family = _classify_puzzle_stage_gate_family(normalized_tokens, role_flags)
     if puzzle_structure_enabled is None:
-        puzzle_structure_enabled = (
+        observed_block_structure = (
             infer_puzzle_room_structure_enabled(np.asarray(room_grid), role_flags)
             if room_grid is not None
             else bool(role_flags.get("puzzle_room_structure_enabled", False))
+        )
+        # `switch_locked` does not distinguish a floor switch from a
+        # block-on-switch puzzle. Use observed block structure unless the graph
+        # schema explicitly declares the intended interaction. When explicit
+        # block structure is requested, a generated room with no block remains
+        # an incomplete puzzle rather than being reinterpreted as a floor switch.
+        puzzle_structure_enabled = bool(
+            observed_block_structure
+            or role_flags.get("puzzle_room_structure_enabled", False)
         )
     stage_sequence: List[Dict[str, Any]] = []
     for stage_index, name in enumerate(canonical_sequence[1:]):

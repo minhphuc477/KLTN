@@ -564,15 +564,33 @@ class GraphToGridCrossAttention(nn.Module):
         valid = valid & valid_nodes_all.gather(1, safe_src) & valid_nodes_all.gather(1, safe_dst)
         edge_ids = edge_ids.clamp(0, self.edge_type_vocab_size - 1)
         edge_bias = self.edge_type_node_bias(edge_ids).to(dtype=dtype)
-        node_bias = torch.zeros(batch_size, num_nodes, self.num_heads, device=device, dtype=dtype)
-        counts = torch.zeros(batch_size, num_nodes, 1, device=device, dtype=dtype)
-        for b_idx in range(batch_size):
-            mask = valid[b_idx]
-            if bool(mask.any()):
-                dst_b = safe_dst[b_idx, mask]
-                values = edge_bias[b_idx, mask]
-                node_bias[b_idx].index_add_(0, dst_b, values)
-                counts[b_idx].index_add_(0, dst_b, torch.ones(values.shape[0], 1, device=device, dtype=dtype))
+        flat_offsets = (
+            torch.arange(batch_size, device=device, dtype=torch.long).unsqueeze(1)
+            * num_nodes
+        )
+        flat_dst = (safe_dst + flat_offsets)[valid]
+        flat_values = edge_bias[valid]
+        node_bias_flat = torch.zeros(
+            batch_size * num_nodes,
+            self.num_heads,
+            device=device,
+            dtype=dtype,
+        )
+        counts_flat = torch.zeros(
+            batch_size * num_nodes,
+            1,
+            device=device,
+            dtype=dtype,
+        )
+        if flat_dst.numel() > 0:
+            node_bias_flat.index_add_(0, flat_dst, flat_values)
+            counts_flat.index_add_(
+                0,
+                flat_dst,
+                torch.ones(flat_dst.shape[0], 1, device=device, dtype=dtype),
+            )
+        node_bias = node_bias_flat.reshape(batch_size, num_nodes, self.num_heads)
+        counts = counts_flat.reshape(batch_size, num_nodes, 1)
         node_bias = node_bias / counts.clamp_min(1.0)
         node_bias = node_bias * valid_nodes_all[:, :, None].to(dtype=dtype)
         return node_bias.permute(0, 2, 1).unsqueeze(2)

@@ -1,5 +1,7 @@
 import numpy as np
+import pytest
 import torch
+from types import SimpleNamespace
 
 from src.core import ROOM_HEIGHT, ROOM_WIDTH, SEMANTIC_PALETTE
 from src.core.puzzle_stage_semantics import (
@@ -12,6 +14,11 @@ from src.pipeline.room_topology_conditioning import (
     PUZZLE_STAGE_KIND_IDS,
     build_puzzle_stage_condition_metadata,
 )
+from src.pipeline.generation.sampler import (
+    PuzzleStageSemanticsValidationError,
+    _score_puzzle_stage_semantics,
+)
+from src.pipeline.models.model_manager import _bind_puzzle_stage_semantics_head
 
 
 def test_build_puzzle_stage_semantic_targets_encodes_ordered_sequence():
@@ -109,6 +116,120 @@ def test_puzzle_stage_semantics_head_handles_batches_without_sequence_slots():
     assert metrics["puzzle_stage_slot_acc"] == 1.0
 
 
+def test_puzzle_stage_semantics_head_scores_expected_condition_per_sample():
+    head = PuzzleStageSemanticsHead(num_tile_classes=44, hidden_dim=16, max_sequence_length=4)
+    logits = torch.randn(2, 44, ROOM_HEIGHT, ROOM_WIDTH)
+    conditions = [
+        {
+            "gate_family": "key",
+            "sequence_required": True,
+            "stage_sequence": [{"kind": "collect_key"}, {"kind": "reach_exit"}],
+        },
+        {},
+    ]
+
+    scores = head.score_expected_semantics(logits, conditions)
+
+    assert set(scores) == {
+        "joint_confidence",
+        "gate_confidence",
+        "sequence_confidence",
+        "count_confidence",
+        "slot_confidence",
+        "exact_match",
+    }
+    assert all(tuple(value.shape) == (2,) for value in scores.values())
+    assert torch.isfinite(torch.stack(list(scores.values()))).all()
+    assert torch.all((scores["joint_confidence"] >= 0.0) & (scores["joint_confidence"] <= 1.0))
+
+
+def test_puzzle_stage_semantics_head_rejects_condition_batch_mismatch():
+    head = PuzzleStageSemanticsHead(num_tile_classes=44, hidden_dim=16, max_sequence_length=4)
+
+    with pytest.raises(ValueError, match="batch size"):
+        head.score_expected_semantics(
+            torch.randn(2, 44, ROOM_HEIGHT, ROOM_WIDTH),
+            [{"gate_family": "key"}],
+        )
+
+
+def test_sampler_semantics_gate_reports_and_rejects_pre_repair_logits():
+    class _Pipeline:
+        default_puzzle_stage_semantics_validation_mode = "report"
+        default_puzzle_stage_semantics_min_confidence = None
+        puzzle_stage_semantics_head = PuzzleStageSemanticsHead(
+            num_tile_classes=44,
+            hidden_dim=16,
+            max_sequence_length=4,
+        )
+
+    pipeline = _Pipeline()
+    logits = torch.randn(1, 44, ROOM_HEIGHT, ROOM_WIDTH)
+    graph_data = {
+        "puzzle_stage_condition": {
+            "gate_family": "switch",
+            "sequence_required": True,
+            "stage_sequence": [{"kind": "push_block_to_switch"}],
+        }
+    }
+
+    metrics = _score_puzzle_stage_semantics(pipeline, logits, graph_data, room_id=7)
+
+    assert metrics["puzzle_stage_semantics_head_loaded"] == 1.0
+    assert 0.0 <= metrics["puzzle_stage_semantics_joint_confidence"] <= 1.0
+
+    pipeline.default_puzzle_stage_semantics_validation_mode = "reject"
+    pipeline.default_puzzle_stage_semantics_min_confidence = 1.0
+    with pytest.raises(PuzzleStageSemanticsValidationError, match="below"):
+        _score_puzzle_stage_semantics(pipeline, logits, graph_data, room_id=7)
+
+
+def test_checkpoint_binds_semantics_head_only_to_active_generator():
+    trained_head = PuzzleStageSemanticsHead(
+        num_tile_classes=44,
+        hidden_dim=16,
+        max_sequence_length=4,
+    )
+    pipeline = SimpleNamespace(
+        room_generator_mode="latent_diffusion",
+        device=torch.device("cpu"),
+        vqvae=SimpleNamespace(num_classes=44),
+        puzzle_stage_semantics_head=None,
+        puzzle_stage_semantics_head_source=None,
+    )
+    checkpoint = {
+        "puzzle_stage_semantics_head_state_dict": trained_head.state_dict(),
+    }
+    checkpoint_config = {
+        "num_classes": 44,
+        "puzzle_stage_semantics_hidden_dim": 16,
+        "puzzle_stage_semantics_max_sequence_length": 4,
+    }
+
+    _bind_puzzle_stage_semantics_head(
+        pipeline,
+        checkpoint,
+        checkpoint_config,
+        source="masked_room",
+    )
+    assert pipeline.puzzle_stage_semantics_head is None
+
+    _bind_puzzle_stage_semantics_head(
+        pipeline,
+        checkpoint,
+        checkpoint_config,
+        source="diffusion",
+    )
+    assert pipeline.puzzle_stage_semantics_head_source == "diffusion"
+    assert pipeline.puzzle_stage_semantics_head.training is False
+    assert all(not parameter.requires_grad for parameter in pipeline.puzzle_stage_semantics_head.parameters())
+    for expected, loaded in zip(
+        trained_head.state_dict().values(),
+        pipeline.puzzle_stage_semantics_head.state_dict().values(),
+    ):
+        assert torch.equal(expected, loaded)
+
+
 def test_switch_stage_trace_requires_a_real_block_push():
     floor = int(SEMANTIC_PALETTE["FLOOR"])
     wall = int(SEMANTIC_PALETTE["WALL"])
@@ -125,7 +246,10 @@ def test_switch_stage_trace_requires_a_real_block_push():
             incoming_dirs=set(),
             outgoing_dirs={"N"},
             edge_constraint_tokens={"N": {"switch_locked"}},
-            room_role_flags={"has_puzzle": True},
+            room_role_flags={
+                "has_puzzle": True,
+                "puzzle_room_structure_enabled": True,
+            },
             anchors={"start": start, "puzzle": switch, "goal": goal},
         )
 

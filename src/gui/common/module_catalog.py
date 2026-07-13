@@ -54,7 +54,6 @@ GUI_MODULE_CATEGORIES = {
         "services/solver_process_worker",
         "services/solver_recovery",
         "services/solver_request_helpers",
-        "services/solver_request_orchestration",
         "services/solver_scheduling",
         "services/solver_start_flow",
         "services/solver_start_logic",

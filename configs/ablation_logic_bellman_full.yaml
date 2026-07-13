@@ -1,5 +1,7 @@
 # Default differentiable planning treatment: conservative Bellman relaxation
 # with enough iterations to cover the complete room grid.
+config_version: 1
+
 training:
   stage: diffusion
 

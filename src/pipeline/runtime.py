@@ -135,6 +135,11 @@ def _initialize_pipeline_from_flat_kwargs(
     default_validator_plan_max_states: int = DEFAULT_VALIDATOR_PLAN_MAX_STATES,
     default_puzzle_stage_topology_enabled: bool = False,
     default_puzzle_stage_trace_decay: float = DEFAULT_PUZZLE_STAGE_TRACE_DECAY,
+    default_puzzle_stage_semantics_validation_mode: str = "off",
+    default_puzzle_stage_semantics_min_confidence: Optional[float] = None,
+    default_end_to_end_validation_mode: str = "report",
+    default_verify_solver_consistency: bool = False,
+    default_topology_betti_metrics_enabled: bool = False,
     default_deterministic_graph_marker_overlay_enabled: bool = True,
     default_fast_sampler_teacher_fallback_enabled: bool = False,
     default_masked_room_teacher_fallback_enabled: bool = False,
@@ -165,7 +170,7 @@ def _initialize_pipeline_from_flat_kwargs(
     topology_qd_autosave_archive: bool = False,
     topology_max_lock_key_rules: int = 3,
     topology_enable_rule_credit_assignment: bool = False,
-    topology_enforce_generation_constraints: bool = False,
+    topology_enforce_generation_constraints: bool = True,
     topology_allow_candidate_repairs: bool = False,
     symbolic_max_repair_attempts: int = 5,
     symbolic_repair_margin: int = 2,
@@ -293,6 +298,43 @@ def _initialize_pipeline_from_flat_kwargs(
     pipeline.default_puzzle_stage_topology_enabled = bool(default_puzzle_stage_topology_enabled)
     pipeline.default_puzzle_stage_trace_decay = float(
         max(0.05, min(1.0, float(default_puzzle_stage_trace_decay)))
+    )
+    semantics_validation_mode = str(
+        default_puzzle_stage_semantics_validation_mode or "off"
+    ).strip().lower()
+    if semantics_validation_mode not in {"off", "report", "reject"}:
+        raise ValueError(
+            "default_puzzle_stage_semantics_validation_mode must be off, report, or reject."
+        )
+    if (
+        semantics_validation_mode == "reject"
+        and default_puzzle_stage_semantics_min_confidence is None
+    ):
+        raise ValueError(
+            "Puzzle-stage reject mode requires an explicitly calibrated "
+            "default_puzzle_stage_semantics_min_confidence threshold."
+        )
+    pipeline.default_puzzle_stage_semantics_validation_mode = semantics_validation_mode
+    pipeline.default_puzzle_stage_semantics_min_confidence = (
+        None
+        if default_puzzle_stage_semantics_min_confidence is None
+        else float(max(0.0, min(1.0, float(default_puzzle_stage_semantics_min_confidence))))
+    )
+    pipeline.puzzle_stage_semantics_head = None
+    pipeline.puzzle_stage_semantics_head_source = None
+    end_to_end_validation_mode = str(
+        default_end_to_end_validation_mode or "report"
+    ).strip().lower()
+    if end_to_end_validation_mode not in {"off", "report", "reject"}:
+        raise ValueError(
+            "default_end_to_end_validation_mode must be off, report, or reject."
+        )
+    pipeline.default_end_to_end_validation_mode = end_to_end_validation_mode
+    pipeline.default_verify_solver_consistency = bool(
+        default_verify_solver_consistency
+    )
+    pipeline.default_topology_betti_metrics_enabled = bool(
+        default_topology_betti_metrics_enabled
     )
     pipeline.default_deterministic_graph_marker_overlay_enabled = bool(
         default_deterministic_graph_marker_overlay_enabled
@@ -469,6 +511,22 @@ def _initialize_pipeline_from_flat_kwargs(
 
     pipeline._bind_components(components)
     pipeline.masked_room_model = pipeline._load_masked_room_model(pipeline.masked_room_checkpoint)
+    if (
+        pipeline.default_puzzle_stage_semantics_validation_mode == "reject"
+        and pipeline.puzzle_stage_semantics_head is None
+    ):
+        raise RuntimeError(
+            "Puzzle-stage semantics reject mode requires the active room-generator "
+            "checkpoint to bundle puzzle_stage_semantics_head_state_dict."
+        )
+    if (
+        pipeline.default_puzzle_stage_semantics_validation_mode == "report"
+        and pipeline.puzzle_stage_semantics_head is None
+    ):
+        logger.warning(
+            "Puzzle-stage semantics report mode is enabled, but the active room-generator "
+            "checkpoint has no bundled semantics head; availability metrics will report 0."
+        )
     if getattr(pipeline, "device", torch.device("cpu")).type == "cuda":
         pipeline.model_manager.offload_inactive()
 
@@ -609,6 +667,7 @@ def component_status(pipeline) -> Dict[str, bool]:
         'condition_encoder': pipeline.condition_encoder is not None,
         'diffusion': pipeline.diffusion is not None,
         'masked_room_model': getattr(pipeline, 'masked_room_model', None) is not None,
+        'puzzle_stage_semantics_head': getattr(pipeline, 'puzzle_stage_semantics_head', None) is not None,
         'logic_net': pipeline.logic_net is not None,
         'refiner': pipeline.refiner is not None,
         'stitcher': pipeline.stitcher is not None,

@@ -13,14 +13,8 @@ Comprehensive test suite covering:
 Run: pytest tests/test_evolutionary_director.py -v
 """
 
-import sys
-from pathlib import Path
 import networkx as nx
 import pytest
-
-# Add project root to path
-PROJECT_ROOT = Path(__file__).parent.parent
-sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.generation.evolutionary_director import (
     EvolutionaryTopologyGenerator,
@@ -50,6 +44,35 @@ class TestEvolutionaryDirector:
         assert gen.target_curve == target
         assert gen.population_size == 20
         assert gen.generations == 10
+
+    def test_crossover_selects_transition_compatible_boundary(self):
+        """Recombination should preserve the strongest learned rule boundary."""
+        probe = EvolutionaryTopologyGenerator(
+            target_curve=[0.2, 0.6, 1.0],
+            population_size=4,
+            generations=1,
+            rule_space="core",
+            seed=17,
+        )
+        names = probe.executor.rule_names
+        transitions = {
+            names[2]: {names[2]: 1.0},
+            names[3]: {names[3]: 1.0},
+        }
+        generator = EvolutionaryTopologyGenerator(
+            target_curve=[0.2, 0.6, 1.0],
+            zelda_transition_matrix=transitions,
+            transition_mix=1.0,
+            population_size=4,
+            generations=1,
+            rule_space="core",
+            seed=17,
+        )
+
+        child1, child2 = generator._crossover([1, 2, 3, 4], [4, 3, 2, 1])
+
+        assert child1 == [1, 2, 2, 1]
+        assert child2 == [4, 3, 3, 4]
 
     def test_mechanical_feasibility_is_not_exact_style_target_matching(self):
         """A playable graph remains feasible when it misses soft descriptor targets."""

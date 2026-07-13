@@ -160,6 +160,44 @@ class TestAdvancedRulesIntegration:
             log_failures=False,
         ) is False
 
+    def test_lock_key_validation_accepts_staged_nested_progression(self):
+        """Closing all locks at once must not reject a valid key acquisition chain."""
+        graph = MissionGraph()
+        graph.add_node(MissionNode(id=0, node_type=NodeType.START, position=(0, 0, 0)))
+        graph.add_node(MissionNode(id=1, node_type=NodeType.KEY, position=(1, 0, 0), key_id=10))
+        graph.add_node(MissionNode(id=2, node_type=NodeType.LOCK, position=(2, 0, 0), key_id=10))
+        graph.add_node(MissionNode(id=3, node_type=NodeType.KEY, position=(3, 0, 0), key_id=20))
+        graph.add_node(MissionNode(id=4, node_type=NodeType.LOCK, position=(4, 0, 0), key_id=20))
+        graph.add_node(MissionNode(id=5, node_type=NodeType.GOAL, position=(5, 0, 0)))
+        for source, target in zip(range(5), range(1, 6)):
+            graph.add_edge(source, target, EdgeType.PATH)
+
+        assert MissionGrammar(seed=7).validate_lock_key_ordering(
+            graph,
+            log_failures=False,
+        ) is True
+
+    def test_lock_key_validation_rejects_lock_without_requirement(self):
+        """A lock node without a key identity must not become an open room."""
+        graph = MissionGraph()
+        graph.add_node(MissionNode(id=0, node_type=NodeType.START, position=(0, 0, 0)))
+        graph.add_node(
+            MissionNode(
+                id=1,
+                node_type=NodeType.LOCK,
+                position=(1, 0, 0),
+                key_id=None,
+            )
+        )
+        graph.add_node(MissionNode(id=2, node_type=NodeType.GOAL, position=(2, 0, 0)))
+        graph.add_edge(0, 1, EdgeType.PATH)
+        graph.add_edge(1, 2, EdgeType.PATH)
+
+        assert MissionGrammar(seed=7).validate_lock_key_ordering(
+            graph,
+            log_failures=False,
+        ) is False
+
     def test_collection_challenge_is_atomic_when_no_gate_can_be_placed(self):
         """A failed collection mechanic must not leave token-only graph mutations."""
         graph = MissionGraph()

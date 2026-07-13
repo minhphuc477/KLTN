@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from src.gui.controls.control_panel_logic import (
+from src.gui.control_panel.logic import (
     algorithm_label,
     apply_preset_feature_flags,
     difficulty_label,

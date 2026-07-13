@@ -1,5 +1,7 @@
 # Planning-depth ablation. This intentionally limits Bellman propagation to
 # diffusion.num_logic_iterations and must not be reported as exact coverage.
+config_version: 1
+
 training:
   stage: diffusion
 

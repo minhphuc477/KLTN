@@ -143,6 +143,7 @@ class MaskedRoomTrainingConfig:
         logic_topology_trace_weight: float = 0.25,
         logic_topology_anchor_weight: float = 0.25,
         logic_grid_pathfinder: str = "bellman_ford",
+        logic_graph_pathfinder: str = "dense_bellman_ford",
         logic_resource_gate_mode: str = "hard_ordered",
         logic_full_coverage: bool = True,
         num_logic_iterations: int = 30,
@@ -285,6 +286,11 @@ class MaskedRoomTrainingConfig:
         self.logic_topology_trace_weight = float(max(0.0, logic_topology_trace_weight))
         self.logic_topology_anchor_weight = float(max(0.0, logic_topology_anchor_weight))
         self.logic_grid_pathfinder = str(logic_grid_pathfinder).strip().lower()
+        self.logic_graph_pathfinder = str(logic_graph_pathfinder).strip().lower()
+        if self.logic_graph_pathfinder not in {"dense_bellman_ford", "sparse_bellman_ford"}:
+            raise ValueError(
+                "logic_graph_pathfinder must be 'dense_bellman_ford' or 'sparse_bellman_ford'."
+            )
         self.logic_resource_gate_mode = str(logic_resource_gate_mode).strip().lower()
         if self.logic_resource_gate_mode not in {"hard_ordered", "soft_ordered"}:
             raise ValueError("logic_resource_gate_mode must be 'hard_ordered' or 'soft_ordered'.")
@@ -450,6 +456,7 @@ def masked_room_training_kwargs_from_resolved_config(config: Dict[str, Any]) -> 
         "logic_topology_trace_weight": stage.get("logic_topology_trace_weight", 0.25),
         "logic_topology_anchor_weight": stage.get("logic_topology_anchor_weight", 0.25),
         "logic_grid_pathfinder": stage.get("logic_grid_pathfinder", "bellman_ford"),
+        "logic_graph_pathfinder": stage.get("logic_graph_pathfinder", "dense_bellman_ford"),
         "logic_resource_gate_mode": stage.get("logic_resource_gate_mode", "hard_ordered"),
         "logic_full_coverage": stage.get("logic_full_coverage", True),
         "num_logic_iterations": stage.get("num_logic_iterations", 30),
@@ -557,6 +564,7 @@ def _legacy_masked_room_overrides_from_args(args: argparse.Namespace) -> Dict[st
     _set("logic_topology_trace_weight", getattr(args, "logic_topology_trace_weight", None))
     _set("logic_topology_anchor_weight", getattr(args, "logic_topology_anchor_weight", None))
     _set("logic_grid_pathfinder", getattr(args, "logic_grid_pathfinder", None))
+    _set("logic_graph_pathfinder", getattr(args, "logic_graph_pathfinder", None))
     _set("logic_resource_gate_mode", getattr(args, "logic_resource_gate_mode", None))
     _set("logic_full_coverage", getattr(args, "logic_full_coverage", None))
     _set("num_logic_iterations", getattr(args, "num_logic_iterations", None))
@@ -811,6 +819,9 @@ class MaskedRoomTrainer:
             topology_trace_weight=float(getattr(self.config, "logic_topology_trace_weight", 0.25)),
             topology_anchor_weight=float(getattr(self.config, "logic_topology_anchor_weight", 0.25)),
             grid_pathfinder_type=pathfinder,
+            graph_pathfinder_type=str(
+                getattr(self.config, "logic_graph_pathfinder", "dense_bellman_ford")
+            ),
             resource_gate_mode=str(getattr(self.config, "logic_resource_gate_mode", "hard_ordered")),
             full_coverage=bool(getattr(self.config, "logic_full_coverage", True)),
             initial_temperature=float(getattr(self.config, "logic_initial_temperature", 1.0)),
@@ -2034,6 +2045,11 @@ def main() -> None:
         default=None,
     )
     parser.add_argument("--logic-full-coverage", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument(
+        "--logic-graph-pathfinder",
+        choices=["dense_bellman_ford", "sparse_bellman_ford"],
+        default=None,
+    )
     parser.add_argument(
         "--logic-resource-gate-mode",
         choices=["hard_ordered", "soft_ordered"],

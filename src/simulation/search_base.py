@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 
 class SearchRepresentation(str, Enum):
@@ -43,6 +43,7 @@ class GameStateSearchConfig:
     representation: SearchRepresentation = SearchRepresentation.HYBRID
     max_depth: int = 500
     use_iddfs: bool = True
+    learned_heuristic_model_path: Optional[str] = None
 
     def to_priority_options(self) -> Dict[str, Any]:
         weighted_enabled = bool(self.enable_weighted_astar or self.enable_ara)

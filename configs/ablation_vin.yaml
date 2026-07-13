@@ -1,6 +1,8 @@
 # Learnable grid pathfinder ablation.
 # The legacy config key is "vin" for compatibility; the implementation reports
 # this as LearnableGridPathfinder, not a full VIN claim.
+config_version: 1
+
 training:
   stage: diffusion
 

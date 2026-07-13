@@ -1,4 +1,6 @@
 # Disable LogicNet losses/guidance for a neural-only diffusion baseline.
+config_version: 1
+
 training:
   stage: diffusion
 
@@ -11,4 +13,3 @@ diffusion:
   logic_global_reach_weight: 0.0
   logic_global_room_weight: 0.0
   guidance_scale: 0.0
-

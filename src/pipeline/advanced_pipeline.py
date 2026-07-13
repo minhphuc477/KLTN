@@ -76,9 +76,9 @@ from src.core.definitions import (
     parse_node_label_tokens,
 )
 from src.optimization.lcm_lora import load_fast_sampler_checkpoint
-
-# Validation
-from src.validation.collision_alignment_validator import CollisionAlignmentValidator
+from src.validation.end_to_end import build_end_to_end_validation_report
+from src.validation.pacing import evaluate_solution_path_pacing
+from src.validation.topology import evaluate_graph_topology_characteristics
 
 # Evaluation
 from src.evaluation.fun_metrics import (
@@ -133,8 +133,10 @@ class AdvancedPipelineConfig:
     enable_big_rooms: bool = True
     boss_arena_size: Tuple[int, int] = (32, 22)
     
-    # Advanced mechanics
-    enable_global_state: bool = True
+    # Advanced mechanics. Global state is a deterministic rendering ablation,
+    # not a learned condition, and requires an explicit specification supplied
+    # through ``user_constraints['global_state']``.
+    enable_global_state: bool = False
     water_level_rooms: int = 3  # How many rooms affected by water level
     
     # Evaluation
@@ -151,6 +153,7 @@ class AdvancedPipelineConfig:
     allow_room_generation_fallback: bool = False
     graph_oracle_max_states: int = 1_000_000
     tile_oracle_max_states: int = 1_000_000
+    verify_solver_consistency: bool = False
     
     # Recording & explainability
     record_demo: bool = True
@@ -284,7 +287,14 @@ class AdvancedNeuralSymbolicPipeline:
         )
         
         # Validation
-        self.collision_validator = CollisionAlignmentValidator() if config.enable_collision_validation else None
+        if config.enable_collision_validation:
+            from src.validation.collision_alignment_validator import (
+                CollisionAlignmentValidator,
+            )
+
+            self.collision_validator = CollisionAlignmentValidator()
+        else:
+            self.collision_validator = None
         
         # Evaluation
         self.fun_evaluator = FunMetricsEvaluator() if config.calculate_fun_metrics else None
@@ -521,18 +531,39 @@ class AdvancedNeuralSymbolicPipeline:
         """Run the exact resource-aware graph oracle before room generation."""
         from src.evaluation.validator import ExternalValidator
 
-        result = ExternalValidator(mode='full').validate(
+        budget = int(max(1, self.config.graph_oracle_max_states))
+        validator = ExternalValidator(mode='full')
+        result = validator.validate(
             mission_graph,
-            max_states=int(max(1, self.config.graph_oracle_max_states)),
+            max_states=budget,
+        )
+        room_reachability = validator.checker.check_all_rooms_reachable_detailed(
+            mission_graph,
+            max_states=budget,
         )
         return {
             'solvable': bool(result.is_solvable),
             'path': list(result.solution_path or []),
+            'solution_path': list(result.solution_path or []),
             'path_length': int(result.path_length),
             'states_explored': int(result.states_explored),
             'failure_reason': str(result.failure_reason or ''),
             'termination_status': str(result.termination_status),
             'proven_unsolvable': bool(result.proven_unsolvable),
+            'all_rooms_reachable': bool(
+                room_reachability['complete']
+                and not room_reachability['unreachable_nodes']
+            ),
+            'all_rooms_reachability_status': str(
+                room_reachability['termination_status']
+            ),
+            'all_rooms_reachability_states_explored': int(
+                room_reachability['states_explored']
+            ),
+            'unreachable_rooms': sorted(
+                room_reachability['unreachable_nodes'],
+                key=lambda value: (type(value).__name__, repr(value)),
+            ),
         }
 
     def _build_final_puzzle_metadata(
@@ -609,6 +640,9 @@ class AdvancedNeuralSymbolicPipeline:
         result = ZeldaValidator().validate_single(
             np.asarray(dungeon_grid).copy(),
             solver_timeout=int(max(1, self.config.tile_oracle_max_states)),
+            verify_dijkstra_consistency=bool(
+                self.config.verify_solver_consistency
+            ),
             room_puzzle_metadata=room_puzzle_metadata,
         )
         path = list(result.path or [])
@@ -638,6 +672,19 @@ class AdvancedNeuralSymbolicPipeline:
             'proven_unsolvable': bool(
                 getattr(result, 'proven_unsolvable', False)
             ),
+            'solver_consistency_status': str(
+                getattr(result, 'solver_consistency_status', 'not_requested')
+            ),
+            'solver_consistent': getattr(result, 'solver_consistent', None),
+            'solver_consistency_path_length': getattr(
+                result,
+                'solver_consistency_path_length',
+                None,
+            ),
+            'solver_consistency_states_explored': int(
+                getattr(result, 'solver_consistency_states_explored', 0) or 0
+            ),
+            'is_exact': True,
         }
 
     @staticmethod
@@ -776,15 +823,19 @@ class AdvancedNeuralSymbolicPipeline:
         
         mission_graph = self._generate_mission_graph(tension_curve, room_count, constraints)
         graph_validation = self._validate_mission_graph(mission_graph)
-        if self.config.require_graph_solvability and not graph_validation['solvable']:
+        if self.config.require_graph_solvability and (
+            not graph_validation['solvable']
+            or not graph_validation['all_rooms_reachable']
+        ):
             outcome = (
                 "indeterminate"
                 if graph_validation['termination_status'] == 'budget_exhausted'
+                or graph_validation['all_rooms_reachability_status'] == 'budget_exhausted'
                 else "invalid"
             )
             raise RuntimeError(
                 f"Evolutionary mission graph is {outcome} under the resource-aware oracle: "
-                f"{graph_validation['failure_reason']}"
+                f"{graph_validation['failure_reason'] or graph_validation['unreachable_rooms']}"
             )
         self._validate_spatial_mechanics(mission_graph)
         
@@ -806,10 +857,43 @@ class AdvancedNeuralSymbolicPipeline:
         else:
             big_rooms = {}
         
-        # Step 4: Setup global state (water level, switches)
+        # Step 4: Setup explicitly requested deterministic global state.
         if self.global_state_mgr:
-            global_state_config = self._setup_global_state(mission_graph)
-            logger.info(f"Configured {len(global_state_config)} global state variables")
+            requested_global_state = constraints.get("global_state")
+            if not isinstance(requested_global_state, Mapping):
+                raise ValueError(
+                    "enable_global_state=True requires an explicit "
+                    "user_constraints['global_state'] mapping. The pipeline "
+                    "does not invent cross-room mechanics or claim learned "
+                    "global-state conditioning."
+                )
+            global_state_config = self._setup_global_state(
+                mission_graph,
+                requested_global_state,
+            )
+            from src.validation.global_state import (
+                validate_global_state_progression,
+            )
+
+            global_state_validation = validate_global_state_progression(
+                mission_graph,
+                global_state_config,
+                max_states=int(max(1, self.config.graph_oracle_max_states)),
+            )
+            global_state_config["validation"] = global_state_validation.to_dict()
+            mission_graph.graph["global_state_contract"] = copy.deepcopy(
+                global_state_config
+            )
+            if not global_state_validation.accepted:
+                raise RuntimeError(
+                    "Explicit global-state contract is not progression-valid: "
+                    f"{global_state_validation.to_dict()}"
+                )
+            logger.info(
+                "Configured %d global-state variables and %d transitions",
+                len(global_state_config.get("variables", [])),
+                len(global_state_config.get("transitions", [])),
+            )
         else:
             global_state_config = {}
         
@@ -1016,6 +1100,35 @@ class AdvancedNeuralSymbolicPipeline:
                 f"Final stitched semantic map is {outcome} under the tile-level oracle: "
                 f"{final_validation['error_message'] or 'no valid START-to-GOAL solution'}"
             )
+
+        global_state_validation = dict(
+            global_state_config.get('validation', {}) or {}
+        )
+        validation_report = build_end_to_end_validation_report(
+            dungeon_grid=dungeon_grid,
+            graph_validation=graph_validation,
+            global_state_validation=(
+                global_state_validation if global_state_config else None
+            ),
+            spatial_validation={**stitch_metrics, **final_edge_integrity},
+            tile_validation=final_validation,
+            advisory_metrics={
+                **evaluate_solution_path_pacing(
+                    mission_graph,
+                    graph_validation.get('solution_path', []) or [],
+                ),
+                **evaluate_graph_topology_characteristics(
+                    mission_graph,
+                    graph_validation.get('solution_path', []) or [],
+                ),
+            },
+        )
+        if (
+            self.config.require_graph_solvability
+            and self.config.require_final_solvability
+            and self.config.require_spatial_topology_preservation
+        ):
+            validation_report.require_accepted()
         
         # Step 12: Evaluation
         eval_start = time.time()
@@ -1158,6 +1271,8 @@ class AdvancedNeuralSymbolicPipeline:
             room_layout=room_layout,
             entities=entities,
             stats=stats,
+            global_state_contract=copy.deepcopy(global_state_config),
+            end_to_end_validation=validation_report.to_metrics(),
             explainability_mgr=self.explainability_mgr
         )
     
@@ -1198,6 +1313,9 @@ class AdvancedNeuralSymbolicPipeline:
                         'qd_archive_cells',
                         self.config.topology_qd_archive_cells,
                     )
+                ),
+                graph_oracle_max_states=int(
+                    max(1, self.config.graph_oracle_max_states)
                 ),
                 seed=seed,
             )
@@ -1415,56 +1533,140 @@ class AdvancedNeuralSymbolicPipeline:
         
         return big_rooms
     
-    def _setup_global_state(self, mission_graph: nx.DiGraph) -> Dict[str, Any]:
-        """Setup global state variables and deterministic room dependencies."""
+    def _setup_global_state(
+        self,
+        mission_graph: nx.DiGraph,
+        specification: Mapping[str, Any],
+    ) -> Dict[str, Any]:
+        """Validate and install an explicit deterministic global-state contract."""
         if self.global_state_mgr is None or mission_graph.number_of_nodes() == 0:
             return {}
-        
+
         self.global_state_mgr.reset_state()
-        self.global_state_mgr.add_state_variable(
-            name='water_level',
-            state_type=GlobalStateType.WATER_LEVEL,
-            initial_value='high',
-        )
-        
-        start_node = None
-        for n, data in mission_graph.nodes(data=True):
-            if data.get('is_start'):
-                start_node = n
-                break
-        if start_node is None:
-            start_node = min(mission_graph.nodes(), key=self._node_sort_key)
-        
-        traversal_order = list(nx.bfs_tree(mission_graph.to_undirected(), start_node).nodes())
-        affected_count = min(self.config.water_level_rooms, len(traversal_order))
-        affected_rooms: Set[int] = set(traversal_order[:affected_count])
-        if start_node in affected_rooms and len(affected_rooms) > 1:
-            affected_rooms.remove(start_node)
-        
-        trigger_room = traversal_order[min(len(traversal_order) - 1, max(1, len(traversal_order) // 2))]
-        if affected_rooms:
-            self.global_state_mgr.add_transition(
-                from_room=int(trigger_room),
-                trigger_condition='switch_pulled',
-                state_changes={'water_level': 'low'},
-                affected_rooms=set(int(r) for r in affected_rooms),
-            )
-            for room_id in affected_rooms:
-                self.global_state_mgr.set_room_dependency(
-                    room_id=int(room_id),
-                    required_states={'water_level': 'high'},
-                    optional_states={'water_level': ['high', 'low']},
-                )
-        
-        return {
-            'water_level': {
-                'type': GlobalStateType.WATER_LEVEL,
-                'initial_value': 'high',
-                'transition_value': 'low',
-                'trigger_room': int(trigger_room),
-                'affected_rooms': sorted(int(r) for r in affected_rooms),
-            }
+        self.global_state_mgr.state_variables.clear()
+        self.global_state_mgr.transitions.clear()
+        self.global_state_mgr.room_dependencies.clear()
+
+        variables = list(specification.get("variables", []) or [])
+        transitions = list(specification.get("transitions", []) or [])
+        dependencies = dict(specification.get("room_dependencies", {}) or {})
+        edge_requirements = list(specification.get("edge_requirements", []) or [])
+        if not variables:
+            raise ValueError("Global-state specification must declare at least one variable.")
+
+        normalized: Dict[str, Any] = {
+            "variables": [],
+            "transitions": [],
+            "room_dependencies": {},
+            "edge_requirements": [],
         }
+        for raw in variables:
+            if not isinstance(raw, Mapping):
+                raise TypeError("Each global-state variable must be a mapping.")
+            name = str(raw.get("name", "")).strip()
+            if not name:
+                raise ValueError("Global-state variable is missing a non-empty name.")
+            raw_type = raw.get("type")
+            try:
+                state_type = raw_type if isinstance(raw_type, GlobalStateType) else GlobalStateType(str(raw_type))
+            except ValueError as exc:
+                raise ValueError(f"Unsupported global-state type for {name!r}: {raw_type!r}") from exc
+            if "initial" not in raw and "initial_value" not in raw:
+                raise ValueError(f"Global-state variable {name!r} is missing its initial value.")
+            initial = raw.get("initial", raw.get("initial_value"))
+            self.global_state_mgr.add_state_variable(name, state_type, initial)
+            normalized["variables"].append(
+                {"name": name, "type": state_type.value, "initial": initial}
+            )
+
+        known_rooms = set(mission_graph.nodes())
+        known_variables = set(self.global_state_mgr.state_variables)
+        for raw in transitions:
+            if not isinstance(raw, Mapping):
+                raise TypeError("Each global-state transition must be a mapping.")
+            from_room = raw.get("from_room")
+            if from_room not in known_rooms:
+                raise ValueError(f"Global-state transition references unknown trigger room {from_room!r}.")
+            trigger = str(raw.get("trigger", raw.get("trigger_condition", ""))).strip()
+            if not trigger:
+                raise ValueError(f"Global-state transition in room {from_room!r} has no trigger.")
+            changes = dict(raw.get("changes", raw.get("state_changes", {})) or {})
+            unknown_variables = set(changes) - known_variables
+            if unknown_variables:
+                raise ValueError(
+                    f"Global-state transition references unknown variables: {sorted(unknown_variables)}"
+                )
+            affected_rooms = set(raw.get("affects", raw.get("affected_rooms", [])) or [])
+            unknown_rooms = affected_rooms - known_rooms
+            if unknown_rooms:
+                raise ValueError(
+                    f"Global-state transition references unknown affected rooms: "
+                    f"{sorted(unknown_rooms, key=self._node_sort_key)}"
+                )
+            self.global_state_mgr.add_transition(
+                from_room=from_room,
+                trigger_condition=trigger,
+                state_changes=changes,
+                affected_rooms=affected_rooms,
+            )
+            normalized["transitions"].append(
+                {
+                    "from_room": from_room,
+                    "trigger": trigger,
+                    "changes": changes,
+                    "affected_rooms": sorted(affected_rooms, key=self._node_sort_key),
+                }
+            )
+
+        for raw_room_id, raw_dependency in dependencies.items():
+            room_id = raw_room_id
+            if room_id not in known_rooms:
+                try:
+                    room_id = int(raw_room_id)
+                except (TypeError, ValueError):
+                    pass
+            if room_id not in known_rooms:
+                raise ValueError(f"Global-state dependency references unknown room {raw_room_id!r}.")
+            if not isinstance(raw_dependency, Mapping):
+                raise TypeError(f"Global-state dependency for room {room_id!r} must be a mapping.")
+            required = dict(raw_dependency.get("required", raw_dependency.get("required_states", {})) or {})
+            optional = dict(raw_dependency.get("optional", raw_dependency.get("optional_states", {})) or {})
+            unknown_variables = (set(required) | set(optional)) - known_variables
+            if unknown_variables:
+                raise ValueError(
+                    f"Room {room_id!r} depends on unknown global-state variables: "
+                    f"{sorted(unknown_variables)}"
+                )
+            self.global_state_mgr.set_room_dependency(room_id, required, optional)
+            normalized["room_dependencies"][room_id] = {
+                "required": required,
+                "optional": optional,
+            }
+
+        for index, raw_requirement in enumerate(edge_requirements):
+            if not isinstance(raw_requirement, Mapping):
+                raise TypeError(
+                    f"Global-state edge requirement {index} must be a mapping."
+                )
+            source = raw_requirement.get("source")
+            target = raw_requirement.get("target")
+            if not mission_graph.has_edge(source, target):
+                raise ValueError(
+                    "Global-state edge requirement references missing edge "
+                    f"{source!r}->{target!r}."
+                )
+            required = dict(raw_requirement.get("requires", {}) or {})
+            unknown_variables = set(required) - known_variables
+            if unknown_variables:
+                raise ValueError(
+                    f"Global-state edge requirement {source!r}->{target!r} uses "
+                    f"unknown variables: {sorted(unknown_variables)}"
+                )
+            normalized["edge_requirements"].append(
+                {"source": source, "target": target, "requires": required}
+            )
+
+        return normalized
     
     def _generate_all_rooms(
         self,
@@ -1500,13 +1702,11 @@ class AdvancedNeuralSymbolicPipeline:
                 room_state = self.global_state_mgr.get_room_state(int(node_id)) if self.global_state_mgr else {}
                 if not room_state:
                     room_state = dict(base_global_state)
-                room_graph_context['global_state'] = room_state
-                # Compact scalar channel usable by encoders that accept auxiliary context.
-                room_graph_context['global_state_vector'] = torch.tensor(
-                    [1.0 if room_state.get('water_level') == 'high' else 0.0],
-                    dtype=torch.float32,
-                    device=self.neural_pipeline.device,
-                )
+                # Preserve provenance for deterministic post-processing. The
+                # current trained encoders have no authoritative global-state
+                # feature contract, so this metadata is not passed off as a
+                # learned condition.
+                room_graph_context['global_state_metadata'] = dict(room_state)
 
             # Get room size
             if node_id in big_rooms:
@@ -2000,6 +2200,8 @@ class DungeonGenerationResult:
     room_layout: Dict[int, Tuple[int, int, int, int]]
     entities: List[Entity]
     stats: PipelineStats
+    global_state_contract: Dict[str, Any]
+    end_to_end_validation: Dict[str, Any]
     explainability_mgr: Optional[ExplainabilityManager] = None
     
     def save_artifacts(self, output_dir: Path):
@@ -2062,7 +2264,9 @@ class DungeonGenerationResult:
                 "wfc_prior_grid_count": self.stats.wfc_prior_grid_count,
                 "wfc_prior_sha256": self.stats.wfc_prior_sha256,
                 "decision_count": self.stats.decision_count,
-                "fully_traceable": self.stats.fully_traceable
+                "fully_traceable": self.stats.fully_traceable,
+                "global_state_contract": self.global_state_contract,
+                "end_to_end_validation": self.end_to_end_validation,
             }, f, indent=2, allow_nan=False)
         stats_tmp.replace(stats_path)
         
@@ -2087,7 +2291,7 @@ def quick_start_demo():
         enable_collision_validation=True,
         theme=ThemeType.CASTLE,  # Style transfer
         enable_big_rooms=True,  # Boss arenas
-        enable_global_state=True,  # Water Temple mechanics
+        enable_global_state=True,  # Explicit deterministic water-state ablation.
         calculate_fun_metrics=True,  # Quantify experience
         record_demo=True,  # GIF/MP4 output
         enable_explainability=True,  # Decision tracing
@@ -2102,7 +2306,28 @@ def quick_start_demo():
     result = pipeline.generate_dungeon(
         tension_curve=[0.0, 0.3, 0.5, 0.7, 0.4, 0.8, 0.2, 1.0],
         room_count=8,
-        user_constraints={"min_keys": 3, "boss_type": "dragon"}
+        user_constraints={
+            "min_keys": 3,
+            "boss_type": "dragon",
+            "global_state": {
+                "variables": [
+                    {"name": "water_level", "type": "water_level", "initial": "high"}
+                ],
+                "transitions": [
+                    {
+                        "from_room": 3,
+                        "trigger": "switch_pulled",
+                        "changes": {"water_level": "low"},
+                        "affects": [4, 5, 6],
+                    }
+                ],
+                "room_dependencies": {
+                    4: {"optional": {"water_level": ["high", "low"]}},
+                    5: {"optional": {"water_level": ["high", "low"]}},
+                    6: {"optional": {"water_level": ["high", "low"]}},
+                },
+            },
+        }
     )
     
     # Print explainability info

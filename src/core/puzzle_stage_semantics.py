@@ -194,3 +194,73 @@ class PuzzleStageSemanticsHead(nn.Module):
             "puzzle_stage_slot_acc": float(slot_acc.detach().item()),
         }
         return total_loss, metrics
+
+    @torch.no_grad()
+    def score_expected_semantics(
+        self,
+        tile_logits: torch.Tensor,
+        puzzle_stage_conditions: Optional[Iterable[Optional[Mapping[str, Any]]]],
+    ) -> Dict[str, torch.Tensor]:
+        """Score agreement with expected semantics for selective inference."""
+        outputs = self.forward(tile_logits)
+        targets = build_puzzle_stage_semantic_targets(
+            puzzle_stage_conditions,
+            max_sequence_length=self.max_sequence_length,
+            device=tile_logits.device,
+        )
+        batch_size = int(tile_logits.shape[0])
+        if int(targets["gate_family"].shape[0]) != batch_size:
+            raise ValueError(
+                "puzzle_stage_conditions batch size must match tile_logits: "
+                f"{int(targets['gate_family'].shape[0])} != {batch_size}."
+            )
+
+        gate_probability = outputs["gate_logits"].float().softmax(dim=-1).gather(
+            1,
+            targets["gate_family"].unsqueeze(1),
+        ).squeeze(1)
+        sequence_probability_raw = torch.sigmoid(outputs["sequence_logits"].float())
+        sequence_probability = torch.where(
+            targets["sequence_required"] > 0.5,
+            sequence_probability_raw,
+            1.0 - sequence_probability_raw,
+        )
+        count_probability = outputs["count_logits"].float().softmax(dim=-1).gather(
+            1,
+            targets["stage_count"].unsqueeze(1),
+        ).squeeze(1)
+        slot_probability_map = outputs["slot_logits"].float().softmax(dim=-1).gather(
+            2,
+            targets["stage_slots"].unsqueeze(-1),
+        ).squeeze(-1)
+        slot_mask = targets["stage_slot_mask"].float()
+        slot_counts = slot_mask.sum(dim=1)
+        slot_log_sum = (slot_probability_map.clamp_min(1e-12).log() * slot_mask).sum(dim=1)
+        slot_probability = torch.where(
+            slot_counts > 0,
+            torch.exp(slot_log_sum / slot_counts.clamp_min(1.0)),
+            torch.ones_like(slot_counts),
+        )
+
+        component_log_probability = torch.stack(
+            [gate_probability, sequence_probability, count_probability, slot_probability],
+            dim=1,
+        ).clamp_min(1e-12).log()
+        joint_probability = torch.exp(component_log_probability.mean(dim=1))
+        gate_match = outputs["gate_logits"].argmax(dim=-1) == targets["gate_family"]
+        sequence_match = (
+            (sequence_probability_raw >= 0.5).to(targets["sequence_required"].dtype)
+            == targets["sequence_required"]
+        )
+        count_match = outputs["count_logits"].argmax(dim=-1) == targets["stage_count"]
+        slot_match_map = outputs["slot_logits"].argmax(dim=-1) == targets["stage_slots"]
+        slot_match = ((slot_match_map | (slot_mask <= 0)).all(dim=1))
+        exact_match = gate_match & sequence_match & count_match & slot_match
+        return {
+            "joint_confidence": joint_probability,
+            "gate_confidence": gate_probability,
+            "sequence_confidence": sequence_probability,
+            "count_confidence": count_probability,
+            "slot_confidence": slot_probability,
+            "exact_match": exact_match.float(),
+        }

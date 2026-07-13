@@ -302,6 +302,18 @@ Use final generated artifacts for report tables:
 python scripts/run_search_role_benchmark.py --input results/final_generated_maps --include-diagnostics --include-static-grid-ablation --pcbs-personas novice,balanced,expert --output-dir results/search_role_benchmark_final
 ```
 
+Add the learned equal-`f` ordering ablation only with an actual checkpoint:
+
+```bash
+python scripts/run_search_role_benchmark.py --input results/final_generated_maps --learned-heuristic-checkpoint checkpoints/heuristic/heuristic.pth --pcbs-personas novice,balanced,expert --output-dir results/search_role_benchmark_learned
+```
+
+This row keeps canonical `f=g+h` as the primary queue key. The network orders
+only states with equal `f`, so it cannot replace the hard oracle or change its
+optimality contract. Missing checkpoints fail explicitly. Cross-map-size use
+is marked as OOD in the result metadata because the checkpoint records its
+training shape, even though the runtime features are normalized.
+
 The CSV/JSON outputs include `validation_role` and `canonical_use` columns.
 Keep those columns in downstream tables.
 
@@ -328,11 +340,26 @@ For final tables:
 
 ## Remaining Search Work
 
+- Implemented after the learned-search audit: `search_factory.py` exposes an
+  explicit `A* + Learned Tie-Break` ablation. The checkpoint is loaded once per
+  solve, not once per state expansion, and both normal and diagnostic A* paths
+  now share one queue-priority constructor. Learned values never enter the
+  primary `f` key. This follows the distinction between learned guidance and
+  optimal search discussed by
+  [Neural A*](https://proceedings.mlr.press/v139/yonetani21a.html), while the
+  equal-plateau design is consistent with the demonstrated importance of A*
+  tie-breaking
+  ([Asai and Fukunaga, 2016](https://ojs.aaai.org/index.php/AAAI/article/view/10071)).
+
 - Completed after the key-economy audit: explicit START/GOAL markers remain
   authoritative even in cyclic graphs; a lock's surplus diagnostic excludes
   providers reachable only by crossing that lock; and critical-route node
   discovery uses forward/backward reachability rather than enumerating every
-  simple path.
+  simple path. Mission lock-node ordering now uses a fixed-point unlock pass,
+  and hybrid runtime MAP-Elites rejects candidates whose inventory-aware macro
+  progression is infeasible instead of silently falling back to grid-only
+  descriptors. Grid-only behavior remains available as the named `legacy`
+  ablation.
 - Completed after the orchestration audit: deterministic model-contract errors
   terminate one block attempt without retry, and a timed-out thread-backed
   block is not retried concurrently because running Python threads cannot be

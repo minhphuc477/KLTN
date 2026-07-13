@@ -47,7 +47,11 @@ from src.evaluation.search_benchmark_utils import confusion_ratio_vs_oracle, run
 from src.generation.evolutionary_director import mission_graph_to_networkx
 from src.generation.evolutionary_director import networkx_to_mission_graph
 from src.generation.evolutionary_director import EvolutionaryTopologyGenerator
-from src.generation.grammar import Difficulty, MissionGrammar
+from src.generation.grammar import (
+    Difficulty,
+    MissionGrammar,
+    validate_exact_progression,
+)
 from src.pipeline.dungeon_pipeline import NeuralSymbolicDungeonPipeline
 from src.pipeline.dungeon_pipeline import RoomGenerationResult
 from src.pipeline.dungeon_pipeline import pipeline_kwargs_from_resolved_config
@@ -1441,6 +1445,7 @@ class AblationStudy:
                 constraint_valid = float(
                     self._constraint_grammar.validate_lock_key_ordering(mission)
                     and self._constraint_grammar.validate_progression_constraints(mission)
+                    and validate_exact_progression(mission)
                 )
             except Exception:
                 constraint_valid = float("nan")

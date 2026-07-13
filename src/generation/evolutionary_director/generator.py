@@ -50,7 +50,7 @@ class EvolutionaryTopologyGenerator:
     
     This implements a (mu+lambda) evolutionary strategy with:
     - Tournament selection
-    - One-point crossover
+    - Grammar-transition-aware one-point crossover
     - Weighted mutation using Zelda transition probabilities
     """
     
@@ -79,8 +79,9 @@ class EvolutionaryTopologyGenerator:
         max_lock_key_rules: int = 3,
         realism_tuning: Optional[Dict[str, float]] = None,
         enable_rule_credit_assignment: bool = False,
-        enforce_generation_constraints: bool = False,
+        enforce_generation_constraints: bool = True,
         allow_candidate_repairs: bool = False,
+        graph_oracle_max_states: int = 200_000,
     ):
         """
         Initialize evolutionary generator.
@@ -125,6 +126,8 @@ class EvolutionaryTopologyGenerator:
                 behavior in early generations.
             allow_candidate_repairs: If True, attempt local candidate repair
                 when generation constraints fail.
+            graph_oracle_max_states: State-expansion budget for exact
+                consumable-resource validation of the final exported graph.
         """
         self.target_curve = target_curve
         self.transition_matrix = zelda_transition_matrix or DEFAULT_ZELDA_TRANSITIONS
@@ -156,6 +159,7 @@ class EvolutionaryTopologyGenerator:
         self.enable_rule_credit_assignment = bool(enable_rule_credit_assignment)
         self.enforce_generation_constraints = bool(enforce_generation_constraints)
         self.allow_candidate_repairs = bool(allow_candidate_repairs)
+        self.graph_oracle_max_states = int(max(1, graph_oracle_max_states))
         parsed_rule_space = str(rule_space).strip().lower() if rule_space is not None else "full"
         if parsed_rule_space not in {"core", "spatial", "full"}:
             logger.warning("Unknown rule_space='%s', defaulting to 'full'", rule_space)
@@ -652,10 +656,27 @@ class EvolutionaryTopologyGenerator:
                 "post_feasible": bool(post_repair_eval.get("feasible", False)),
                 "pre_constraint_violation": float(pre_repair_eval.get("constraint_violation", 0.0)),
                 "post_constraint_violation": float(post_repair_eval.get("constraint_violation", 0.0)),
+                "repairs_retained": bool(post_repair_eval.get("feasible", False)),
             }
             setattr(self, "last_final_repair_evaluation", dict(graph.generation_stats["final_repair_evaluation"]))
         except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
-            logger.debug("Post-repair phenotype evaluation failed during finalization: %s", exc)
+            raise RuntimeError(
+                "Post-repair phenotype evaluation failed; export cannot certify "
+                "the finalized mission graph."
+            ) from exc
+
+        if not bool(post_repair_eval.get("feasible", False)):
+            repair_ledger = copy.deepcopy(
+                graph.generation_stats["final_repair_evaluation"]
+            )
+            graph = copy.deepcopy(pre_repair_graph)
+            graph.ensure_generation_stats_defaults()
+            graph.generation_stats["final_repair_evaluation"] = repair_ledger
+            graph.generation_stats["final_repair_rollback"] = 1
+            logger.warning(
+                "Final descriptor repairs invalidated the selected phenotype; "
+                "rolling them back before exact export validation."
+            )
 
         best_networkx = mission_graph_to_networkx(graph, directed=True)
 
@@ -663,6 +684,35 @@ class EvolutionaryTopologyGenerator:
         best_networkx_physical = filter_virtual_nodes(best_networkx)
         best_networkx_physical = self._enforce_output_node_cap(best_networkx_physical)
         best_networkx_physical = self._repair_output_connectivity(best_networkx_physical)
+
+        # Node-cap and connectivity repair mutate the exported artifact after
+        # phenotype evaluation. Re-run the exact consumable-resource oracle on
+        # that final graph rather than transferring a stale feasibility label.
+        from src.evaluation.validator import ExternalValidator
+
+        export_validator = ExternalValidator(mode="full")
+        export_result = export_validator.validate(
+            best_networkx_physical,
+            max_states=self.graph_oracle_max_states,
+        )
+        export_reachability = (
+            export_validator.checker.check_all_rooms_reachable_detailed(
+                best_networkx_physical,
+                max_states=self.graph_oracle_max_states,
+            )
+        )
+        if str(export_result.termination_status) == "budget_exhausted" or not bool(
+            export_reachability["complete"]
+        ):
+            raise RuntimeError(
+                "Final exported mission graph exhausted the exact progression budget."
+            )
+        if not export_result.is_solvable or export_reachability["unreachable_nodes"]:
+            raise ValueError(
+                "Final exported mission graph is not progression-feasible: "
+                f"reason={export_result.failure_reason!r}, "
+                f"unreachable={sorted(export_reachability['unreachable_nodes'], key=str)}"
+            )
 
         topology_report = validate_topology(best_networkx_physical)
         if not topology_report.is_valid:
@@ -3034,7 +3084,7 @@ class EvolutionaryTopologyGenerator:
         parent2: List[int]
     ) -> Tuple[List[int], List[int]]:
         """
-        One-point crossover: splice two rule lists.
+        Splice rule lists at the most compatible grammar-transition boundary.
         
         Args:
             parent1: First parent genome
@@ -3046,14 +3096,46 @@ class EvolutionaryTopologyGenerator:
         if len(parent1) < 2 or len(parent2) < 2:
             return parent1.copy(), parent2.copy()
         
-        # Select crossover point
-        point = self.rng.randint(1, min(len(parent1), len(parent2)) - 1)
+        max_point = min(len(parent1), len(parent2)) - 1
+        point_scores: List[Tuple[float, int]] = []
+        for point in range(1, max_point + 1):
+            score = (
+                self._crossover_boundary_score(parent1[point - 1], parent2[point])
+                + self._crossover_boundary_score(parent2[point - 1], parent1[point])
+            )
+            point_scores.append((score, point))
+
+        best_score = max(score for score, _point in point_scores)
+        best_points = [
+            point
+            for score, point in point_scores
+            if math.isclose(score, best_score, rel_tol=1e-12, abs_tol=1e-12)
+        ]
+        point = self.rng.choice(best_points)
         
         # Create children
         child1 = parent1[:point] + parent2[point:]
         child2 = parent2[:point] + parent1[point:]
         
         return child1, child2
+
+    def _crossover_boundary_score(self, left_rule_id: int, right_rule_id: int) -> float:
+        """Log-score one newly introduced rule transition after crossover."""
+        left_id = max(self.min_rule_id, min(int(left_rule_id), self.max_rule_id))
+        right_id = max(self.min_rule_id, min(int(right_rule_id), self.max_rule_id))
+        left_name = self.executor.rule_names[left_id]
+        right_name = self.executor.rule_names[right_id]
+        transitions = self.transition_matrix.get(left_name, {})
+        base_probability = float(max(0.0, self._global_rule_probs.get(right_id, 0.0)))
+        transition_probability = float(max(0.0, transitions.get(right_name, 0.0)))
+        if transitions:
+            probability = (
+                self.transition_mix * transition_probability
+                + (1.0 - self.transition_mix) * base_probability
+            )
+        else:
+            probability = base_probability
+        return math.log(max(probability, np.finfo(np.float64).tiny))
     
     def _mutate(self, genome: List[int]) -> List[int]:
         """

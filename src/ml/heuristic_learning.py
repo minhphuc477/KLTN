@@ -442,7 +442,14 @@ class MLHeuristicAStar:
         h_value = solver.heuristic(state)
     """
     
-    def __init__(self, env, model_path: Optional[str] = None):
+    def __init__(
+        self,
+        env,
+        model_path: Optional[str] = None,
+        *,
+        require_model: bool = False,
+        require_matching_shape: bool = True,
+    ):
         """
         Initialize ML-based A*.
         
@@ -454,13 +461,50 @@ class MLHeuristicAStar:
         self.model = None
         self.map_height = int(getattr(env, "height", 1) or 1)
         self.map_width = int(getattr(env, "width", 1) or 1)
-        
+        if require_model and not TORCH_AVAILABLE:
+            raise ImportError("PyTorch is required for learned A* guidance.")
+        if require_model and not model_path:
+            raise ValueError("A learned heuristic checkpoint path is required.")
+        if model_path and not os.path.exists(model_path):
+            if require_model:
+                raise FileNotFoundError(f"Learned heuristic checkpoint does not exist: {model_path}")
+            logger.warning("Learned heuristic checkpoint does not exist: %s", model_path)
+
         if model_path and os.path.exists(model_path) and TORCH_AVAILABLE:
             try:
                 self.model = HeuristicTrainer.load_model(model_path)
                 logger.info("ML heuristic loaded successfully")
             except (AttributeError, RuntimeError, ValueError, TypeError) as e:
-                logger.warning(f"Failed to load ML model: {e}")
+                if require_model:
+                    raise RuntimeError(
+                        f"Failed to load learned heuristic checkpoint {model_path}: {e}"
+                    ) from e
+                logger.warning("Failed to load ML model: %s", e)
+
+        if self.model is not None and require_matching_shape:
+            trained_height = int(getattr(self.model, "map_height", self.map_height))
+            trained_width = int(getattr(self.model, "map_width", self.map_width))
+            if (trained_height, trained_width) != (self.map_height, self.map_width):
+                raise ValueError(
+                    "Learned heuristic checkpoint shape does not match the environment: "
+                    f"checkpoint={trained_height}x{trained_width}, "
+                    f"environment={self.map_height}x{self.map_width}."
+                )
+
+    @property
+    def is_loaded(self) -> bool:
+        """Whether a trained heuristic checkpoint is active."""
+        return self.model is not None
+
+    @property
+    def trained_map_shape(self) -> Optional[Tuple[int, int]]:
+        """Spatial shape recorded by the active checkpoint, if available."""
+        if self.model is None:
+            return None
+        return (
+            int(getattr(self.model, "map_height", self.map_height)),
+            int(getattr(self.model, "map_width", self.map_width)),
+        )
 
     def _featurize_runtime_state(self, state) -> np.ndarray:
         """Featurize a live search state without constructing training modules."""

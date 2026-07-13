@@ -1,3 +1,4 @@
+# ruff: noqa: E402
 """Run role-separated search benchmarks for Zelda validation.
 
 This script implements the search work from
@@ -6,6 +7,7 @@ This script implements the search work from
 * full game-state A* and Dijkstra are reported as validation/exact solvers;
 * P-CBS personas are reported as bounded-player simulations;
 * Bidirectional A*, D* Lite, BFS, DFS, and Greedy are marked as diagnostics;
+* checkpoint-backed learned guidance is evaluated only as an equal-f A* tie-break ablation;
 * JPS is only benchmarked on static binary grids where its assumptions hold.
 
 The output is intentionally role-tagged so downstream tables cannot silently
@@ -37,6 +39,7 @@ from src.simulation.search_base import GameStateSearchConfig
 from src.simulation.search_factory import (
     VALIDATION_EXCLUDED_ALGORITHMS,
     environment_requires_full_state_oracle,
+    iter_game_state_algorithm_specs,
     recommended_game_state_algorithm_specs,
     run_game_state_solver,
 )
@@ -193,6 +196,13 @@ def run_game_state_rows(
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     env_for_selection = ZeldaLogicEnv(grid.copy())
     specs = recommended_game_state_algorithm_specs(env_for_selection, include_diagnostics=include_diagnostics)
+    if config.learned_heuristic_model_path:
+        learned_spec = next(
+            spec
+            for spec in iter_game_state_algorithm_specs()
+            if spec.key == "learned_tiebreak_astar"
+        )
+        specs = list(specs) + [learned_spec]
     rows: List[Dict[str, Any]] = []
     for spec in specs:
         env = ZeldaLogicEnv(grid.copy())
@@ -422,6 +432,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--allow-diagonals", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--rules-profile", default="vglc_strict")
     parser.add_argument("--max-depth", type=int, default=500)
+    parser.add_argument(
+        "--learned-heuristic-checkpoint",
+        type=Path,
+        default=None,
+        help=(
+            "Optional HeuristicTrainer checkpoint. Adds A* with neural equal-f "
+            "tie-breaking; it never replaces the canonical oracle row."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -436,6 +455,11 @@ def main() -> int:
         allow_diagonals=bool(args.allow_diagonals),
         rules_profile=str(args.rules_profile),
         max_depth=int(args.max_depth),
+        learned_heuristic_model_path=(
+            str(args.learned_heuristic_checkpoint)
+            if args.learned_heuristic_checkpoint is not None
+            else None
+        ),
     )
     personas = [part.strip() for part in str(args.pcbs_personas).split(",") if part.strip()]
 
@@ -474,6 +498,11 @@ def main() -> int:
                     "rules_profile": str(args.rules_profile),
                     "allow_diagonals": bool(args.allow_diagonals),
                     "max_depth": int(args.max_depth),
+                    "learned_heuristic_checkpoint": (
+                        str(args.learned_heuristic_checkpoint)
+                        if args.learned_heuristic_checkpoint is not None
+                        else None
+                    ),
                 },
                 "selection": selections,
                 "rows": _json_sanitize(all_rows),

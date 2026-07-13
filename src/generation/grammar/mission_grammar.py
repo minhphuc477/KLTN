@@ -1000,41 +1000,60 @@ class MissionGrammar:
         start = graph.get_start_node()
         if not start:
             return False
-        
+
         lock_types = {NodeType.LOCK, NodeType.BOSS_DOOR}
-        key_types = {NodeType.KEY, NodeType.BIG_KEY}
-        locks = [n for n in graph.nodes.values() if n.node_type in lock_types]
-        keys = [n for n in graph.nodes.values() if n.node_type in key_types]
-        
-        # Build key lookup (multiple providers can map to same key_id).
-        key_by_id: Dict[int, List[MissionNode]] = defaultdict(list)
-        for key_node in keys:
-            if key_node.key_id is not None:
-                key_by_id[key_node.key_id].append(key_node)
-        
-        for lock in locks:
-            if lock.key_id is None:
-                continue
-            
-            providers = key_by_id.get(lock.key_id, [])
-            if not providers:
-                if log_failures:
-                    logger.warning(f"Lock {lock.id} references non-existent key {lock.key_id}")
-                return False
-            
-            # Check if key is reachable from start without passing through lock
-            if not any(
-                self._is_reachable_without(graph, start.id, key.id, exclude={lock.id})
-                for key in providers
+        malformed_locks = [
+            node.id
+            for node in graph.nodes.values()
+            if node.node_type in lock_types and node.key_id is None
+        ]
+        if malformed_locks:
+            if log_failures:
+                logger.warning(
+                    "Lock nodes have no key requirement: %s",
+                    sorted(malformed_locks),
+                )
+            return False
+
+        key_providers: Dict[int, Set[NodeType]] = defaultdict(set)
+        for node in graph.nodes.values():
+            if (
+                node.node_type in {NodeType.KEY, NodeType.BIG_KEY}
+                and node.key_id is not None
             ):
-                if log_failures:
-                    logger.warning(
-                        f"No provider key for lock {lock.id} is reachable before lock "
-                        f"(key_id={lock.key_id})"
-                    )
-                return False
+                key_providers[int(node.key_id)].add(node.node_type)
+        missing_or_wrong_provider: list[int] = []
+        for node in graph.nodes.values():
+            if node.node_type not in lock_types:
+                continue
+            expected_provider = (
+                NodeType.BIG_KEY
+                if node.node_type == NodeType.BOSS_DOOR
+                else NodeType.KEY
+            )
+            if expected_provider not in key_providers.get(int(node.key_id), set()):
+                missing_or_wrong_provider.append(node.id)
+        if missing_or_wrong_provider:
+            if log_failures:
+                logger.warning(
+                    "Lock nodes have no correctly typed key provider: %s",
+                    sorted(missing_or_wrong_provider),
+                )
+            return False
         
-        return True
+        unresolved = self._unresolved_lock_node_ids(graph, start.id)
+        if not unresolved:
+            return True
+        if log_failures:
+            blocked = {
+                lock_id: graph.nodes[lock_id].key_id
+                for lock_id in sorted(unresolved)
+            }
+            logger.warning(
+                "Lock-key progression is deadlocked; unresolved lock->key IDs: %s",
+                blocked,
+            )
+        return False
 
     def validate_progression_constraints(self, graph: MissionGraph, *, log_failures: bool = True) -> bool:
         """
@@ -1059,7 +1078,7 @@ class MissionGrammar:
 
         item_providers: Dict[str, List[int]] = defaultdict(list)
         for node in graph.nodes.values():
-            if node.node_type == NodeType.ITEM and node.item_type:
+            if node.node_type in {NodeType.ITEM, NodeType.PROTECTION_ITEM} and node.item_type:
                 item_providers[str(node.item_type)].append(node.id)
 
         token_nodes = [n.id for n in graph.nodes.values() if n.node_type == NodeType.TOKEN]
@@ -1133,6 +1152,31 @@ class MissionGrammar:
                         )
                     return False
 
+            if edge.edge_type == EdgeType.HAZARD:
+                required_item = str(edge.protection_item_id or "").strip()
+                providers = item_providers.get(required_item, []) if required_item else []
+                if not required_item or not providers:
+                    if log_failures:
+                        logger.warning(
+                            "HAZARD %s->%s has no protection provider for %r",
+                            edge.source,
+                            edge.target,
+                            required_item,
+                        )
+                    return False
+                if not any(
+                    self._is_reachable_without_edges(graph, start.id, provider, excluded_edge)
+                    for provider in providers
+                ):
+                    if log_failures:
+                        logger.warning(
+                            "Protection %s is not reachable before HAZARD %s->%s",
+                            required_item,
+                            edge.source,
+                            edge.target,
+                        )
+                    return False
+
             if edge.edge_type == EdgeType.MULTI_LOCK and edge.token_count > 0:
                 reachable = graph.get_reachable_nodes(start.id, excluded_edges=excluded_edge)
                 reachable_tokens = sum(1 for token_node in token_nodes if token_node in reachable)
@@ -1163,8 +1207,82 @@ class MissionGrammar:
         if (require_goal_gauntlet or has_goal_gauntlet_artifacts) and not self.validate_goal_gauntlet(graph, log_failures=log_failures):
             return False
 
+        # Individual provider checks validate gate metadata, but cannot reject
+        # mutually dependent edge gates on their own. Compute one closure with
+        # every gate active so providers reached only by assuming another gate
+        # is open cannot certify the graph.
+        progression_reachable = self._progression_reachable_nodes(
+            graph,
+            start.id,
+            exclude_nodes=set(),
+            exclude_edges=set(),
+        )
+        traversable_nodes = {
+            node_id
+            for node_id in graph.nodes
+            if node_id == start.id
+            or any(
+                edge.edge_type not in graph.NON_TRAVERSABLE_EDGE_TYPES
+                and (edge.source == node_id or edge.target == node_id)
+                for edge in graph.edges
+            )
+        }
+        unreachable = traversable_nodes - progression_reachable
+        if unreachable:
+            if log_failures:
+                logger.warning(
+                    "Progression closure leaves nodes unreachable with all gates "
+                    "active: %s",
+                    sorted(unreachable),
+                )
+            return False
+
         return True
     
+    def _unresolved_lock_node_ids(self, graph: MissionGraph, start: int) -> Set[int]:
+        """Resolve lock nodes in key-acquisition waves and return deadlocked IDs."""
+        lock_types = {NodeType.LOCK, NodeType.BOSS_DOOR}
+        key_types = {NodeType.KEY, NodeType.BIG_KEY}
+        lock_by_id = {
+            node.id: node
+            for node in graph.nodes.values()
+            if node.node_type in lock_types and node.key_id is not None
+        }
+        keys = [node for node in graph.nodes.values() if node.node_type in key_types]
+        unresolved = set(lock_by_id)
+        collected_key_ids: Set[int] = set()
+
+        while unresolved:
+            reachable = self._reachable_without_nodes(graph, start, unresolved)
+            collected_key_ids.update(
+                key.key_id
+                for key in keys
+                if key.key_id is not None and key.id in reachable
+            )
+            newly_unlocked = {
+                lock_id
+                for lock_id in unresolved
+                if lock_by_id[lock_id].key_id in collected_key_ids
+            }
+            if not newly_unlocked:
+                break
+            unresolved.difference_update(newly_unlocked)
+        return unresolved
+
+    def _reachable_without_nodes(
+        self,
+        graph: MissionGraph,
+        start: int,
+        exclude: Set[int],
+    ) -> Set[int]:
+        """Return progression-reachable nodes while the given nodes stay closed."""
+        return self._progression_reachable_nodes(
+            graph,
+            start,
+            exclude_nodes=set(exclude),
+            exclude_edges=set(),
+        )
+
     def _is_reachable_without(
         self,
         graph: MissionGraph,
@@ -1173,12 +1291,7 @@ class MissionGrammar:
         exclude: Set[int],
     ) -> bool:
         """Progression-aware reachability check excluding certain nodes."""
-        reachable = self._progression_reachable_nodes(
-            graph,
-            start,
-            exclude_nodes=set(exclude),
-            exclude_edges=set(),
-        )
+        reachable = self._reachable_without_nodes(graph, start, exclude)
         return target in reachable
 
     def _is_reachable_without_edges(
@@ -1225,7 +1338,7 @@ class MissionGrammar:
                     key_ids.add(int(node.key_id))
                 if node.node_type == NodeType.KEY:
                     small_keys += 1
-                if node.node_type == NodeType.ITEM and node.item_type:
+                if node.node_type in {NodeType.ITEM, NodeType.PROTECTION_ITEM} and node.item_type:
                     items.add(str(node.item_type))
                 if node.node_type == NodeType.RESOURCE_FARM and node.drops_resource:
                     items.add(str(node.drops_resource))
@@ -1237,17 +1350,18 @@ class MissionGrammar:
             node = graph.nodes.get(node_id)
             if node is None:
                 return False
-            if node.node_type in {NodeType.LOCK, NodeType.BOSS_DOOR} and node.key_id is not None:
-                return int(node.key_id) in key_ids
+            if node.node_type in {NodeType.LOCK, NodeType.BOSS_DOOR}:
+                return node.key_id is not None and int(node.key_id) in key_ids
             return True
 
         def _edge_gate_open(edge: Any, key_ids: Set[int], items: Set[str], small_keys: int, tokens: int) -> bool:
             if edge.edge_type in {EdgeType.LOCKED, EdgeType.BOSS_LOCKED}:
                 if edge.key_required is not None and int(edge.key_required) not in key_ids:
                     return False
-                if edge.edge_type == EdgeType.LOCKED and edge.requires_key_count > 0 and small_keys < int(edge.requires_key_count):
-                    return False
-                if edge.key_required is None and edge.requires_key_count <= 0:
+
+            if edge.edge_type == EdgeType.HAZARD:
+                required_item = str(edge.protection_item_id or "").strip()
+                if not required_item or required_item not in items:
                     return False
             if edge.requires_key_count > 0 and small_keys < int(edge.requires_key_count):
                 return False
@@ -1298,19 +1412,14 @@ class MissionGrammar:
 
         demoted_lock_nodes = 0
         demoted_lock_edges = 0
+        unresolved_lock_ids = self._unresolved_lock_node_ids(graph, start.id)
 
         # Repair lock nodes first.
         for lock in [n for n in graph.nodes.values() if n.node_type in {NodeType.LOCK, NodeType.BOSS_DOOR}]:
             key_id = lock.key_id
             if key_id is None:
                 continue
-
-            providers = key_providers.get(key_id, [])
-            reachable = any(
-                self._is_reachable_without(graph, start.id, provider_id, {lock.id})
-                for provider_id in providers
-            )
-            if providers and reachable:
+            if lock.id not in unresolved_lock_ids:
                 continue
 
             lock.node_type = NodeType.EMPTY

@@ -1,3 +1,4 @@
+# ruff: noqa: E402
 # pyright: reportPrivateUsage=false
 
 """
@@ -164,7 +165,7 @@ def test_block_iii_condition_encoder():
     assert encoder.global_encoder.gnn_type == "gcn"
 
     # Test encode_global_only (most common path)
-    node_features = torch.randn(5, 5)
+    node_features = torch.randn(5, GRAPH_NODE_FEATURE_DIM)
     edge_index = torch.tensor([[0,1,2,3,1], [1,2,3,4,3]], dtype=torch.long)
     edge_features = torch.randn(5, GRAPH_EDGE_FEATURE_DIM)  # Phase 3A: edge features
 
@@ -918,7 +919,7 @@ def test_pipeline_vqvae_to_diffusion():
         z_q, _indices = vqvae.encode(x)  # CRITICAL-2: 2 values
 
     # Build conditioning
-    node_features = torch.randn(4, 5)
+    node_features = torch.randn(4, GRAPH_NODE_FEATURE_DIM)
     edge_index = torch.tensor([[0,1,2,1],[1,2,3,0]], dtype=torch.long)
     c_global = cond_encoder.encode_global_only(node_features, edge_index)
     conditioning = c_global.mean(dim=0, keepdim=True).expand(2, -1)

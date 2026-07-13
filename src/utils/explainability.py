@@ -137,15 +137,17 @@ def save_discrepancy_heatmap(
 
         png_path = prefix_path.with_suffix(".png")
         fig = plt.figure(figsize=(5, 4), dpi=120)
-        ax = fig.add_subplot(111)
-        im = ax.imshow(heat, cmap="hot", vmin=0.0, vmax=1.0)
-        ax.set_title("Neuro-Symbolic Discrepancy Heatmap")
-        ax.set_xlabel("col")
-        ax.set_ylabel("row")
-        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-        fig.tight_layout()
-        fig.savefig(png_path)
-        plt.close(fig)
+        try:
+            ax = fig.add_subplot(111)
+            im = ax.imshow(heat, cmap="hot", vmin=0.0, vmax=1.0)
+            ax.set_title("Neuro-Symbolic Discrepancy Heatmap")
+            ax.set_xlabel("col")
+            ax.set_ylabel("row")
+            fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+            fig.tight_layout()
+            fig.savefig(png_path)
+        finally:
+            plt.close(fig)
         outputs["png"] = str(png_path)
     except Exception as exc:  # pragma: no cover
         logger.debug("Skipping discrepancy heatmap PNG export: %s", exc)

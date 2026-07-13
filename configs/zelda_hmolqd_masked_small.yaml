@@ -1,4 +1,6 @@
 # Kaggle-friendly checkpoint budget guardrails for the small profile.
+config_version: 1
+
 runtime:
   checkpoint_storage_budget_gb: 4.0
   checkpoint_storage_warning_fraction: 0.8

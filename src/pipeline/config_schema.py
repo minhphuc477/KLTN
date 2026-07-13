@@ -6,7 +6,7 @@ from typing import Any, Dict, Optional, Tuple, Type
 
 from pydantic import BaseModel, ConfigDict, Field, create_model, model_validator
 
-from src.config_system import CONFIG_FIELDS, validate_config
+from src.config_system import CURRENT_CONFIG_VERSION, CONFIG_FIELDS, validate_config
 from src.pipeline.config import GraphConfig, ModelConfig, PipelineConfig, SamplerConfig
 
 TopologyConfig = GraphConfig
@@ -66,6 +66,7 @@ class HMOLQDConfigSchema(BaseModel):
 
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
+    config_version: int = Field(default=CURRENT_CONFIG_VERSION, ge=1)
     training: TrainingSchema = Field(default_factory=TrainingSchema)
     runtime: RuntimeSchema = Field(default_factory=RuntimeSchema)
     dataset: DatasetSchema = Field(default_factory=DatasetSchema)
