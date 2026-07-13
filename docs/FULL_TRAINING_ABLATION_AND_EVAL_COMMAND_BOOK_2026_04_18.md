@@ -236,6 +236,29 @@ Interpretation:
   - explicit learned semantic loss on generated room logits
 - if you want the stronger thesis claim, do not cite `stageconditioned_v1`
 
+### 4.1 Masked-room spatial graph-attention ablation
+
+The canonical masked-room checkpoint remains the `additive` baseline. Train
+the graph branch from scratch because enabling it adds parameters; loading an
+additive checkpoint with `strict=False` is not a matched ablation.
+
+```powershell
+python -m src.train_masked_room --config configs\zelda_hmolqd.yaml --checkpoint-dir outputs\masked_topology_additive_seed42\checkpoints\masked_room --topology-conditioning-mode additive --attention-mode softmax --seed 42 --no-auto-resume
+
+python -m src.train_masked_room --config configs\zelda_hmolqd.yaml --checkpoint-dir outputs\masked_topology_graph_softmax_seed42\checkpoints\masked_room --topology-conditioning-mode graph_cross_attention --attention-mode softmax --spatial-graph-gate-init -2.0 --seed 42 --no-auto-resume
+
+python -m src.train_masked_room --config configs\zelda_hmolqd.yaml --checkpoint-dir outputs\masked_topology_graph_linear_seed42\checkpoints\masked_room --topology-conditioning-mode graph_cross_attention --attention-mode linear_hedgehog --hedgehog-feature-dim 32 --graph-auto-linear-attention-nodes 128 --spatial-graph-gate-init -2.0 --seed 42 --no-auto-resume
+```
+
+Repeat unchanged for the declared paired seeds. Compare held-out loss,
+raw-neural and final exact-oracle validity, graph-to-grid topology drift,
+fallback rate, wall time, peak memory, and the reported attention-pair counts.
+The softmax-versus-linear comparison is secondary to additive-versus-graph
+conditioning and must not be pooled across different parameter budgets.
+The same three runs are emitted by
+`scripts/generate_model_architecture_ablation_manifest.py`; use
+`--no-masked-room` only when intentionally planning the diffusion-only table.
+
 ## 5. Parallel GPU Launcher
 
 If you want parallel phase execution instead of launching by hand:

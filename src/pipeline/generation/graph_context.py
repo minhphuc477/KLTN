@@ -80,7 +80,12 @@ def _prepare_graph_context(pipeline, graph: nx.Graph, use_tpe: bool = True) -> D
     # Deterministic order is required so room_id -> node_idx stays stable.
     if isinstance(graph, nx.DiGraph):
         try:
-            node_order = list(nx.topological_sort(graph))
+            node_order = list(
+                nx.lexicographical_topological_sort(
+                    graph,
+                    key=_stable_node_sort_key,
+                )
+            )
         except nx.NetworkXUnfeasible:
             node_order = sorted(graph.nodes(), key=_stable_node_sort_key)
     else:
@@ -110,19 +115,31 @@ def _prepare_graph_context(pipeline, graph: nx.Graph, use_tpe: bool = True) -> D
                 dtype=torch.float32,
             )
 
-    edge_pairs: List[Tuple[int, int]] = []
-    edge_features_list: List[List[float]] = []
+    edge_records: List[Tuple[int, int, List[float]]] = []
     for u, v, edge_data in graph.edges(data=True):
         if u not in node_to_idx or v not in node_to_idx:
             continue
 
-        edge_pairs.append((node_to_idx[u], node_to_idx[v]))
-        edge_features_list.append(pipeline._encode_edge_feature_vector(edge_data))
+        encoded = pipeline._encode_edge_feature_vector(edge_data)
+        edge_records.append((node_to_idx[u], node_to_idx[v], encoded))
 
         # For undirected graphs we add reverse edges explicitly for message passing.
         if not graph.is_directed() and u != v:
-            edge_pairs.append((node_to_idx[v], node_to_idx[u]))
-            edge_features_list.append(pipeline._encode_edge_feature_vector(edge_data))
+            edge_records.append((node_to_idx[v], node_to_idx[u], list(encoded)))
+
+    # NetworkX preserves insertion order, which is not a semantic graph
+    # property. Canonicalize edge order as well as node order so serialized or
+    # independently reconstructed equivalent graphs produce identical GNN and
+    # RRWP tensors.
+    edge_records.sort(
+        key=lambda record: (
+            int(record[0]),
+            int(record[1]),
+            tuple(float(value) for value in record[2]),
+        )
+    )
+    edge_pairs = [(source, target) for source, target, _features in edge_records]
+    edge_features_list = [features for _source, _target, features in edge_records]
 
     if edge_pairs:
         edge_index = (

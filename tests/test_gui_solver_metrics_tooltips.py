@@ -1,4 +1,4 @@
-﻿from src.gui.services.solver_metrics_tooltips import format_cbs_metrics_tooltip
+﻿from src.gui.solver.metrics_tooltips import format_cbs_metrics_tooltip
 
 
 def test_format_cbs_metrics_tooltip_contains_expected_lines():

@@ -7,6 +7,7 @@ This script closes the experiment-planning gap for:
 - Softmax vs. Hedgehog linear attention.
 - GATv2 vs. directed semantic sparse attention vs. learned Graphormer bias.
 - SPADE vs. additive topology conditioning.
+- Masked-room additive conditioning vs. graph-to-grid softmax/linear attention.
 
 Default mode is plan-only. Use ``--execute`` only when checkpoints, data, and
 compute budget are ready. The script writes a machine-readable manifest so
@@ -41,6 +42,15 @@ class ArchitectureVariant:
     dit_norm_type: str
     attention_mode: str
     topology_refinement_mode: str
+    topology_conditioning_mode: str
+    comparison_family: str
+    hypothesis: str
+
+
+@dataclass(frozen=True)
+class MaskedRoomArchitectureVariant:
+    name: str
+    attention_mode: str
     topology_conditioning_mode: str
     comparison_family: str
     hypothesis: str
@@ -150,6 +160,32 @@ def build_variants() -> List[ArchitectureVariant]:
     ]
 
 
+def build_masked_room_variants() -> List[MaskedRoomArchitectureVariant]:
+    return [
+        MaskedRoomArchitectureVariant(
+            name="masked_additive_baseline",
+            attention_mode="softmax",
+            topology_conditioning_mode="additive",
+            comparison_family="masked_topology_conditioning",
+            hypothesis="Checkpoint-compatible additive topology-map baseline.",
+        ),
+        MaskedRoomArchitectureVariant(
+            name="masked_graph_cross_attention_softmax",
+            attention_mode="softmax",
+            topology_conditioning_mode="graph_cross_attention",
+            comparison_family="masked_topology_conditioning",
+            hypothesis="Node-aligned graph-to-grid attention may improve spatial topology fidelity.",
+        ),
+        MaskedRoomArchitectureVariant(
+            name="masked_graph_cross_attention_linear",
+            attention_mode="linear_hedgehog",
+            topology_conditioning_mode="graph_cross_attention",
+            comparison_family="masked_attention_kernel",
+            hypothesis="Linear graph attention may reduce large-graph cost at a measurable fidelity tradeoff.",
+        ),
+    ]
+
+
 def _parse_seeds(raw: str) -> List[int]:
     seeds = [int(token.strip()) for token in str(raw).split(",") if token.strip()]
     return seeds or [42]
@@ -201,6 +237,36 @@ def _command_for(
         )
     command.extend(extra_args)
     return command
+
+
+def _masked_room_command_for(
+    *,
+    python_exe: str,
+    config: Path,
+    output_dir: Path,
+    variant: MaskedRoomArchitectureVariant,
+    seed: int,
+    epochs: int,
+) -> List[str]:
+    checkpoint_dir = output_dir / variant.name / f"seed_{seed}" / "checkpoints" / "masked_room"
+    return [
+        python_exe,
+        "-m",
+        "src.train_masked_room",
+        "--config",
+        str(config),
+        "--checkpoint-dir",
+        str(checkpoint_dir),
+        "--epochs",
+        str(int(epochs)),
+        "--seed",
+        str(int(seed)),
+        "--attention-mode",
+        variant.attention_mode,
+        "--topology-conditioning-mode",
+        variant.topology_conditioning_mode,
+        "--no-auto-resume",
+    ]
 
 
 def write_manifest(
@@ -307,15 +373,56 @@ def build_plan(args: argparse.Namespace) -> Dict[str, Any]:
             runs.append(
                 {
                     "variant": asdict(variant),
+                    "training_stage": "diffusion",
                     "seed": int(seed),
                     "command": command,
                     "status": "planned",
                     "elapsed_sec": 0.0,
+                    "required_metrics": [
+                        "epoch",
+                        "loss",
+                        "diffusion_loss",
+                        "val_diffusion_loss",
+                        "val_total_loss",
+                        "lr",
+                    ],
                     "output_paths": [
                         str(output_dir / variant.name / f"seed_{seed}" / "checkpoints" / "final_model.pth"),
                     ],
                 }
             )
+    if bool(args.include_masked_room):
+        for variant in build_masked_room_variants():
+            for seed in seeds:
+                command = _masked_room_command_for(
+                    python_exe=args.python,
+                    config=config_path,
+                    output_dir=output_dir,
+                    variant=variant,
+                    seed=seed,
+                    epochs=args.epochs,
+                )
+                runs.append(
+                    {
+                        "variant": asdict(variant),
+                        "training_stage": "masked_room",
+                        "seed": int(seed),
+                        "command": command,
+                        "status": "planned",
+                        "elapsed_sec": 0.0,
+                        "required_metrics": ["epoch", "loss", "val_loss"],
+                        "output_paths": [
+                            str(
+                                output_dir
+                                / variant.name
+                                / f"seed_{seed}"
+                                / "checkpoints"
+                                / "masked_room"
+                                / "masked_room_final.pth"
+                            ),
+                        ],
+                    }
+                )
     return {
         "script": Path(__file__).name,
         "mode": "execute" if args.execute else "plan",
@@ -365,7 +472,8 @@ def execute_plan(payload: Dict[str, Any]) -> None:
         metric_names: set[str] = set()
         for output_path in output_paths:
             metric_names.update(_collect_metric_names(output_path))
-        missing_metrics = sorted(set(payload.get("required_metrics", [])) - metric_names)
+        required_metrics = run.get("required_metrics", payload.get("required_metrics", []))
+        missing_metrics = sorted(set(required_metrics) - metric_names)
         if missing_metrics:
             run["status"] = "failed_missing_metrics"
             run["missing_metrics"] = missing_metrics
@@ -382,6 +490,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--vqvae-checkpoint", type=Path, default=None)
     parser.add_argument("--python", default=sys.executable)
     parser.add_argument("--execute", action="store_true")
+    parser.add_argument(
+        "--no-masked-room",
+        action="store_false",
+        dest="include_masked_room",
+        help="Exclude the masked-room topology-attention variants from the manifest.",
+    )
+    parser.set_defaults(include_masked_room=True)
     parser.add_argument(
         "--extra-args",
         nargs=argparse.REMAINDER,

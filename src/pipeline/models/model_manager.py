@@ -51,6 +51,27 @@ def _bind_puzzle_stage_semantics_head(
     state = checkpoint.get("puzzle_stage_semantics_head_state_dict")
     if not isinstance(state, dict):
         return
+    try:
+        training_weight = float(
+            checkpoint_config.get("puzzle_stage_semantics_loss_weight", 0.0)
+        )
+    except (TypeError, ValueError, OverflowError):
+        training_weight = 0.0
+    try:
+        trained_steps = int(checkpoint.get("global_step", 0) or 0)
+    except (TypeError, ValueError, OverflowError):
+        trained_steps = 0
+    if (
+        not np.isfinite(training_weight)
+        or training_weight <= 0.0
+        or trained_steps <= 0
+    ):
+        logger.warning(
+            "Ignoring %s puzzle-stage semantics head because the checkpoint does "
+            "not prove that its auxiliary objective was enabled for any training step.",
+            source,
+        )
+        return
     head = PuzzleStageSemanticsHead(
         num_tile_classes=int(
             checkpoint_config.get(
@@ -819,7 +840,9 @@ def load_masked_room_model(
             )
         ),
         num_steps=int(checkpoint_config.get("masked_steps", pipeline.masked_sampling_steps)),
-        attention_mode=str(checkpoint_config.get("attention_mode", pipeline.diffusion_attention_mode)),
+        attention_mode=str(
+            checkpoint_config.get("attention_mode", fallback_config.get("attention_mode", "softmax"))
+        ),
         context_attention_mode=str(
             checkpoint_config.get(
                 "context_attention_mode",
@@ -829,7 +852,9 @@ def load_masked_room_model(
         topology_conditioning_mode=str(
             checkpoint_config.get("topology_conditioning_mode", fallback_config.get("topology_conditioning_mode", "additive"))
         ),
-        hedgehog_feature_dim=int(checkpoint_config.get("hedgehog_feature_dim", pipeline.diffusion_hedgehog_feature_dim)),
+        hedgehog_feature_dim=int(
+            checkpoint_config.get("hedgehog_feature_dim", fallback_config.get("hedgehog_feature_dim", 32))
+        ),
         graph_auto_linear_attention_nodes=int(
             checkpoint_config.get(
                 "graph_auto_linear_attention_nodes",
@@ -853,6 +878,14 @@ def load_masked_room_model(
             checkpoint_config.get("room_topology_channels", fallback_config.get("room_topology_channels", ROOM_TOPOLOGY_CHANNEL_COUNT))
         ),
     ).to(pipeline.device)
+    if (
+        model.topology_conditioning_mode == "graph_cross_attention"
+        and not bool(getattr(pipeline, "use_graph_node_cross_attention", False))
+    ):
+        raise ValueError(
+            "Masked-room graph_cross_attention checkpoint requires "
+            "use_graph_node_cross_attention=True so inference emits node-aligned context."
+        )
     pipeline.masked_room_puzzle_structure_condition_enabled = bool(
         float(checkpoint_config.get("puzzle_structure_dropout_prob", fallback_config.get("puzzle_structure_dropout_prob", 0.0))) > 0.0
     )

@@ -68,19 +68,15 @@ from src.pipeline.room_topology_conditioning import (
     apply_puzzle_stage_control_to_conditioning,
     apply_puzzle_structure_control_to_conditioning,
     apply_puzzle_structure_dropout_batch,
-    build_topology_anchor_policy_metadata,
 )
 from src.config_system import seed_everything
 from src.utils.checkpoint import (
     LATEST_RESUME_FILENAME,
     MetricsLogger,
-    atomic_torch_save,
     enforce_checkpoint_storage_budget,
-    log_checkpoint_artifact,
     prune_checkpoints,
     resolve_resume_checkpoint,
     safe_torch_load,
-    write_checkpoint_metadata,
 )
 from src.generation.weighted_bayesian_wfc import (
     TilePrior,
@@ -106,8 +102,8 @@ from src.utils.model_capacity import (
 )
 from src.utils.data_loading import dataloader_runtime_kwargs
 from src.utils.frozen_latent_cache import FrozenLatentCache
+from src.training import diffusion_checkpoint_io as _checkpoint_io
 from src.training.diffusion_checkpoint_contracts import (
-    load_checkpoint_metadata_sidecar as _load_checkpoint_metadata_sidecar,
     resolve_vqvae_architecture as _resolve_vqvae_architecture,
     validate_vqvae_checkpoint_state as _validate_vqvae_checkpoint_state,
 )
@@ -124,6 +120,8 @@ try:
     _HAS_SAFETENSORS = True
 except ImportError:
     _HAS_SAFETENSORS = False
+    _load_safetensors = None
+    _save_safetensors = None
 
 try:
     from accelerate import Accelerator
@@ -3170,368 +3168,40 @@ class DiffusionTrainer:
         }
     
     def _build_resume_checkpoint_payload(self, metrics: Optional[Dict] = None) -> Dict[str, Any]:
-        payload = {
-            'epoch': self.epoch,
-            'global_step': self.global_step,
-            'diffusion_state_dict': self.diffusion.state_dict(),
-            'ema_diffusion_state_dict': self.ema_diffusion.state_dict(),
-            'condition_encoder_state_dict': self.condition_encoder.state_dict(),
-            'optimizer_state_dict': self.optimizer.state_dict(),
-            'scheduler_state_dict': self.scheduler.state_dict(),
-            'config': self.config.to_dict(),
-            'metrics': metrics,
-            # Store schedule/prediction type for inference consistency
-            'schedule_type': self.config.schedule_type,
-        }
-        grad_scaler = getattr(self, "_grad_scaler", None)
-        if grad_scaler is not None:
-            payload['grad_scaler_state_dict'] = grad_scaler.state_dict()
-        if (
-            bool(getattr(self.config, "logic_net_enabled", True))
-            and getattr(self, "logic_net", None) is not None
-        ):
-            payload['logic_net_state_dict'] = self.logic_net.state_dict()
-        if getattr(self, "puzzle_stage_semantics_head", None) is not None:
-            payload['puzzle_stage_semantics_head_state_dict'] = (
-                self.puzzle_stage_semantics_head.state_dict()
-            )
-        return payload
+        return _checkpoint_io.build_resume_checkpoint_payload(self, metrics)
 
     def _build_inference_checkpoint_payload(self, metrics: Optional[Dict] = None) -> Dict[str, Any]:
-        payload = {
-            'epoch': self.epoch,
-            'global_step': self.global_step,
-            'diffusion_state_dict': self.diffusion.state_dict(),
-            'ema_diffusion_state_dict': self.ema_diffusion.state_dict(),
-            'condition_encoder_state_dict': self.condition_encoder.state_dict(),
-            'config': self.config.to_dict(),
-            'metrics': metrics,
-            'schedule_type': self.config.schedule_type,
-        }
-        if (
-            bool(getattr(self.config, "logic_net_enabled", True))
-            and getattr(self, "logic_net", None) is not None
-        ):
-            payload['logic_net_state_dict'] = self.logic_net.state_dict()
-        if getattr(self, "puzzle_stage_semantics_head", None) is not None:
-            payload['puzzle_stage_semantics_head_state_dict'] = (
-                self.puzzle_stage_semantics_head.state_dict()
-            )
-        return payload
+        return _checkpoint_io.build_inference_checkpoint_payload(self, metrics)
 
     @staticmethod
     def _prefixed_safetensors_state(prefix: str, state_dict: Mapping[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-        return {
-            f"{prefix}.{key}": value.detach().cpu()
-            for key, value in state_dict.items()
-            if isinstance(value, torch.Tensor)
-        }
+        return _checkpoint_io.prefixed_safetensors_state(prefix, state_dict)
 
     @staticmethod
     def _extract_prefixed_safetensors_state(payload: Mapping[str, torch.Tensor], prefix: str) -> Dict[str, torch.Tensor]:
-        stem = f"{prefix}."
-        return {
-            key[len(stem):]: value
-            for key, value in payload.items()
-            if isinstance(key, str) and key.startswith(stem)
-        }
+        return _checkpoint_io.extract_prefixed_safetensors_state(payload, prefix)
 
     def save_checkpoint(self, path: str, metrics: Optional[Dict] = None, *, include_optimizer: bool = True):
         """Save training or inference checkpoint."""
-        checkpoint = (
-            self._build_resume_checkpoint_payload(metrics)
-            if bool(include_optimizer)
-            else self._build_inference_checkpoint_payload(metrics)
-        )
-        atomic_torch_save(checkpoint, path)
-        safetensors_path: Optional[Path] = None
-        # Also write a tensor-only safetensors sidecar with deployable weights.
-        if _HAS_SAFETENSORS:
-            try:
-                safetensors_path = Path(path).with_suffix('.safetensors')
-                safetensors_payload: Dict[str, torch.Tensor] = {}
-                safetensors_payload.update(self._prefixed_safetensors_state("diffusion", self.diffusion.state_dict()))
-                safetensors_payload.update(
-                    self._prefixed_safetensors_state("ema_diffusion", self.ema_diffusion.state_dict())
-                )
-                safetensors_payload.update(
-                    self._prefixed_safetensors_state("condition_encoder", self.condition_encoder.state_dict())
-                )
-                if bool(getattr(self.config, "logic_net_enabled", True)):
-                    safetensors_payload.update(self._prefixed_safetensors_state("logic_net", self.logic_net.state_dict()))
-                _save_safetensors(safetensors_payload, str(safetensors_path))
-                logger.debug("Saved safetensors sidecar: %s", safetensors_path)
-            except Exception as _st_err:  # noqa: BLE001
-                logger.warning("safetensors save failed (%s); .pth checkpoint is intact.", _st_err)
-                safetensors_path = None
-        write_checkpoint_metadata(
+        _checkpoint_io.save_checkpoint(
+            self,
             path,
-            model_type="diffusion_resume" if include_optimizer else "diffusion",
-            architecture={
-                "latent_dim": int(self.config.latent_dim),
-                "latent_scale_factor": float(getattr(self.config, "latent_scale_factor", 1.0)),
-                "logic_initial_temperature": float(getattr(self.config, "logic_initial_temperature", 1.0)),
-                "logic_final_temperature": float(getattr(self.config, "logic_final_temperature", 0.05)),
-                "context_dim": int(self.config.context_dim),
-                "num_timesteps": int(self.config.num_timesteps),
-                "schedule_type": str(self.config.schedule_type),
-                "diffusion_training_objective": str(getattr(self.config, "diffusion_training_objective", "diffusion")),
-                "denoiser_backbone": str(getattr(self.config, "denoiser_backbone", "unet")),
-                "pag_scale": float(getattr(self.config, "pag_scale", 0.0)),
-                "dit_depth": int(getattr(self.config, "dit_depth", 4)),
-                "dit_patch_size": int(getattr(self.config, "dit_patch_size", 1)),
-                "dit_mlp_ratio": float(getattr(self.config, "dit_mlp_ratio", 4.0)),
-                "dit_activation_type": str(getattr(self.config, "dit_activation_type", "gelu")),
-                "dit_norm_type": str(getattr(self.config, "dit_norm_type", "layer")),
-                "num_classes": int(self.config.num_classes),
-                "vqvae_hidden_dim": int(self.config.vqvae_hidden_dim),
-                "vqvae_codebook_size": int(self.config.vqvae_codebook_size),
-                "vqvae_architecture": str(getattr(self.config, "vqvae_architecture", "vqvae")),
-                "vqvae_top_codebook_size": getattr(self.config, "vqvae_top_codebook_size", None),
-                "vqvae_top_latent_dim": getattr(self.config, "vqvae_top_latent_dim", None),
-                "vqvae_use_coordconv": bool(self.config.vqvae_use_coordconv),
-            },
-            extra={
-                "epoch": int(self.epoch),
-                "global_step": int(self.global_step),
-                "checkpoint_kind": "resume" if include_optimizer else "inference",
-                "primary_format": "torch_pth",
-                "safetensors_sidecar": str(safetensors_path.name) if safetensors_path is not None else None,
-                "safetensors_contains_optimizer": False,
-                "contains": (
-                    (
-                        ["diffusion", "ema_diffusion", "condition_encoder"]
-                        + (["logic_net"] if bool(getattr(self.config, "logic_net_enabled", True)) else [])
-                        + ["optimizer", "scheduler"]
-                    )
-                    if include_optimizer
-                    else (
-                        ["diffusion", "ema_diffusion", "condition_encoder"]
-                        + (["logic_net"] if bool(getattr(self.config, "logic_net_enabled", True)) else [])
-                    )
-                ),
-                "vqvae_checkpoint": str(getattr(self.config, "vqvae_checkpoint", "") or ""),
-                "topology_anchor_policy": build_topology_anchor_policy_metadata(
-                    semantic_role_prior_strength=self.config.semantic_role_prior_strength,
-                    semantic_puzzle_offset=self.config.semantic_puzzle_offset,
-                    topology_supervision_mode=self.config.topology_supervision_mode,
-                ),
-            },
-        )
-        if safetensors_path is not None:
-            write_checkpoint_metadata(
-                str(safetensors_path),
-                model_type="diffusion_safetensors_inference",
-                architecture={
-                    "latent_dim": int(self.config.latent_dim),
-                    "latent_scale_factor": float(getattr(self.config, "latent_scale_factor", 1.0)),
-                    "logic_initial_temperature": float(getattr(self.config, "logic_initial_temperature", 1.0)),
-                    "logic_final_temperature": float(getattr(self.config, "logic_final_temperature", 0.05)),
-                    "context_dim": int(self.config.context_dim),
-                    "num_timesteps": int(self.config.num_timesteps),
-                    "schedule_type": str(self.config.schedule_type),
-                    "diffusion_training_objective": str(getattr(self.config, "diffusion_training_objective", "diffusion")),
-                    "denoiser_backbone": str(getattr(self.config, "denoiser_backbone", "unet")),
-                    "num_classes": int(self.config.num_classes),
-                },
-                extra={
-                    "epoch": int(self.epoch),
-                    "global_step": int(self.global_step),
-                    "checkpoint_kind": "inference",
-                    "primary_format": "safetensors",
-                    "contains_optimizer": False,
-                    "contains": (
-                        ["diffusion", "ema_diffusion", "condition_encoder"]
-                        + (["logic_net"] if bool(getattr(self.config, "logic_net_enabled", True)) else [])
-                    ),
-                    "torch_resume_checkpoint": Path(path).name if include_optimizer else None,
-                },
-            )
-        log_checkpoint_artifact(
-            logger,
-            path,
-            checkpoint_dir=Path(path).parent,
-            label="Saved checkpoint",
+            metrics,
+            include_optimizer=include_optimizer,
+            has_safetensors=_HAS_SAFETENSORS,
+            save_safetensors=_save_safetensors,
+            logger=logger,
         )
     
     def load_checkpoint(self, path: str):
         """Load training checkpoint."""
-        if str(path).lower().endswith(".safetensors"):
-            if not _HAS_SAFETENSORS:
-                raise ImportError("Loading .safetensors checkpoints requires the safetensors package.")
-            payload = _load_safetensors(path, device=str(self.device))
-            diffusion_state = self._extract_prefixed_safetensors_state(payload, "diffusion")
-            ema_state = self._extract_prefixed_safetensors_state(payload, "ema_diffusion")
-            condition_state = self._extract_prefixed_safetensors_state(payload, "condition_encoder")
-            logic_state = self._extract_prefixed_safetensors_state(payload, "logic_net")
-            for name, state in (
-                ("diffusion", diffusion_state),
-                ("ema_diffusion", ema_state),
-                ("condition_encoder", condition_state),
-                ("logic_net", logic_state),
-            ):
-                if state and not self._state_dict_is_finite(state):
-                    raise ValueError(
-                        f"Checkpoint {path} contains non-finite values in `{name}` and cannot be loaded safely."
-                    )
-            if not diffusion_state or not condition_state:
-                raise ValueError(
-                    f"Safetensors checkpoint {path} must contain at least diffusion.* and condition_encoder.* weights."
-                )
-            self.diffusion.load_state_dict(diffusion_state)
-            self.ema_diffusion.load_state_dict(ema_state or diffusion_state)
-            self.condition_encoder.load_state_dict(condition_state)
-            if logic_state:
-                self.logic_net.load_state_dict(logic_state)
-            metadata = _load_checkpoint_metadata_sidecar(path)
-            architecture = dict(metadata.get("architecture", {}) or {})
-            saved_scale = float(architecture.get("latent_scale_factor", 1.0))
-            configured_scale = float(getattr(self.config, "latent_scale_factor", 1.0))
-            if not math.isclose(saved_scale, configured_scale, rel_tol=0.0, abs_tol=1e-12):
-                raise ValueError(
-                    "Diffusion checkpoint latent_scale_factor mismatch: "
-                    f"checkpoint={saved_scale}, config={configured_scale}."
-                )
-            for field, default in (
-                ("logic_initial_temperature", 1.0),
-                ("logic_final_temperature", 0.05),
-            ):
-                if field not in architecture:
-                    continue
-                saved_value = float(architecture.get(field, default))
-                configured_value = float(getattr(self.config, field, default))
-                if not math.isclose(saved_value, configured_value, rel_tol=0.0, abs_tol=1e-12):
-                    raise ValueError(
-                        f"Diffusion checkpoint {field} mismatch: "
-                        f"checkpoint={saved_value}, config={configured_value}."
-                    )
-            extra = dict(metadata.get("extra", {}) or {})
-            self.epoch = int(extra.get("epoch", getattr(self, "epoch", 0)))
-            self.global_step = int(extra.get("global_step", getattr(self, "global_step", 0)))
-            self._reset_gradient_accumulation()
-            self._configure_guidance()
-            self._configure_guidance(self.ema_diffusion)
-            logger.info(
-                "Loaded tensor-only safetensors checkpoint from %s (epoch %d, global_step %d); optimizer/scheduler state was not restored.",
-                path,
-                int(self.epoch),
-                int(self.global_step),
-            )
-            return
-
-        checkpoint = safe_torch_load(path, map_location=self.device)
-        checkpoint_config = checkpoint.get("config", {}) if isinstance(checkpoint, dict) else {}
-        if isinstance(checkpoint_config, dict):
-            saved_scale = float(checkpoint_config.get("latent_scale_factor", 1.0))
-            configured_scale = float(getattr(self.config, "latent_scale_factor", 1.0))
-            if not math.isclose(saved_scale, configured_scale, rel_tol=0.0, abs_tol=1e-12):
-                raise ValueError(
-                    "Diffusion checkpoint latent_scale_factor mismatch: "
-                    f"checkpoint={saved_scale}, config={configured_scale}."
-                )
-            for field, default in (
-                ("logic_initial_temperature", 1.0),
-                ("logic_final_temperature", 0.05),
-            ):
-                if field not in checkpoint_config:
-                    continue
-                saved_value = float(checkpoint_config.get(field, default))
-                configured_value = float(getattr(self.config, field, default))
-                if not math.isclose(saved_value, configured_value, rel_tol=0.0, abs_tol=1e-12):
-                    raise ValueError(
-                        f"Diffusion checkpoint {field} mismatch: "
-                        f"checkpoint={saved_value}, config={configured_value}."
-                    )
-        for key in ('diffusion_state_dict', 'ema_diffusion_state_dict'):
-            if key in checkpoint:
-                checkpoint[key], removed = self._strip_embedded_guidance_logic_net_state(checkpoint[key])
-                if removed:
-                    logger.warning(
-                        "Stripped %d legacy guidance.logic_net.* tensor(s) from `%s` while loading %s; "
-                        "using `logic_net_state_dict` as the LogicNet source of truth.",
-                        int(removed),
-                        key,
-                        path,
-                    )
-
-        for key in (
-            'diffusion_state_dict',
-            'ema_diffusion_state_dict',
-            'condition_encoder_state_dict',
-            'logic_net_state_dict',
-            'puzzle_stage_semantics_head_state_dict',
-        ):
-            if key in checkpoint and not self._state_dict_is_finite(checkpoint[key]):
-                raise ValueError(
-                    f"Checkpoint {path} contains non-finite values in `{key}` and cannot be resumed safely."
-                )
-        
-        self.epoch = checkpoint['epoch']
-        self.global_step = checkpoint['global_step']
-        self._reset_gradient_accumulation()
-        self.diffusion.load_state_dict(checkpoint['diffusion_state_dict'])
-        if 'ema_diffusion_state_dict' in checkpoint:
-            self.ema_diffusion.load_state_dict(checkpoint['ema_diffusion_state_dict'])
-        else:
-            self.ema_diffusion.load_state_dict(checkpoint['diffusion_state_dict'])
-            logger.warning(
-                "Checkpoint %s has no ema_diffusion_state_dict; initialized EMA weights from diffusion_state_dict.",
-                path,
-            )
-        self.condition_encoder.load_state_dict(checkpoint['condition_encoder_state_dict'])
-        if 'logic_net_state_dict' in checkpoint:
-            self.logic_net.load_state_dict(checkpoint['logic_net_state_dict'])
-        stage_head_state = checkpoint.get('puzzle_stage_semantics_head_state_dict')
-        if stage_head_state is not None:
-            if getattr(self, "puzzle_stage_semantics_head", None) is None:
-                logger.warning(
-                    "Checkpoint %s contains puzzle-stage semantics weights, but the current "
-                    "configuration disables that ablation; leaving those weights unused.",
-                    path,
-                )
-            else:
-                self.puzzle_stage_semantics_head.load_state_dict(stage_head_state)
-        optimizer_state_loaded = False
-        if 'optimizer_state_dict' in checkpoint:
-            try:
-                self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-                optimizer_state_loaded = True
-            except ValueError as exc:
-                logger.warning(
-                    "Skipping optimizer state from %s because it is incompatible with the current trainer: %s",
-                    path,
-                    exc,
-                )
-        if 'scheduler_state_dict' in checkpoint:
-            try:
-                self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
-            except ValueError as exc:
-                reason = (
-                    "optimizer state was not restored"
-                    if not optimizer_state_loaded
-                    else "the scheduler state is incompatible with the current trainer"
-                )
-                logger.warning(
-                    "Skipping scheduler state from %s because %s: %s",
-                    path,
-                    reason,
-                    exc,
-                )
-        if 'grad_scaler_state_dict' in checkpoint:
-            try:
-                self._grad_scaler.load_state_dict(checkpoint['grad_scaler_state_dict'])
-            except (RuntimeError, ValueError, TypeError) as exc:
-                logger.warning(
-                    "Skipping AMP GradScaler state from %s because it is incompatible: %s",
-                    path,
-                    exc,
-                )
-        
-        # Re-wire LogicNet into guidance after loading
-        self._configure_guidance()
-        self._configure_guidance(self.ema_diffusion)
-
-        logger.info(f"Loaded checkpoint from {path} (epoch {self.epoch})")
+        return _checkpoint_io.load_checkpoint(
+            self,
+            path,
+            has_safetensors=_HAS_SAFETENSORS,
+            load_safetensors=_load_safetensors,
+            logger=logger,
+        )
 
 
 # =============================================================================

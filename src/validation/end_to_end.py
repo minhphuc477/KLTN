@@ -47,6 +47,7 @@ class EndToEndValidationReport:
     global_state_progression: ValidationStageEvidence
     spatial_realization: ValidationStageEvidence
     tile_solvability: ValidationStageEvidence
+    route_replay: ValidationStageEvidence
     solver_consistency: ValidationStageEvidence
     logicnet_agreement: Optional[bool] = None
     advisory_metrics: Optional[Mapping[str, Any]] = None
@@ -59,6 +60,7 @@ class EndToEndValidationReport:
             self.global_state_progression,
             self.spatial_realization,
             self.tile_solvability,
+            self.route_replay,
             self.solver_consistency,
         )
 
@@ -168,12 +170,21 @@ def build_end_to_end_validation_report(
     graph_applicable = graph_status != "not_applicable_missing_roles"
     graph_solved = graph.get("solvable")
     all_rooms = graph.get("all_rooms_reachable")
+    graph_replay_status = str(graph.get("route_replay_status", "not_run"))
     if not graph_applicable:
         graph_passed: Optional[bool] = None
     elif graph_solved is None or all_rooms is None:
         graph_passed = None
+    elif bool(graph_solved) and graph_replay_status == "not_run":
+        graph_passed = None
+    elif graph_replay_status == "failed":
+        graph_passed = False
     else:
-        graph_passed = bool(graph_solved and all_rooms)
+        graph_passed = bool(
+            graph_solved
+            and all_rooms
+            and graph_replay_status == "verified"
+        )
 
     global_state = dict(global_state_validation or {})
     global_state_applicable = bool(global_state)
@@ -213,6 +224,17 @@ def build_end_to_end_validation_report(
         tile_passed: Optional[bool] = None
     else:
         tile_passed = bool(tile.get("solvable", False))
+
+    replay_status = str(tile.get("route_replay_status", "not_run"))
+    replay_applicable = bool(tile.get("solvable", False)) or replay_status != "not_run"
+    if not replay_applicable:
+        replay_passed: Optional[bool] = None
+    elif replay_status == "verified":
+        replay_passed = True
+    elif replay_status == "failed":
+        replay_passed = False
+    else:
+        replay_passed = None
 
     consistency_status = str(
         tile.get("solver_consistency_status", "not_requested")
@@ -256,6 +278,18 @@ def build_end_to_end_validation_report(
             exact=tile_exact,
             details=tile,
         ),
+        route_replay=ValidationStageEvidence(
+            name="route_replay",
+            passed=replay_passed,
+            status=replay_status,
+            applicable=replay_applicable,
+            details={
+                "path_length": tile.get("path_length"),
+                "path_cost": tile.get("path_cost"),
+                "replayed_path_cost": tile.get("route_replay_path_cost"),
+                "error": tile.get("route_replay_error", ""),
+            },
+        ),
         solver_consistency=ValidationStageEvidence(
             name="solver_consistency",
             passed=consistency_passed,
@@ -263,8 +297,12 @@ def build_end_to_end_validation_report(
             applicable=consistency_applicable,
             details={
                 "astar_path_length": tile.get("path_length"),
+                "astar_path_cost": tile.get("path_cost"),
                 "dijkstra_path_length": tile.get(
                     "solver_consistency_path_length"
+                ),
+                "dijkstra_path_cost": tile.get(
+                    "solver_consistency_path_cost"
                 ),
                 "dijkstra_states_explored": tile.get(
                     "solver_consistency_states_explored", 0

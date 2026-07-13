@@ -658,6 +658,7 @@ class AdvancedNeuralSymbolicPipeline:
             'solvable': bool(result.is_solvable),
             'path': path,
             'path_length': path_length,
+            'path_cost': getattr(result, 'path_cost', None),
             'states_explored': int(getattr(result, 'states_explored', 0) or 0),
             'reachability': reachability,
             'is_valid_syntax': syntax_valid,
@@ -672,6 +673,17 @@ class AdvancedNeuralSymbolicPipeline:
             'proven_unsolvable': bool(
                 getattr(result, 'proven_unsolvable', False)
             ),
+            'route_replay_status': str(
+                getattr(result, 'route_replay_status', 'not_run')
+            ),
+            'route_replay_error': str(
+                getattr(result, 'route_replay_error', '') or ''
+            ),
+            'route_replay_path_cost': getattr(
+                result,
+                'route_replay_path_cost',
+                None,
+            ),
             'solver_consistency_status': str(
                 getattr(result, 'solver_consistency_status', 'not_requested')
             ),
@@ -679,6 +691,11 @@ class AdvancedNeuralSymbolicPipeline:
             'solver_consistency_path_length': getattr(
                 result,
                 'solver_consistency_path_length',
+                None,
+            ),
+            'solver_consistency_path_cost': getattr(
+                result,
+                'solver_consistency_path_cost',
                 None,
             ),
             'solver_consistency_states_explored': int(

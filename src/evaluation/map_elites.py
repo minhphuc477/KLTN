@@ -999,6 +999,15 @@ class CVTEliteArchive:
         distances = np.linalg.norm(self.centroids - query, axis=1)
         return int(np.argmin(distances))
 
+    def find_cell(self, features: Tuple[float, ...]) -> int:
+        """Return the public CVT cell for a validated descriptor vector."""
+        validated = self._validated_features(features)
+        if validated is None:
+            raise ValueError(
+                f"Expected {self.feature_dims} finite CVT features, got {features!r}."
+            )
+        return self._find_cell(validated)
+
     def _validated_features(self, features: Tuple[float, ...]) -> Optional[Tuple[float, ...]]:
         """Return a finite, dimensionally valid feature vector or ``None``."""
         try:

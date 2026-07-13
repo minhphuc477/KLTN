@@ -1,4 +1,4 @@
-﻿from src.gui.services.solver_prestart_cleanup import (
+﻿from src.gui.solver.prestart_cleanup import (
     cleanup_preview_before_solver_start,
     reset_solver_visual_state_before_start,
 )

@@ -1,6 +1,6 @@
 ﻿from types import SimpleNamespace
 
-from src.gui.controls.window_focus import force_focus, toggle_fullscreen
+from src.gui.runtime.window_focus import force_focus, toggle_fullscreen
 
 
 class _Screen:

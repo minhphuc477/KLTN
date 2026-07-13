@@ -157,6 +157,8 @@ class ValidationResult:
     failure_reason: Optional[str] = None
     termination_status: str = "unknown"
     proven_unsolvable: bool = False
+    route_replay_status: str = "not_run"
+    route_replay_error: str = ""
     metrics: Dict[str, float] = field(default_factory=dict)
 
     @property
@@ -714,6 +716,80 @@ class AgentSimulator:
             new_state.resource_names.update(self.resource_nodes[node_id])
         
         return new_state
+
+    def replay_path(
+        self,
+        path: List[Any],
+        start_state: Optional[ValidationState] = None,
+        *,
+        expected_start: Optional[Any] = None,
+        expected_goal: Optional[Any] = None,
+    ) -> Tuple[bool, Optional[str], ValidationState]:
+        """Replay a graph route through the canonical resource transitions."""
+        if not path:
+            return False, "Empty path", ValidationState(position=-1)
+
+        expected_start = (
+            self.start_node if expected_start is None else expected_start
+        )
+        expected_goal = self.goal_node if expected_goal is None else expected_goal
+        if start_state is None and expected_start is not None and path[0] != expected_start:
+            return (
+                False,
+                f"Path starts at {path[0]!r}, expected {expected_start!r}",
+                ValidationState(position=path[0]),
+            )
+
+        state = (
+            start_state.copy()
+            if start_state is not None
+            else ValidationState(position=path[0])
+        )
+        state.position = path[0]
+        state = self.collect_items(path[0], state)
+
+        for from_node, to_node in zip(path[:-1], path[1:]):
+            if state.position != from_node:
+                return (
+                    False,
+                    f"Replay state is at {state.position!r}, expected {from_node!r}",
+                    state,
+                )
+            if from_node not in self.graph or to_node not in self.graph:
+                return (
+                    False,
+                    f"Path references missing node {from_node!r}->{to_node!r}",
+                    state,
+                )
+            if not self.graph.has_edge(from_node, to_node):
+                return (
+                    False,
+                    f"Path uses missing directed edge {from_node!r}->{to_node!r}",
+                    state,
+                )
+
+            can_go, new_state, edge_type = self.can_traverse(
+                from_node,
+                to_node,
+                state,
+            )
+            if not can_go:
+                return (
+                    False,
+                    f"Cannot traverse edge {from_node!r}->{to_node!r} ({edge_type})",
+                    state,
+                )
+            state = new_state
+            state.position = to_node
+            state = self.collect_items(to_node, state)
+
+        if expected_goal is not None and path[-1] != expected_goal:
+            return (
+                False,
+                f"Path ends at {path[-1]!r}, expected goal {expected_goal!r}",
+                state,
+            )
+        return True, None, state
     
     def heuristic(self, node: int, goal: int) -> float:
         """A* heuristic (node distance estimate)."""
@@ -807,20 +883,44 @@ class AgentSimulator:
                     solution_path.append(positions[cursor])
                     cursor = parents[cursor]
                 solution_path.reverse()
+                replay_ok, replay_error, replay_state = self.replay_path(
+                    solution_path,
+                    expected_start=start,
+                    expected_goal=goal,
+                )
+                if not replay_ok:
+                    return ValidationResult(
+                        is_solvable=False,
+                        solution_path=solution_path,
+                        path_length=max(0, len(solution_path) - 1),
+                        states_explored=states_explored,
+                        failure_reason=(
+                            "Post-route graph replay rejected the reconstructed "
+                            f"solution: {replay_error}"
+                        ),
+                        termination_status="route_replay_failed",
+                        proven_unsolvable=False,
+                        route_replay_status="failed",
+                        route_replay_error=str(replay_error or ""),
+                        metrics={
+                            'states_pruned_dominated': dominated_states_pruned,
+                        },
+                    )
                 return ValidationResult(
                     is_solvable=True,
                     solution_path=solution_path,
-                    key_collection_order=list(current.keys_collected),
-                    doors_opened=list(current.doors_opened),
+                    key_collection_order=list(replay_state.keys_collected),
+                    doors_opened=list(replay_state.doors_opened),
                     path_length=max(0, len(solution_path) - 1),
                     states_explored=states_explored,
                     termination_status="solved",
+                    route_replay_status="verified",
                     metrics={
                         'keys_used': (
-                            sum(self.key_nodes[node_id][0] for node_id in current.keys_collected)
-                            - current.keys_held
+                            sum(self.key_nodes[node_id][0] for node_id in replay_state.keys_collected)
+                            - replay_state.keys_held
                         ),
-                        'doors_opened': len(current.doors_opened) // 2,
+                        'doors_opened': len(replay_state.doors_opened) // 2,
                         'states_pruned_dominated': dominated_states_pruned,
                     }
                 )
@@ -1119,28 +1219,7 @@ class PathVerifier:
         Returns:
             (is_valid, error_message, final_state)
         """
-        if not path:
-            return False, "Empty path", ValidationState(position=-1)
-        
-        state = start_state or ValidationState(position=path[0])
-        state = self.simulator.collect_items(path[0], state)
-        
-        for i in range(len(path) - 1):
-            from_node = path[i]
-            to_node = path[i + 1]
-            
-            can_go, new_state, edge_type = self.simulator.can_traverse(
-                from_node, to_node, state
-            )
-            
-            if not can_go:
-                return False, f"Cannot traverse edge {from_node}->{to_node} ({edge_type})", state
-            
-            state = new_state
-            state.position = to_node
-            state = self.simulator.collect_items(to_node, state)
-        
-        return True, None, state
+        return self.simulator.replay_path(path, start_state=start_state)
     
     def find_key_sequence(
         self,
@@ -1266,6 +1345,8 @@ class ExternalValidator:
         analysis['states_explored'] = result.states_explored
         analysis['termination_status'] = result.termination_status
         analysis['proven_unsolvable'] = result.proven_unsolvable
+        analysis['route_replay_status'] = result.route_replay_status
+        analysis['route_replay_error'] = result.route_replay_error
         
         # Room reachability
         reachability = self.checker.check_all_rooms_reachable_detailed(graph)

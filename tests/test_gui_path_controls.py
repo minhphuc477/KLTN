@@ -1,4 +1,4 @@
-﻿from src.gui.controls.path_controls import clear_path, reset_map, show_path_preview
+﻿from src.gui.gameplay.path_controls import clear_path, reset_map, show_path_preview
 
 
 class DummyEffects:

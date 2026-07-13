@@ -5,7 +5,8 @@ Canonical command guide for:
 1. generating Block I topology graph PNGs,
 2. comparing room-generation branches on one fixed manual topology,
 3. rerunning one fixed topology across multiple seeds,
-4. exporting one generated topology through the trained room generators.
+4. exporting one generated topology through the trained room generators,
+5. materializing every selected topology-QD elite into validated final maps.
 
 Run all commands from the repository root.
 
@@ -183,7 +184,51 @@ python main.py train `
   --verbose
 ```
 
-## 5. Manual topology JSON format
+## 5. Materialize a topology-QD archive
+
+Topology archive coverage is graph-level evidence. It is not final-map
+coverage until every selected elite survives graph export, room generation,
+stitching, and the exact tile-state validator. New archives store the evaluated
+phenotype snapshot and grammar/fitness provenance needed for this operation.
+Genome-only legacy pickle archives must be regenerated because grammar replay
+depends on population-global RNG state.
+
+```powershell
+python main.py topology-materialize-archive `
+  --archive results\topology_qd.pkl `
+  --trust-pickle `
+  --config configs\zelda_hmolqd.yaml `
+  --output-dir results\topology_qd_final_maps `
+  --seeds 42,43,44 `
+  --vqvae-checkpoint outputs\vqvae_pretrained.pth `
+  --diffusion-checkpoint outputs\diffusion_best.pth `
+  --condition-encoder-checkpoint outputs\diffusion_best.pth `
+  --logic-net-checkpoint outputs\diffusion_best.pth `
+  --require-logic-net `
+  --verify-solver-consistency
+```
+
+`--trust-pickle` is mandatory because native Python pickle is executable. Use
+it only for an archive produced by this repository under your control.
+Warm-started topology search has the equivalent fail-closed configuration
+contract: both `topology.qd_load_archive: true` and
+`topology.qd_trust_archive_pickle: true` are required.
+
+Key outputs:
+
+- `materialization_summary.json`: graph archive coverage, graph-cell drift,
+  per-seed acceptance, source-elite survival, and final-descriptor archive
+  coverage. A full scan is distinguished from complete successful
+  materialization.
+- `materialization_progress.json`: atomically updated failure ledger suitable
+  for resuming diagnosis after an interrupted long run.
+- `cell_*/mission_graph.json`: finalized graph sent to room generation.
+- `cell_*/seed_*/dungeon_grid.npy` and `metrics.json`: accepted exact artifacts.
+
+Using `--max-elites` is diagnostic only. The summary marks such a run as an
+incomplete archive materialization, so it cannot be reported as full coverage.
+
+## 6. Manual topology JSON format
 
 The manual graph format is NetworkX node-link JSON using:
 
@@ -241,7 +286,7 @@ Useful edge fields:
 - `key_required`
 - `item_required`
 
-## 6. Practical workflow
+## 7. Practical workflow
 
 1. Inspect Block I:
    `python main.py topology-visualize ...`
@@ -250,3 +295,5 @@ Useful edge fields:
 3. Stress-test stability:
    `python main.py topology-audit-fixed-graph ...`
 4. Only then do longer training or ablation runs.
+5. Materialize the complete topology archive before reporting end-to-end QD
+   coverage.

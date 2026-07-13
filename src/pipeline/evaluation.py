@@ -733,6 +733,7 @@ def _validate_dungeon(
             'solvable': bool(result.is_solvable),
             'path': list(result.path or []),
             'path_length': path_length,
+            'path_cost': getattr(result, 'path_cost', None),
             'linearity': linearity,
             'leniency': leniency,
             'progression_complexity': progression_complexity,
@@ -751,6 +752,17 @@ def _validate_dungeon(
             'proven_unsolvable': bool(getattr(result, 'proven_unsolvable', False)),
             'final_inventory': dict(getattr(result, 'final_inventory', {}) or {}),
             'path_interactions': dict(getattr(result, 'path_interactions', {}) or {}),
+            'route_replay_status': str(
+                getattr(result, 'route_replay_status', 'not_run')
+            ),
+            'route_replay_error': str(
+                getattr(result, 'route_replay_error', '') or ''
+            ),
+            'route_replay_path_cost': getattr(
+                result,
+                'route_replay_path_cost',
+                None,
+            ),
             'solver_consistency_status': str(
                 getattr(result, 'solver_consistency_status', 'not_requested')
             ),
@@ -758,6 +770,11 @@ def _validate_dungeon(
             'solver_consistency_path_length': getattr(
                 result,
                 'solver_consistency_path_length',
+                None,
+            ),
+            'solver_consistency_path_cost': getattr(
+                result,
+                'solver_consistency_path_cost',
                 None,
             ),
             'solver_consistency_states_explored': int(
@@ -790,8 +807,12 @@ def _validate_dungeon(
             'termination_status': 'validator_error',
             'proven_unsolvable': False,
             'solver_consistency_status': 'not_run',
+            'route_replay_status': 'not_run',
+            'route_replay_error': '',
+            'route_replay_path_cost': None,
             'solver_consistent': None,
             'solver_consistency_path_length': None,
+            'solver_consistency_path_cost': None,
             'solver_consistency_states_explored': 0,
             'is_exact': False,
         }

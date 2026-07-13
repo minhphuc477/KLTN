@@ -1578,6 +1578,11 @@ class SymbolicRefiner:
             self.set_seed(seed)
         self.refresh_learned_rules()
         current_grid = grid.copy()
+        immutable_source_grid = np.asarray(grid).copy()
+        immutable_source_mask = np.isin(
+            immutable_source_grid,
+            np.fromiter(_IMMUTABLE_REPAIR_TILES, dtype=np.int32),
+        )
         start = _normalize_grid_coord(start, current_grid.shape[:2], field_name="start")
         goal = _normalize_grid_coord(goal, current_grid.shape[:2], field_name="goal")
         feedback_used = 0
@@ -1588,23 +1593,29 @@ class SymbolicRefiner:
         floor_id = int(SEMANTIC_PALETTE["FLOOR"])
 
         def _apply_required_floor_constraints(grid_in: np.ndarray) -> np.ndarray:
-            if floor_mask is None:
-                return grid_in
             constrained_grid = np.asarray(grid_in).copy()
-            preserved_walkable_ids = np.array(
-                sorted(
-                    CANONICAL_WALKABLE_IDS
-                    | {
-                        int(TileType.KEY_SMALL.value),
-                        int(TileType.ITEM_MINOR.value),
-                        int(TileType.ENEMY.value),
-                    }
-                ),
-                dtype=np.int32,
-            )
-            non_floorable = np.isin(constrained_grid, preserved_walkable_ids)
-            force_floor = floor_mask & (~non_floorable)
-            constrained_grid[force_floor] = floor_id
+            if floor_mask is not None:
+                preserved_walkable_ids = np.array(
+                    sorted(
+                        CANONICAL_WALKABLE_IDS
+                        | {
+                            int(TileType.KEY_SMALL.value),
+                            int(TileType.ITEM_MINOR.value),
+                            int(TileType.ENEMY.value),
+                        }
+                    ),
+                    dtype=np.int32,
+                )
+                non_floorable = np.isin(constrained_grid, preserved_walkable_ids)
+                force_floor = floor_mask & (~non_floorable)
+                constrained_grid[force_floor] = floor_id
+
+            # WFC respects the reset mask, but an external neural feedback
+            # callback receives the full grid and may accidentally write beyond
+            # it. Restore topology-owned cells after every transformation so a
+            # callback, connectivity carve, or later repair iteration cannot
+            # erase original doors, stairs, start, or goal anchors.
+            constrained_grid[immutable_source_mask] = immutable_source_grid[immutable_source_mask]
             return constrained_grid
 
         current_grid = _apply_required_floor_constraints(current_grid)
@@ -1654,7 +1665,7 @@ class SymbolicRefiner:
                 current_grid,
                 np.fromiter(_IMMUTABLE_REPAIR_TILES, dtype=np.int32),
             )
-            mask = mask & (~immutable_mask)
+            mask = mask & (~immutable_mask) & (~immutable_source_mask)
             if floor_mask is not None:
                 mask = mask & (~floor_mask)
             current_grid = _apply_required_floor_constraints(current_grid)

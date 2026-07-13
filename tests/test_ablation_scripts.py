@@ -88,3 +88,38 @@ def test_ablation_pcbs_vs_astar_dry_run(tmp_path: Path) -> None:
     )
     assert payload["summary"]["count"] == 1
     assert "oracle_solvable_rate" in payload["summary"]
+
+
+def test_model_architecture_manifest_includes_masked_graph_attention_ablations(tmp_path: Path) -> None:
+    output_dir = tmp_path / "architecture_manifest"
+    cmd = [
+        sys.executable,
+        "scripts/generate_model_architecture_ablation_manifest.py",
+        "--config",
+        "configs/zelda_hmolqd.yaml",
+        "--output-dir",
+        str(output_dir),
+        "--seeds",
+        "42",
+        "--epochs",
+        "1",
+    ]
+    result = subprocess.run(
+        cmd,
+        cwd=Path(__file__).resolve().parents[1],
+        text=True,
+        capture_output=True,
+        timeout=120,
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(
+        (output_dir / "model_architecture_ablation_manifest.json").read_text(encoding="utf-8")
+    )
+    masked_runs = [run for run in payload["runs"] if run["training_stage"] == "masked_room"]
+    assert {run["variant"]["name"] for run in masked_runs} == {
+        "masked_additive_baseline",
+        "masked_graph_cross_attention_softmax",
+        "masked_graph_cross_attention_linear",
+    }
+    assert all(run["required_metrics"] == ["epoch", "loss", "val_loss"] for run in masked_runs)

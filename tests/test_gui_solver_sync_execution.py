@@ -1,4 +1,4 @@
-﻿from src.gui.services.solver_sync_execution import run_solver_sync
+﻿from src.gui.solver.sync_execution import run_solver_sync
 
 
 class DummyLogger:

@@ -2262,6 +2262,7 @@ def test_safetensors_sidecar_round_trips_inference_weights_without_optimizer(tmp
     trainer.ema_diffusion = _TinyCheckpointModule(3.0)
     trainer.condition_encoder = _TinyCheckpointModule(4.0)
     trainer.logic_net = _TinyCheckpointModule(5.0)
+    trainer.puzzle_stage_semantics_head = _TinyCheckpointModule(6.0)
     trainer.optimizer = torch.optim.SGD(
         list(trainer.diffusion.parameters())
         + list(trainer.condition_encoder.parameters())
@@ -2285,6 +2286,7 @@ def test_safetensors_sidecar_round_trips_inference_weights_without_optimizer(tmp
     loaded.ema_diffusion = _TinyCheckpointModule(0.0)
     loaded.condition_encoder = _TinyCheckpointModule(0.0)
     loaded.logic_net = _TinyCheckpointModule(0.0)
+    loaded.puzzle_stage_semantics_head = _TinyCheckpointModule(0.0)
     loaded.optimizer = torch.optim.SGD(
         list(loaded.diffusion.parameters())
         + list(loaded.condition_encoder.parameters())
@@ -2299,6 +2301,7 @@ def test_safetensors_sidecar_round_trips_inference_weights_without_optimizer(tmp
     assert float(loaded.ema_diffusion.weight.item()) == pytest.approx(3.0)
     assert float(loaded.condition_encoder.weight.item()) == pytest.approx(4.0)
     assert float(loaded.logic_net.weight.item()) == pytest.approx(5.0)
+    assert float(loaded.puzzle_stage_semantics_head.weight.item()) == pytest.approx(6.0)
     assert loaded.epoch == 7
     assert loaded.global_step == 11
     assert loaded._accumulation_micro_steps == 0

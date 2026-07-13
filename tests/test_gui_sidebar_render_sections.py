@@ -1,6 +1,6 @@
 ﻿from types import SimpleNamespace
 
-from src.gui.controls.sidebar_render_sections import (
+from src.gui.rendering.sidebar_sections import (
     render_sidebar_header_inventory_solver,
     render_sidebar_status_message_metrics_controls,
 )

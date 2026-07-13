@@ -1,7 +1,7 @@
 ﻿import os
 import pickle
 
-from src.gui.services.solver_launching import (
+from src.gui.solver.launching import (
     create_solver_temp_files,
     launch_solver_process,
     solver_thread_fallback_worker,

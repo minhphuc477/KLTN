@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from src.gui.overlay.item_markers import apply_pickup_at, scan_and_mark_items
+from src.gui.gameplay.item_markers import apply_pickup_at, scan_and_mark_items
 
 
 class _Effects:

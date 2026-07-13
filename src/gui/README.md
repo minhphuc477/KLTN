@@ -4,7 +4,7 @@ This document is the working architecture reference for the GUI stack under `src
 
 It explains:
 - how the GUI package is organized,
-- which modules are canonical vs compatibility shims,
+- which modules own each runtime responsibility,
 - where orchestration lives after monolith extraction,
 - how runtime flags and lifecycle flows work,
 - how to extend the GUI safely without reintroducing monolithic code.
@@ -16,7 +16,7 @@ The GUI layer powers ZAVE interactive validation, visualization, and solver expe
 Primary goals:
 - Keep the main runner behavior stable while reducing monolithic methods.
 - Split by interaction domain (map, solver, gameplay, rendering, topology, runtime).
-- Keep backward compatibility with existing imports while migrating to canonical modules.
+- Keep one canonical import path per implementation.
 - Preserve testability through dependency injection and thin wrappers.
 
 ## 2) Entry Points and Runtime Context
@@ -33,28 +33,23 @@ The GUI runner remains the integration surface, while feature logic is increasin
 
 ## 3) Folder Architecture
 
-Current GUI subfolders (Python module counts):
-- `ai` (7): AI dungeon generation controls/pipelines/workers.
-- `app` (14): startup, loop orchestration, and loop event/frame handlers.
-- `common` (9): compatibility shared surface and module catalog.
-- `components` (5): canonical widgets/constants/fallbacks.
-- `controls` (18): compatibility control-surface shims.
-- `control_panel` (9): canonical control panel behavior.
-- `gameplay` (15): canonical movement/inventory/path/action behavior.
-- `map` (6): canonical map loading/navigation/viewport/minimap behavior.
-- `overlay` (11): compatibility overlay shims.
-- `orchestration` (26): canonical cross-domain orchestration bridges (grouped by domain).
-- `rendering` (24): canonical rendering and UI-overlay pipelines.
-- `runtime` (13): canonical display lifecycle, flags, routes, temp files, toast, watchdog.
-- `services` (28): compatibility orchestration/service shims.
-- `solver` (19): canonical solver scheduling/start/recovery/request/launch/comparison.
-- `topology` (7): canonical topology helpers/precheck/matching/export.
+Current GUI subfolders:
+- `ai`: AI dungeon generation controls, pipelines, and workers.
+- `app`: startup, loop orchestration, and frame/event handlers.
+- `common`: shared constants and the module catalog.
+- `components`: widgets and component-level fallbacks.
+- `control_panel`: control-panel behavior.
+- `gameplay`: movement, inventory, paths, and actions.
+- `map`: map loading, navigation, viewport, and minimap behavior.
+- `orchestration`: cross-domain bridges grouped by domain.
+- `rendering`: rendering and UI-overlay pipelines.
+- `runtime`: display lifecycle, flags, routes, temporary files, toasts, and watchdogs.
+- `solver`: solver scheduling, launch, recovery, requests, and comparison.
+- `topology`: topology checks, matching, and export.
 
-## 4) Canonical vs Compatibility Layers
+## 4) Canonical Import Policy
 
-The package currently has two intentional layers.
-
-Canonical domain implementations (preferred for new code):
+Use the domain implementations directly:
 - `src.gui.orchestration.*`
 - `src.gui.control_panel.*`
 - `src.gui.solver.*`
@@ -66,19 +61,9 @@ Canonical domain implementations (preferred for new code):
 - `src.gui.components.*`
 - `src.gui.ai.*`
 
-Compatibility shim surfaces (maintain older import paths):
-- `src.gui.controls.*`
-- `src.gui.overlay.*`
-- `src.gui.services.*`
-- `src.gui.common.*`
-
-Typical shim pattern:
-- A shim file only re-exports canonical symbols with `from src.gui.<canonical_path> import *`.
-- This lets older modules continue importing while implementation moves to canonical paths.
-
 Import policy:
-- New feature work should import canonical modules directly.
-- Keep shim modules until all callers are migrated and verified.
+- New feature work and tests import canonical modules directly.
+- Do not recreate forwarding-only packages; move shared behavior into a real domain module.
 
 Machine-readable category index:
 - `src/gui/common/module_catalog.py`
@@ -102,9 +87,7 @@ Bridge module examples:
 - `src/gui/orchestration/rendering/panel_overlay_orchestration.py`
 - `src/gui/orchestration/control_panel/animation_orchestration.py`
 
-Compatibility note:
-- Legacy `src/gui/<domain>/*_orchestration.py` modules are backward-compatible shim re-exports.
-- New code should target `src/gui/orchestration/*` as canonical.
+New code should target `src/gui/orchestration/*` for cross-domain flows.
 
 Why this pattern is used:
 - Preserves class method names and call contracts.
@@ -206,9 +189,8 @@ When adding or changing GUI behavior:
 - Avoid broad cross-domain refactors in one step; use domain batches.
 
 When changing imports:
-- Prefer canonical path imports for new code.
-- Keep compatibility shims until all call sites are migrated.
-- Do not remove shim modules without verifying downstream imports/tests.
+- Use the canonical domain path.
+- Update callers and behavior tests in the same change when a module moves.
 
 ## 10) How to Add a New GUI Feature
 
@@ -224,9 +206,8 @@ This keeps the GUI maintainable while preserving runtime compatibility.
 
 ## 11) Maintenance Notes
 
-- The package intentionally contains both canonical modules and compatibility layers during migration.
 - `src/gui/common/module_catalog.py` should remain up to date as modules move or new categories are introduced.
-- If duplicate functionality appears in both shim and canonical locations, canonical modules are the source of truth.
+- Forwarding-only compatibility packages were removed after all repository callers migrated.
 
 ## 12) Quick Reference
 
@@ -242,9 +223,5 @@ Use these as primary import targets in new code:
 - `src.gui.components.*`
 - `src.gui.ai.*`
 
-Keep these for backward compatibility only:
-- `src.gui.<domain>.*_orchestration` legacy shim modules (for migrated domains)
-- `src.gui.controls.*`
-- `src.gui.overlay.*`
-- `src.gui.services.*`
-- `src.gui.common.*`
+Shared constants and catalog metadata remain under `src.gui.common.*`; this is a
+real shared domain, not a compatibility layer.

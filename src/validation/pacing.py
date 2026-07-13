@@ -37,6 +37,34 @@ def _finite_unit(value: Any, default: float) -> float:
     return float(np.clip(result, 0.0, 1.0))
 
 
+def _edge_traversal_cost(graph: nx.Graph, source: Any, target: Any) -> float:
+    """Resolve a finite non-negative edge cost without inventing a gate rule."""
+    raw = graph.get_edge_data(source, target, default={}) or {}
+    candidates: list[Mapping[str, Any]]
+    if graph.is_multigraph():
+        candidates = [
+            dict(attrs)
+            for attrs in raw.values()
+            if isinstance(attrs, Mapping)
+        ]
+    else:
+        candidates = [dict(raw)] if isinstance(raw, Mapping) else []
+
+    costs: list[float] = []
+    for attrs in candidates:
+        value = attrs.get(
+            "traversal_cost",
+            attrs.get("cost", attrs.get("weight", 1.0)),
+        )
+        try:
+            cost = float(value)
+        except (TypeError, ValueError):
+            cost = 1.0
+        if math.isfinite(cost) and cost >= 0.0:
+            costs.append(cost)
+    return min(costs) if costs else 1.0
+
+
 def evaluate_solution_path_pacing(
     graph: nx.Graph,
     solution_path: Sequence[Any],
@@ -84,6 +112,16 @@ def evaluate_solution_path_pacing(
             landmark_indices.append(index)
 
     path_edges = len(path) - 1
+    edge_costs = [
+        _edge_traversal_cost(graph, source, target)
+        for source, target in zip(path[:-1], path[1:])
+    ]
+    cumulative_costs = np.concatenate(
+        [
+            np.asarray([0.0], dtype=np.float64),
+            np.cumsum(np.asarray(edge_costs, dtype=np.float64)),
+        ]
+    )
     normalized_landmarks = [float(index / path_edges) for index in landmark_indices]
     spacings = (
         np.diff(np.asarray(landmark_indices, dtype=np.float32))
@@ -95,6 +133,25 @@ def evaluate_solution_path_pacing(
         float(np.std(spacings) / spacing_mean)
         if spacings.size and spacing_mean > 0.0
         else 0.0
+    )
+    landmark_segments = []
+    for start_index, end_index in zip(landmark_indices[:-1], landmark_indices[1:]):
+        landmark_segments.append(
+            {
+                "source_index": int(start_index),
+                "target_index": int(end_index),
+                "source_role": roles[start_index],
+                "target_role": roles[end_index],
+                "corridor_edge_count": int(end_index - start_index),
+                "intermediate_room_count": int(max(0, end_index - start_index - 1)),
+                "path_cost": float(
+                    cumulative_costs[end_index] - cumulative_costs[start_index]
+                ),
+            }
+        )
+    landmark_segment_costs = np.asarray(
+        [segment["path_cost"] for segment in landmark_segments],
+        dtype=np.float64,
     )
 
     ordered_pairs = 0
@@ -138,6 +195,19 @@ def evaluate_solution_path_pacing(
         "pacing_landmark_positions": normalized_landmarks,
         "pacing_landmark_spacing_mean_edges": spacing_mean,
         "pacing_landmark_spacing_cv": spacing_cv,
+        "pacing_total_graph_path_cost": float(cumulative_costs[-1]),
+        "pacing_landmark_segments": landmark_segments,
+        "pacing_landmark_segment_cost_mean": (
+            float(np.mean(landmark_segment_costs))
+            if landmark_segment_costs.size
+            else 0.0
+        ),
+        "pacing_landmark_segment_cost_cv": (
+            float(np.std(landmark_segment_costs) / np.mean(landmark_segment_costs))
+            if landmark_segment_costs.size
+            and float(np.mean(landmark_segment_costs)) > 0.0
+            else 0.0
+        ),
         "pacing_setup_before_gate_before_climax_score": beat_order_score,
         "pacing_tension_event_count": int(len(tension_event_positions)),
         "pacing_tension_event_positions": tension_event_positions,

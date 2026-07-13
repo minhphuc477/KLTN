@@ -1,6 +1,6 @@
 ﻿from types import SimpleNamespace
 
-from src.gui.controls.manual_step_controller import manual_step
+from src.gui.gameplay.manual_step_controller import manual_step
 
 
 class _Action:

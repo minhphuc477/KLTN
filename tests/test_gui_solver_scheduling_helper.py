@@ -1,4 +1,4 @@
-from src.gui.services.solver_scheduling import schedule_solver
+from src.gui.solver.scheduling import schedule_solver
 
 
 class DummyLogger:

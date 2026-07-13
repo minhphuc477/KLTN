@@ -159,6 +159,7 @@ class GraphConfig:
     topology_qd_emitter_mutation_rate: float = 0.18
     topology_qd_archive_path: Optional[str] = None
     topology_qd_load_archive: bool = False
+    topology_qd_trust_archive_pickle: bool = False
     topology_qd_autosave_archive: bool = False
     topology_max_lock_key_rules: int = 3
     topology_enable_rule_credit_assignment: bool = False

@@ -1,4 +1,4 @@
-﻿from src.gui.services.solver_recovery import (
+﻿from src.gui.solver.recovery import (
     compute_solver_timeout_seconds,
     force_solver_recovery_state,
     prepare_active_solver_for_new_start,

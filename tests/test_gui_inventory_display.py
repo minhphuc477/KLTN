@@ -1,6 +1,6 @@
 ﻿from types import SimpleNamespace
 
-from src.gui.overlay.inventory_display import get_path_items_display_text, render_item_legend
+from src.gui.rendering.inventory_display import get_path_items_display_text, render_item_legend
 
 
 class _Rendered:

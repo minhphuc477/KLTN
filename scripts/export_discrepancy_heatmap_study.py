@@ -39,11 +39,11 @@ logger = logging.getLogger(__name__)
 
 def _build_mission_graph(seed: int, num_rooms: int):
     grammar = MissionGrammar(seed=int(seed))
-    mission = grammar.generate(
+    mission = grammar.generate_validated(
         difficulty=Difficulty.MEDIUM,
         num_rooms=int(num_rooms),
         max_keys=max(1, int(num_rooms) // 4),
-        validate_all=True,
+        max_attempts=8,
     )
     return mission_graph_to_networkx(mission)
 

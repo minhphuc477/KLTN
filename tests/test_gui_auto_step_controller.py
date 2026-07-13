@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import numpy as np
 
 from src.core.definitions import SEMANTIC_PALETTE
-from src.gui.services.auto_step_controller import auto_step, stop_auto
+from src.gui.gameplay.auto_step_controller import auto_step, stop_auto
 from src.simulation.validator import ZeldaLogicEnv
 
 

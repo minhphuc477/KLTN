@@ -1,6 +1,6 @@
 ﻿from types import SimpleNamespace
 
-from src.gui.controls.control_panel_animation import (
+from src.gui.control_panel.animation import (
     start_toggle_panel_animation,
     update_control_panel_animation,
 )

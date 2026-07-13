@@ -1,6 +1,6 @@
 ﻿from pathlib import Path
 
-from src.gui.services.topology_export import export_topology
+from src.gui.topology.export import export_topology
 
 
 class DummyGui:

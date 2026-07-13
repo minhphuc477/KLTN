@@ -57,6 +57,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--num-rooms", type=int, default=12)
     parser.add_argument("--max-keys", type=int, default=3)
+    parser.add_argument("--baseline-attempts", type=int, default=8)
     parser.add_argument("--difficulty", type=str, default="MEDIUM", choices=["EASY", "MEDIUM", "HARD", "EXPERT"])
     parser.add_argument("--verbose", action="store_true")
     return parser.parse_args()
@@ -88,6 +89,8 @@ def main() -> int:
                 "trials": 0.0,
                 "a_applied": 0.0,
                 "a_apply_exceptions": 0.0,
+                "a_invalid": 0.0,
+                "a_valid": 0.0,
                 "b_applicable_before": 0.0,
                 "b_applicable_after": 0.0,
                 "blocked": 0.0,
@@ -100,11 +103,11 @@ def main() -> int:
     for sample_idx in range(int(args.num_samples)):
         sample_seed = int(args.seed) + sample_idx
         sample_grammar = MissionGrammar(seed=sample_seed)
-        base_graph = sample_grammar.generate(
+        base_graph = sample_grammar.generate_validated(
             difficulty=difficulty,
             num_rooms=int(args.num_rooms),
             max_keys=int(args.max_keys),
-            validate_all=True,
+            max_attempts=int(args.baseline_attempts),
         )
         base_graph.sanitize()
 
@@ -160,6 +163,17 @@ def main() -> int:
                     stat["a_apply_exceptions"] += 1.0
                     continue
 
+                # Pairwise interaction metrics are only identifiable when A
+                # leaves a valid intermediate graph. Otherwise invalidity after
+                # B is a single-rule failure and must not be attributed to the
+                # A->B interaction.
+                valid_after_a = bool(validator.validate_all_constraints(graph_after_a))
+                valid_after_a = valid_after_a and _path_exists(graph_after_a)
+                if not valid_after_a:
+                    stat["a_invalid"] += 1.0
+                    continue
+                stat["a_valid"] += 1.0
+
                 # Evaluate B after A.
                 can_b_after = False
                 try:
@@ -204,18 +218,25 @@ def main() -> int:
     rows: List[Dict[str, Any]] = []
     for (rule_a, rule_b), stat in pair_stats.items():
         a_applied = max(1.0, float(stat["a_applied"]))
+        a_valid = max(1.0, float(stat["a_valid"]))
         b_applied = max(1.0, float(stat["b_applied"]))
-        blocked_rate = float(stat["blocked"] / a_applied)
+        a_invalid_rate = float(stat["a_invalid"] / a_applied)
+        blocked_rate = float(stat["blocked"] / a_valid)
         invalid_rate = float(stat["invalid_after_pair"] / b_applied)
-        exception_rate = float(stat["b_apply_exceptions"] / a_applied)
-        conflict_rate = float((stat["blocked"] + stat["invalid_after_pair"] + stat["b_apply_exceptions"]) / a_applied)
-        synergy_rate = float(stat["synergy"] / a_applied)
+        exception_rate = float(stat["b_apply_exceptions"] / a_valid)
+        conflict_rate = float(
+            (stat["blocked"] + stat["invalid_after_pair"] + stat["b_apply_exceptions"])
+            / a_valid
+        )
+        synergy_rate = float(stat["synergy"] / a_valid)
         rows.append(
             {
                 "rule_a": rule_a,
                 "rule_b": rule_b,
                 "trials": int(stat["trials"]),
                 "a_applied": int(stat["a_applied"]),
+                "a_valid": int(stat["a_valid"]),
+                "a_invalid": int(stat["a_invalid"]),
                 "b_applicable_before": int(stat["b_applicable_before"]),
                 "b_applicable_after": int(stat["b_applicable_after"]),
                 "b_applied": int(stat["b_applied"]),
@@ -223,6 +244,7 @@ def main() -> int:
                 "invalid_after_pair": int(stat["invalid_after_pair"]),
                 "b_apply_exceptions": int(stat["b_apply_exceptions"]),
                 "synergy": int(stat["synergy"]),
+                "a_invalid_rate": a_invalid_rate,
                 "blocked_rate": blocked_rate,
                 "invalid_rate": invalid_rate,
                 "exception_rate": exception_rate,
@@ -250,6 +272,7 @@ def main() -> int:
         "mean_conflict_rate": float(df["conflict_rate"].mean()) if not df.empty else 0.0,
         "median_conflict_rate": float(df["conflict_rate"].median()) if not df.empty else 0.0,
         "max_conflict_rate": float(df["conflict_rate"].max()) if not df.empty else 0.0,
+        "mean_single_rule_invalid_rate": float(df["a_invalid_rate"].mean()) if not df.empty else 0.0,
         "top_conflicts": top_conflicts.to_dict(orient="records"),
     }
     report_json.write_text(json.dumps(summary, indent=2), encoding="utf-8")
@@ -263,6 +286,7 @@ def main() -> int:
         "",
         f"- samples: {int(args.num_samples)}",
         f"- rules: {int(len(rule_names))}",
+        f"- mean single-rule invalid rate: {summary['mean_single_rule_invalid_rate']:.4f}",
         f"- mean conflict rate: {summary['mean_conflict_rate']:.4f}",
         f"- max conflict rate: {summary['max_conflict_rate']:.4f}",
         "",

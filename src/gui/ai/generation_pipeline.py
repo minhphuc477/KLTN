@@ -378,10 +378,11 @@ def generate_mission_graph(random_module, *, seed=None, num_rooms=None, difficul
 
     def _generate_once(candidate_seed: int, internal_room_count: int):
         grammar = MissionGrammar(seed=int(candidate_seed))
-        mission_graph = grammar.generate(
+        mission_graph = grammar.generate_validated(
             difficulty=grammar_difficulty,
             num_rooms=int(internal_room_count),
             max_keys=max_keys,
+            max_attempts=8,
         )
         out = mission_graph_to_gnn_input(mission_graph)
         out["seed"] = int(candidate_seed)
@@ -405,7 +406,10 @@ def generate_mission_graph(random_module, *, seed=None, num_rooms=None, difficul
     best_score = None
     for candidate_seed in seed_candidates:
         for internal_room_count in internal_counts:
-            candidate = _generate_once(candidate_seed, internal_room_count)
+            try:
+                candidate = _generate_once(candidate_seed, internal_room_count)
+            except RuntimeError:
+                continue
             actual = int(candidate["num_nodes"])
             score = (
                 abs(actual - room_count),
@@ -419,6 +423,11 @@ def generate_mission_graph(random_module, *, seed=None, num_rooms=None, difficul
             if actual == room_count:
                 return candidate
 
+    if best is None:
+        raise RuntimeError(
+            "Mission grammar could not produce a validated GUI candidate for "
+            f"requested_rooms={room_count}, seeds={seed_candidates}."
+        )
     return best
 
 

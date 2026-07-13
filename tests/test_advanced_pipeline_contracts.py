@@ -71,7 +71,7 @@ def test_protected_hazard_metadata_requires_generic_traversal_item():
     assert edge_type_from_data({"edge_type": "HAZARD"}) == "hazard"
 
 
-def test_graph_transition_does_not_bypass_protected_hazard():
+def test_graph_transition_requires_the_named_hazard_protection():
     grid = np.full((16, 22), SEMANTIC_PALETTE["FLOOR"], dtype=np.int64)
     grid[1, 1] = SEMANTIC_PALETTE["START"]
     grid[1, 12] = SEMANTIC_PALETTE["TRIFORCE"]
@@ -100,8 +100,14 @@ def test_graph_transition_does_not_bypass_protected_hazard():
         (1, 12),
         edge_type,
     )
+    wrong_item, _ = solver.apply_graph_edge_transition(
+        GameState(position=(1, 1), has_item=True, item_names={"LADDER"}),
+        (1, 1),
+        (1, 12),
+        edge_type,
+    )
     allowed, _ = solver.apply_graph_edge_transition(
-        GameState(position=(1, 1), has_item=True),
+        GameState(position=(1, 1), has_item=True, item_names={"FIRE_TUNIC"}),
         (1, 1),
         (1, 12),
         edge_type,
@@ -109,7 +115,36 @@ def test_graph_transition_does_not_bypass_protected_hazard():
 
     assert edge_type == "hazard_protected"
     assert blocked is False
+    assert wrong_item is False
     assert allowed is True
+
+
+def test_key_item_pickup_inherits_typed_identity_from_room_node():
+    grid = np.full((16, 22), SEMANTIC_PALETTE["FLOOR"], dtype=np.int64)
+    grid[1, 1] = SEMANTIC_PALETTE["START"]
+    grid[2, 2] = SEMANTIC_PALETTE["KEY_ITEM"]
+    grid[1, 12] = SEMANTIC_PALETTE["TRIFORCE"]
+    graph = nx.DiGraph()
+    graph.add_node(0, type="PROTECTION_ITEM", protection_item_id="FIRE_TUNIC")
+    graph.add_node(1, type="GOAL")
+    graph.add_edge(0, 1, edge_type="HAZARD", protection_item_id="FIRE_TUNIC")
+    env = ZeldaLogicEnv(
+        grid,
+        graph=graph,
+        room_positions={(0, 0): (0, 0), (0, 1): (0, 11)},
+        room_to_node={(0, 0): 0, (0, 1): 1},
+        node_to_room={0: (0, 0), 1: (0, 1)},
+    )
+
+    picked, _, _ = env._apply_pickup_if_present(
+        env.reset(),
+        (2, 2),
+        int(SEMANTIC_PALETTE["KEY_ITEM"]),
+        mutate_grid=False,
+    )
+
+    assert picked.has_item is True
+    assert picked.item_names == {"FIRE_TUNIC"}
 
 
 def test_stair_transition_updates_the_floor_state_from_mission_metadata():

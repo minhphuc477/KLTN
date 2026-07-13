@@ -18,7 +18,6 @@ import logging
 
 from src.core.definitions import SEMANTIC_PALETTE
 from src.generation.evolutionary_director import (
-    CVTEliteArchive,
     EvolutionaryTopologyGenerator,
     GraphGrammarExecutor
 )
@@ -67,9 +66,15 @@ class TestTopologyGeneratorMaxNodes:
             features=(0.1, 0.2, 0.3, 0.4),
             metadata={"source": "unit-test"},
         )
+        first_rule = generator._rule_ids[0]
+        generator._global_rule_weights[first_rule] *= 1.25
+        generator._renormalize_global_rule_probs()
+        expected_rule_weights = dict(generator._global_rule_weights)
         generator._save_qd_archive(archive)
+        expected_generator_draw = generator.rng.random()
+        expected_executor_draw = generator.executor.rng.random()
 
-        loaded_generator = EvolutionaryTopologyGenerator(
+        untrusted_generator = EvolutionaryTopologyGenerator(
             target_curve=[0.2, 0.5, 0.8],
             population_size=2,
             generations=1,
@@ -79,11 +84,82 @@ class TestTopologyGeneratorMaxNodes:
             qd_load_archive=True,
             seed=7,
         )
+        with pytest.raises(ValueError, match="executes Python pickle content"):
+            untrusted_generator._load_qd_archive_or_new()
+
+        loaded_generator = EvolutionaryTopologyGenerator(
+            target_curve=[0.2, 0.5, 0.8],
+            population_size=2,
+            generations=1,
+            search_strategy="cvt_emitter",
+            qd_archive_cells=32,
+            qd_archive_path=str(archive_path),
+            qd_load_archive=True,
+            qd_trust_archive_pickle=True,
+            seed=7,
+        )
         loaded = loaded_generator._load_qd_archive_or_new()
 
         assert archive_path.exists()
         assert len(loaded.get_all_elites()) == 1
         assert loaded.get_all_elites()[0].solution == [0, 1, 2]
+        assert loaded_generator.rng.random() == expected_generator_draw
+        assert loaded_generator.executor.rng.random() == expected_executor_draw
+        assert loaded_generator._global_rule_weights == expected_rule_weights
+
+        incompatible = EvolutionaryTopologyGenerator(
+            target_curve=[0.1, 0.9],
+            population_size=2,
+            generations=1,
+            search_strategy="cvt_emitter",
+            qd_archive_cells=32,
+            qd_archive_path=str(archive_path),
+            qd_load_archive=True,
+            qd_trust_archive_pickle=True,
+            seed=7,
+        )
+        with pytest.raises(ValueError, match="fitness contract mismatch"):
+            incompatible._load_qd_archive_or_new()
+
+    def test_cvt_archive_preserves_evaluated_phenotype_for_materialization(self, tmp_path):
+        """Final-map compilation must not guess a phenotype by replaying RNG."""
+        archive_path = tmp_path / "materializable_qd_archive.pkl"
+        generator = EvolutionaryTopologyGenerator(
+            target_curve=[0.1, 0.4, 0.7, 1.0],
+            population_size=8,
+            generations=2,
+            max_nodes=8,
+            rule_space="core",
+            search_strategy="cvt_emitter",
+            qd_archive_cells=32,
+            qd_archive_path=str(archive_path),
+            seed=123,
+        )
+        generator.evolve(directed_output=True)
+
+        loader = EvolutionaryTopologyGenerator(
+            target_curve=[0.1, 0.4, 0.7, 1.0],
+            population_size=8,
+            generations=2,
+            max_nodes=8,
+            rule_space="core",
+            search_strategy="cvt_emitter",
+            qd_archive_cells=32,
+            qd_archive_path=str(archive_path),
+            qd_load_archive=True,
+            qd_trust_archive_pickle=True,
+            seed=123,
+        )
+        archive = loader._load_qd_archive_or_new()
+        elites = archive.get_all_elites()
+
+        assert elites
+        assert all(elite.metadata.get("phenotype") is not None for elite in elites)
+        finalized = loader.finalize_archived_phenotype(
+            elites[0].metadata["phenotype"],
+            directed_output=True,
+        )
+        assert finalized.number_of_nodes() >= 2
 
     def test_cvt_emitter_is_seed_reproducible_and_populates_feasible_archive(self):
         """Seeded topology QD should reproduce both output and archive metrics."""

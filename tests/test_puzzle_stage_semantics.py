@@ -177,6 +177,20 @@ def test_sampler_semantics_gate_reports_and_rejects_pre_repair_logits():
 
     assert metrics["puzzle_stage_semantics_head_loaded"] == 1.0
     assert 0.0 <= metrics["puzzle_stage_semantics_joint_confidence"] <= 1.0
+    assert metrics["puzzle_stage_semantics_joint_confidence"] == pytest.approx(
+        metrics["puzzle_stage_semantics_raw_joint_confidence"]
+    )
+
+    constrained = _score_puzzle_stage_semantics(
+        pipeline,
+        logits,
+        graph_data,
+        room_id=7,
+        stage="constrained",
+        enforce_reject=False,
+    )
+    assert "puzzle_stage_semantics_constrained_joint_confidence" in constrained
+    assert "puzzle_stage_semantics_joint_confidence" not in constrained
 
     pipeline.default_puzzle_stage_semantics_validation_mode = "reject"
     pipeline.default_puzzle_stage_semantics_min_confidence = 1.0
@@ -199,11 +213,13 @@ def test_checkpoint_binds_semantics_head_only_to_active_generator():
     )
     checkpoint = {
         "puzzle_stage_semantics_head_state_dict": trained_head.state_dict(),
+        "global_step": 1,
     }
     checkpoint_config = {
         "num_classes": 44,
         "puzzle_stage_semantics_hidden_dim": 16,
         "puzzle_stage_semantics_max_sequence_length": 4,
+        "puzzle_stage_semantics_loss_weight": 1.0,
     }
 
     _bind_puzzle_stage_semantics_head(
@@ -228,6 +244,39 @@ def test_checkpoint_binds_semantics_head_only_to_active_generator():
         pipeline.puzzle_stage_semantics_head.state_dict().values(),
     ):
         assert torch.equal(expected, loaded)
+
+
+def test_checkpoint_refuses_semantics_head_without_training_provenance():
+    head = PuzzleStageSemanticsHead(
+        num_tile_classes=44,
+        hidden_dim=16,
+        max_sequence_length=4,
+    )
+    pipeline = SimpleNamespace(
+        room_generator_mode="discrete_masked",
+        device=torch.device("cpu"),
+        vqvae=SimpleNamespace(num_classes=44),
+        puzzle_stage_semantics_head=None,
+        puzzle_stage_semantics_head_source=None,
+    )
+
+    _bind_puzzle_stage_semantics_head(
+        pipeline,
+        {
+            "puzzle_stage_semantics_head_state_dict": head.state_dict(),
+            "global_step": 10,
+        },
+        {
+            "num_classes": 44,
+            "puzzle_stage_semantics_hidden_dim": 16,
+            "puzzle_stage_semantics_max_sequence_length": 4,
+            "puzzle_stage_semantics_loss_weight": 0.0,
+        },
+        source="masked_room",
+    )
+
+    assert pipeline.puzzle_stage_semantics_head is None
+    assert pipeline.puzzle_stage_semantics_head_source is None
 
 
 def test_switch_stage_trace_requires_a_real_block_push():

@@ -1,4 +1,4 @@
-﻿from src.gui.controls.view_navigation import center_on_player, clamp_view_offset, next_map, prev_map
+﻿from src.gui.map.navigation import center_on_player, clamp_view_offset, next_map, prev_map
 
 
 class DummyEnv:

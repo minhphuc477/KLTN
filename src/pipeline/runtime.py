@@ -167,6 +167,7 @@ def _initialize_pipeline_from_flat_kwargs(
     topology_qd_emitter_mutation_rate: float = 0.18,
     topology_qd_archive_path: Optional[str] = None,
     topology_qd_load_archive: bool = False,
+    topology_qd_trust_archive_pickle: bool = False,
     topology_qd_autosave_archive: bool = False,
     topology_max_lock_key_rules: int = 3,
     topology_enable_rule_credit_assignment: bool = False,
@@ -392,6 +393,9 @@ def _initialize_pipeline_from_flat_kwargs(
     )
     pipeline.topology_qd_archive_path = str(topology_qd_archive_path) if topology_qd_archive_path else None
     pipeline.topology_qd_load_archive = bool(topology_qd_load_archive)
+    pipeline.topology_qd_trust_archive_pickle = bool(
+        topology_qd_trust_archive_pickle
+    )
     pipeline.topology_qd_autosave_archive = bool(topology_qd_autosave_archive)
     pipeline.topology_max_lock_key_rules = int(max(0, int(topology_max_lock_key_rules)))
     pipeline.topology_enable_rule_credit_assignment = bool(topology_enable_rule_credit_assignment)

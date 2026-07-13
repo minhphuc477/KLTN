@@ -344,10 +344,39 @@ class MaskedRoomTrainingConfig:
             raise ValueError("graph_conditioning_mode must be 'node_sequence' or 'pooled'.")
         if self.topology_supervision_mode not in {"runtime_aligned", "oracle_room_grid"}:
             raise ValueError("topology_supervision_mode must be 'runtime_aligned' or 'oracle_room_grid'.")
-        if self.attention_mode != "softmax":
-            raise ValueError("Masked-room attention_mode only supports 'softmax'.")
-        if self.topology_conditioning_mode != "additive":
-            raise ValueError("Masked-room topology_conditioning_mode only supports 'additive'.")
+        if self.attention_mode not in {"softmax", "linear_hedgehog"}:
+            raise ValueError("Masked-room attention_mode must be 'softmax' or 'linear_hedgehog'.")
+        if self.topology_conditioning_mode not in {"additive", "graph_cross_attention"}:
+            raise ValueError(
+                "Masked-room topology_conditioning_mode must be 'additive' or 'graph_cross_attention'."
+            )
+        if (
+            self.topology_conditioning_mode == "graph_cross_attention"
+            and self.graph_conditioning_mode != "node_sequence"
+        ):
+            raise ValueError(
+                "graph_cross_attention requires graph_conditioning_mode='node_sequence'."
+            )
+        if self.topology_conditioning_mode == "additive" and self.attention_mode != "softmax":
+            raise ValueError(
+                "Masked-room attention_mode only affects graph_cross_attention; "
+                "use 'softmax' for the additive baseline."
+            )
+        inactive_graph_controls = {
+            "hedgehog_feature_dim": (self.hedgehog_feature_dim, 32),
+            "graph_auto_linear_attention_nodes": (self.graph_auto_linear_attention_nodes, 128),
+            "spatial_graph_gate_init": (self.spatial_graph_gate_init, -2.0),
+        }
+        changed_inactive_graph_controls = [
+            name
+            for name, (value, expected) in inactive_graph_controls.items()
+            if value != expected
+        ]
+        if self.topology_conditioning_mode == "additive" and changed_inactive_graph_controls:
+            raise ValueError(
+                "Masked-room graph-attention controls require topology_conditioning_mode="
+                f"'graph_cross_attention': {changed_inactive_graph_controls}."
+            )
         if self.logic_grid_pathfinder not in {"bellman_ford", "conv", "cnn", "vin", "learnable", "perturb_and_map"}:
             raise ValueError(
                 "logic_grid_pathfinder must be 'bellman_ford', 'conv'/'cnn', 'vin', 'learnable', or 'perturb_and_map'."
@@ -359,9 +388,6 @@ class MaskedRoomTrainingConfig:
             )
         legacy_values = {
             "model_channels": (self.model_channels, 64),
-            "hedgehog_feature_dim": (self.hedgehog_feature_dim, 32),
-            "graph_auto_linear_attention_nodes": (self.graph_auto_linear_attention_nodes, 128),
-            "spatial_graph_gate_init": (self.spatial_graph_gate_init, -2.0),
             "spatial_topology_gate_init": (self.spatial_topology_gate_init, -2.0),
             "unet_attention_resolutions": (self.unet_attention_resolutions, (0, 1)),
         }
@@ -757,17 +783,25 @@ class MaskedRoomTrainer:
             reference_hidden_dim=config.condition_reference_hidden_dim,
             strict_schema=bool(getattr(config, "condition_strict_schema", True)),
         )).to(self.device)
-        self.puzzle_stage_semantics_head = PuzzleStageSemanticsHead(
-            num_tile_classes=int(config.num_classes),
-            hidden_dim=int(getattr(config, "puzzle_stage_semantics_hidden_dim", DEFAULT_PUZZLE_STAGE_SEMANTICS_HIDDEN_DIM)),
-            max_sequence_length=int(
-                getattr(
-                    config,
-                    "puzzle_stage_semantics_max_sequence_length",
-                    DEFAULT_PUZZLE_STAGE_MAX_SEQUENCE_LENGTH,
-                )
-            ),
-        ).to(self.device)
+        self.puzzle_stage_semantics_head: Optional[PuzzleStageSemanticsHead] = None
+        if float(getattr(config, "puzzle_stage_semantics_loss_weight", 0.0)) > 0.0:
+            self.puzzle_stage_semantics_head = PuzzleStageSemanticsHead(
+                num_tile_classes=int(config.num_classes),
+                hidden_dim=int(
+                    getattr(
+                        config,
+                        "puzzle_stage_semantics_hidden_dim",
+                        DEFAULT_PUZZLE_STAGE_SEMANTICS_HIDDEN_DIM,
+                    )
+                ),
+                max_sequence_length=int(
+                    getattr(
+                        config,
+                        "puzzle_stage_semantics_max_sequence_length",
+                        DEFAULT_PUZZLE_STAGE_MAX_SEQUENCE_LENGTH,
+                    )
+                ),
+            ).to(self.device)
         self.logic_net = self._create_logic_net() if bool(getattr(config, "logic_net_enabled", False)) else None
         if self.logic_net is not None:
             self.logic_net.to(self.device)
@@ -777,8 +811,11 @@ class MaskedRoomTrainer:
         optimizer_modules = [
             ("model", self.model),
             ("condition_encoder", self.condition_encoder),
-            ("puzzle_stage_semantics_head", self.puzzle_stage_semantics_head),
         ]
+        if self.puzzle_stage_semantics_head is not None:
+            optimizer_modules.append(
+                ("puzzle_stage_semantics_head", self.puzzle_stage_semantics_head)
+            )
         if self.logic_net is not None and bool(getattr(config, "logic_net_trainable", False)):
             optimizer_modules.append(("logic_net", self.logic_net))
         self.optimizer = optim.AdamW(
@@ -1433,7 +1470,7 @@ class MaskedRoomTrainer:
                 dilation=int(getattr(self.config, "topology_focus_dilation", 1)),
             )
         need_puzzle_stage_semantics = bool(
-            graph_list and float(getattr(self.config, "puzzle_stage_semantics_loss_weight", 0.0)) > 0.0
+            graph_list and self.puzzle_stage_semantics_head is not None
         )
         need_logic_supervision = bool(
             self.logic_net is not None
@@ -1478,7 +1515,11 @@ class MaskedRoomTrainer:
             "puzzle_stage_count_acc": 0.0,
             "puzzle_stage_slot_acc": 0.0,
         }
-        if need_puzzle_stage_semantics and isinstance(aux.get("logits"), torch.Tensor):
+        if (
+            need_puzzle_stage_semantics
+            and self.puzzle_stage_semantics_head is not None
+            and isinstance(aux.get("logits"), torch.Tensor)
+        ):
             puzzle_stage_semantic_loss, puzzle_stage_semantic_metrics = self.puzzle_stage_semantics_head.compute_loss(
                 aux["logits"],
                 [graph_dict.get("puzzle_stage_condition") if isinstance(graph_dict, dict) else {} for graph_dict in graph_list],
@@ -1587,12 +1628,11 @@ class MaskedRoomTrainer:
             semantic_puzzle_offset=self.config.semantic_puzzle_offset,
             topology_supervision_mode=self.config.topology_supervision_mode,
         )
-        return {
+        payload = {
             "epoch": int(self.epoch),
             "global_step": int(self.global_step),
             "model_state_dict": self.model.state_dict(),
             "condition_encoder_state_dict": self.condition_encoder.state_dict(),
-            "puzzle_stage_semantics_head_state_dict": self.puzzle_stage_semantics_head.state_dict(),
             **(
                 {"logic_net_state_dict": self.logic_net.state_dict()}
                 if self.logic_net is not None
@@ -1606,6 +1646,11 @@ class MaskedRoomTrainer:
                 "topology_anchor_policy": dict(topology_anchor_policy),
             },
         }
+        if self.puzzle_stage_semantics_head is not None:
+            payload["puzzle_stage_semantics_head_state_dict"] = (
+                self.puzzle_stage_semantics_head.state_dict()
+            )
+        return payload
 
     def _build_inference_checkpoint_payload(self, metrics: Dict[str, Any]) -> Dict[str, Any]:
         topology_anchor_policy = build_topology_anchor_policy_metadata(
@@ -1614,12 +1659,11 @@ class MaskedRoomTrainer:
             semantic_puzzle_offset=self.config.semantic_puzzle_offset,
             topology_supervision_mode=self.config.topology_supervision_mode,
         )
-        return {
+        payload = {
             "epoch": int(self.epoch),
             "global_step": int(self.global_step),
             "model_state_dict": self.model.state_dict(),
             "condition_encoder_state_dict": self.condition_encoder.state_dict(),
-            "puzzle_stage_semantics_head_state_dict": self.puzzle_stage_semantics_head.state_dict(),
             **(
                 {"logic_net_state_dict": self.logic_net.state_dict()}
                 if self.logic_net is not None
@@ -1631,6 +1675,11 @@ class MaskedRoomTrainer:
                 "topology_anchor_policy": dict(topology_anchor_policy),
             },
         }
+        if self.puzzle_stage_semantics_head is not None:
+            payload["puzzle_stage_semantics_head_state_dict"] = (
+                self.puzzle_stage_semantics_head.state_dict()
+            )
+        return payload
 
     def save_checkpoint(self, path: str, metrics: Dict[str, Any], *, include_optimizer: bool = True) -> None:
         payload = (
@@ -1640,7 +1689,9 @@ class MaskedRoomTrainer:
         )
         atomic_torch_save(payload, path)
         checkpoint_kind = "resume" if include_optimizer else "inference"
-        contains = ["model", "condition_encoder", "puzzle_stage_semantics_head"]
+        contains = ["model", "condition_encoder"]
+        if self.puzzle_stage_semantics_head is not None:
+            contains.append("puzzle_stage_semantics_head")
         if self.logic_net is not None:
             contains.append("logic_net")
         if include_optimizer:
@@ -1722,8 +1773,20 @@ class MaskedRoomTrainer:
                     )
         self.model.load_state_dict(checkpoint["model_state_dict"])
         self.condition_encoder.load_state_dict(checkpoint["condition_encoder_state_dict"])
-        if "puzzle_stage_semantics_head_state_dict" in checkpoint:
-            self.puzzle_stage_semantics_head.load_state_dict(checkpoint["puzzle_stage_semantics_head_state_dict"])
+        semantics_state = checkpoint.get("puzzle_stage_semantics_head_state_dict")
+        if self.puzzle_stage_semantics_head is not None:
+            if not isinstance(semantics_state, dict):
+                raise RuntimeError(
+                    "Masked-room checkpoint is missing the puzzle-stage semantics head "
+                    "required by the enabled auxiliary objective."
+                )
+            self.puzzle_stage_semantics_head.load_state_dict(semantics_state)
+        elif isinstance(semantics_state, dict):
+            raise ValueError(
+                "Masked-room checkpoint contains a puzzle-stage semantics head, but the "
+                "current configuration disables its training objective. Resume with the "
+                "checkpoint's puzzle_stage_semantics_loss_weight."
+            )
         if self.logic_net is not None and "logic_net_state_dict" in checkpoint:
             incompatible = self.logic_net.load_state_dict(checkpoint["logic_net_state_dict"], strict=False)
             missing = [str(name) for name in getattr(incompatible, "missing_keys", [])]
@@ -1768,7 +1831,16 @@ def train_masked_room(config: MaskedRoomTrainingConfig) -> MaskedRoomTrainer:
         param_groups={
             "masked_room_model": count_parameters(trainer.model, trainable_only=True),
             "condition_encoder": count_parameters(trainer.condition_encoder, trainable_only=True),
-            "puzzle_stage_semantics_head": count_parameters(trainer.puzzle_stage_semantics_head, trainable_only=True),
+            **(
+                {
+                    "puzzle_stage_semantics_head": count_parameters(
+                        trainer.puzzle_stage_semantics_head,
+                        trainable_only=True,
+                    )
+                }
+                if trainer.puzzle_stage_semantics_head is not None
+                else {}
+            ),
             **(
                 {"logic_net": count_parameters(trainer.logic_net, trainable_only=True)}
                 if trainer.logic_net is not None
@@ -1838,7 +1910,8 @@ def train_masked_room(config: MaskedRoomTrainingConfig) -> MaskedRoomTrainer:
             batch_sampler.set_epoch(int(epoch))
         trainer.model.train()
         trainer.condition_encoder.train()
-        trainer.puzzle_stage_semantics_head.train()
+        if trainer.puzzle_stage_semantics_head is not None:
+            trainer.puzzle_stage_semantics_head.train()
         if trainer.logic_net is not None:
             trainer.logic_net.train(bool(getattr(config, "logic_net_trainable", False)))
         train_sum = {
@@ -1879,7 +1952,8 @@ def train_masked_room(config: MaskedRoomTrainingConfig) -> MaskedRoomTrainer:
 
         trainer.model.eval()
         trainer.condition_encoder.eval()
-        trainer.puzzle_stage_semantics_head.eval()
+        if trainer.puzzle_stage_semantics_head is not None:
+            trainer.puzzle_stage_semantics_head.eval()
         if trainer.logic_net is not None:
             trainer.logic_net.eval()
         val_sum: Dict[str, float] = {}
@@ -2013,9 +2087,14 @@ def main() -> None:
     parser.add_argument("--model-channels", type=int, default=None)
     parser.add_argument("--hidden-dim", type=int, default=None)
     parser.add_argument("--masked-steps", type=int, default=None)
-    parser.add_argument("--attention-mode", type=str, default=None, choices=["softmax"])
+    parser.add_argument("--attention-mode", type=str, default=None, choices=["softmax", "linear_hedgehog"])
     parser.add_argument("--context-attention-mode", type=str, default=None, choices=["concat_encoder", "cross_decoder"])
-    parser.add_argument("--topology-conditioning-mode", type=str, default=None, choices=["additive"])
+    parser.add_argument(
+        "--topology-conditioning-mode",
+        type=str,
+        default=None,
+        choices=["additive", "graph_cross_attention"],
+    )
     parser.add_argument("--hedgehog-feature-dim", type=int, default=None)
     parser.add_argument("--graph-auto-linear-attention-nodes", type=int, default=None)
     parser.add_argument("--spatial-graph-gate-init", type=float, default=None)

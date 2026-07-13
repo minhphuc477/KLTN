@@ -1,4 +1,4 @@
-﻿from src.gui.overlay.toast_notification import ToastNotification
+﻿from src.gui.runtime.toast_notification import ToastNotification
 
 
 class _FakeText:
@@ -38,7 +38,16 @@ class _FakePygame:
 
     class font:
         @staticmethod
-        def SysFont(_name, _size):
+        def get_init():
+            return True
+
+        @staticmethod
+        def init():
+            return None
+
+        @staticmethod
+        def SysFont(_name, _size, bold=False, italic=False):
+            _ = (bold, italic)
             return _FakeFont()
 
     @staticmethod

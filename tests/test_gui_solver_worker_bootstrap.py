@@ -1,4 +1,4 @@
-﻿from src.gui.services.solver_worker_bootstrap import launch_solver_worker
+﻿from src.gui.solver.worker_bootstrap import launch_solver_worker
 
 
 class DummyLogger:

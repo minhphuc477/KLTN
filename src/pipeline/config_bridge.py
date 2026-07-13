@@ -37,6 +37,7 @@ def topology_generation_kwargs_from_resolved_config(config: Dict[str, Any]) -> D
         "qd_emitter_mutation_rate": stage["qd_emitter_mutation_rate"],
         "qd_archive_path": stage.get("qd_archive_path"),
         "qd_load_archive": stage.get("qd_load_archive", False),
+        "qd_trust_archive_pickle": stage.get("qd_trust_archive_pickle", False),
         "qd_autosave_archive": stage.get("qd_autosave_archive", False),
         "max_lock_key_rules": stage["max_lock_key_rules"],
         "enable_rule_credit_assignment": stage["enable_rule_credit_assignment"],
@@ -249,6 +250,9 @@ def pipeline_kwargs_from_resolved_config(config: Dict[str, Any]) -> Dict[str, An
         "topology_qd_emitter_mutation_rate": topology_kwargs["qd_emitter_mutation_rate"],
         "topology_qd_archive_path": topology_kwargs.get("qd_archive_path"),
         "topology_qd_load_archive": topology_kwargs.get("qd_load_archive", False),
+        "topology_qd_trust_archive_pickle": topology_kwargs.get(
+            "qd_trust_archive_pickle", False
+        ),
         "topology_qd_autosave_archive": topology_kwargs.get("qd_autosave_archive", False),
         "topology_max_lock_key_rules": topology_kwargs["max_lock_key_rules"],
         "topology_enable_rule_credit_assignment": topology_kwargs["enable_rule_credit_assignment"],
@@ -375,6 +379,7 @@ def pipeline_kwargs_from_resolved_config(config: Dict[str, Any]) -> Dict[str, An
                 "attention_mode": masked_room.get("attention_mode", "softmax"),
                 "context_attention_mode": masked_room.get("context_attention_mode", "concat_encoder"),
                 "topology_conditioning_mode": masked_room["topology_conditioning_mode"],
+                "hedgehog_feature_dim": masked_room["hedgehog_feature_dim"],
                 "graph_auto_linear_attention_nodes": masked_room["graph_auto_linear_attention_nodes"],
                 "spatial_graph_gate_init": masked_room["spatial_graph_gate_init"],
                 "spatial_topology_gate_init": masked_room["spatial_topology_gate_init"],

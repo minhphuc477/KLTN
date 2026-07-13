@@ -324,6 +324,7 @@ CONFIG_FIELDS: List[ConfigField] = [
     ConfigField("topology.qd_emitter_mutation_rate", float, 0.18, "Emitter mutation rate when using CVT topology search.", min_value=0.01, max_value=0.95),
     ConfigField("topology.qd_archive_path", str, None, "Optional persisted CVT archive path for warm-started topology QD search.", allow_none=True),
     ConfigField("topology.qd_load_archive", bool, False, "Load topology.qd_archive_path before CVT-emitter search when available."),
+    ConfigField("topology.qd_trust_archive_pickle", bool, False, "Explicitly trust executable pickle content at topology.qd_archive_path. Required when qd_load_archive is enabled."),
     ConfigField("topology.qd_autosave_archive", bool, False, "Persist topology.qd_archive_path during and after CVT-emitter search."),
     ConfigField("topology.max_lock_key_rules", int, 3, "Hard cap on progression key/lock-style rule applications per genome execution.", min_value=0),
     ConfigField("topology.enable_rule_credit_assignment", bool, False, "Enable adaptive rule-credit assignment during topology search."),
@@ -444,12 +445,12 @@ CONFIG_FIELDS: List[ConfigField] = [
     ConfigField("masked_room.model_channels", int, 64, "Legacy checkpoint field; the masked transformer requires the compatibility value 64.", min_value=8),
     ConfigField("masked_room.hidden_dim", int, 48, "Masked-room token hidden width.", min_value=8),
     ConfigField("masked_room.masked_steps", int, 8, "Masked-token corruption steps.", min_value=1),
-    ConfigField("masked_room.attention_mode", str, "softmax", "Masked transformer attention kernel. Only softmax is implemented.", choices=("softmax",)),
+    ConfigField("masked_room.attention_mode", str, "softmax", "Graph-to-grid attention kernel used by the masked-room graph_cross_attention ablation.", choices=("softmax", "linear_hedgehog")),
     ConfigField("masked_room.context_attention_mode", str, "concat_encoder", "Masked-room context fusion ablation. concat_encoder is the original baseline; cross_decoder routes context through decoder cross-attention.", choices=("concat_encoder", "cross_decoder")),
-    ConfigField("masked_room.topology_conditioning_mode", str, "additive", "Masked transformer topology conditioning. Only additive conditioning is implemented.", choices=("additive",)),
-    ConfigField("masked_room.hedgehog_feature_dim", int, 32, "Legacy compatibility field; must remain 32.", min_value=4),
-    ConfigField("masked_room.graph_auto_linear_attention_nodes", int, 128, "Legacy compatibility field; must remain 128.", min_value=0),
-    ConfigField("masked_room.spatial_graph_gate_init", float, -2.0, "Legacy compatibility field; must remain -2.0."),
+    ConfigField("masked_room.topology_conditioning_mode", str, "additive", "Masked-room topology ablation: additive topology-map bias, or additive bias plus node-aligned graph-to-grid cross-attention.", choices=("additive", "graph_cross_attention")),
+    ConfigField("masked_room.hedgehog_feature_dim", int, 32, "Feature width for masked-room linear graph-to-grid attention.", min_value=4),
+    ConfigField("masked_room.graph_auto_linear_attention_nodes", int, 128, "Switch masked-room graph-to-grid softmax attention to linear attention above this node count; 0 disables switching.", min_value=0),
+    ConfigField("masked_room.spatial_graph_gate_init", float, -2.0, "Initial logit for the masked-room graph-to-grid residual gate."),
     ConfigField("masked_room.spatial_topology_gate_init", float, -2.0, "Legacy compatibility field; must remain -2.0."),
     ConfigField("masked_room.unet_channel_mult", list, [1, 2], "Legacy stage list whose length sets masked-transformer depth.", sequence_item_type=int, min_value=1),
     ConfigField("masked_room.unet_num_res_blocks", int, 1, "Transformer layers per legacy stage.", min_value=1),
@@ -839,9 +840,6 @@ def validate_config(config: Dict[str, Any]) -> Dict[str, Any]:
         )
     legacy_masked_defaults = {
         "model_channels": 64,
-        "hedgehog_feature_dim": 32,
-        "graph_auto_linear_attention_nodes": 128,
-        "spatial_graph_gate_init": -2.0,
         "spatial_topology_gate_init": -2.0,
         "unet_attention_resolutions": [0, 1],
     }
@@ -854,6 +852,36 @@ def validate_config(config: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError(
             "The masked-room model is a transformer; these legacy U-Net/linear-attention "
             f"fields are not executable ablations and must remain at defaults: {changed_legacy}."
+        )
+    masked_topology_mode = str(validated["masked_room"]["topology_conditioning_mode"])
+    masked_attention_mode = str(validated["masked_room"]["attention_mode"])
+    if (
+        masked_topology_mode == "graph_cross_attention"
+        and str(validated["masked_room"]["graph_conditioning_mode"]) != "node_sequence"
+    ):
+        raise ValueError(
+            "masked_room.topology_conditioning_mode='graph_cross_attention' requires "
+            "masked_room.graph_conditioning_mode='node_sequence'."
+        )
+    if masked_topology_mode == "additive" and masked_attention_mode != "softmax":
+        raise ValueError(
+            "masked_room.attention_mode only affects topology_conditioning_mode="
+            "'graph_cross_attention'; use 'softmax' for the additive baseline."
+        )
+    inactive_masked_graph_controls = {
+        "hedgehog_feature_dim": 32,
+        "graph_auto_linear_attention_nodes": 128,
+        "spatial_graph_gate_init": -2.0,
+    }
+    changed_inactive_masked_graph_controls = [
+        name
+        for name, expected in inactive_masked_graph_controls.items()
+        if validated["masked_room"][name] != expected
+    ]
+    if masked_topology_mode == "additive" and changed_inactive_masked_graph_controls:
+        raise ValueError(
+            "masked_room graph-attention controls require topology_conditioning_mode="
+            f"'graph_cross_attention': {changed_inactive_masked_graph_controls}."
         )
     min_mask_ratio = float(validated["masked_room"]["min_mask_ratio"])
     max_mask_ratio = float(validated["masked_room"]["max_mask_ratio"])

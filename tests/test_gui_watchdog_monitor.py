@@ -1,4 +1,4 @@
-from src.gui.services.watchdog_monitor import watchdog_loop
+from src.gui.runtime.watchdog_monitor import watchdog_loop
 
 
 class DummyLogger:

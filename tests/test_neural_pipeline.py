@@ -317,6 +317,33 @@ def test_prepare_graph_context_and_room_graph_context_include_spatial_topology(p
     assert room_graph_context["puzzle_stage_condition"]["sequence_required"] is True
 
 
+def test_prepare_graph_context_is_stable_across_dag_insertion_order(pipeline):
+    """Equivalent DAGs must map room IDs to the same conditioning indices."""
+    nodes = [1, 2, 3, 4, 5]
+    edges = [(1, 4), (2, 4), (3, 5), (4, 5)]
+
+    def _build(reverse: bool) -> nx.DiGraph:
+        graph = nx.DiGraph()
+        node_iter = reversed(nodes) if reverse else iter(nodes)
+        edge_iter = reversed(edges) if reverse else iter(edges)
+        for node_id in node_iter:
+            graph.add_node(
+                node_id,
+                is_start=node_id == 1,
+                has_goal=node_id == 5,
+            )
+        for source, target in edge_iter:
+            graph.add_edge(source, target, edge_type="path")
+        return graph
+
+    forward = pipeline._prepare_graph_context(_build(False))
+    reverse = pipeline._prepare_graph_context(_build(True))
+
+    assert forward["node_order"] == reverse["node_order"]
+    assert forward["node_to_idx"] == reverse["node_to_idx"]
+    assert torch.equal(forward["edge_index"], reverse["edge_index"])
+
+
 def test_validate_dungeon_without_map_elites_still_runs_exact_oracle():
     """Hard validation must not depend on the optional MAP-Elites archive."""
     pipeline = NeuralSymbolicDungeonPipeline.from_components(
@@ -458,6 +485,7 @@ def test_prepare_dungeon_generation_uses_pipeline_topology_defaults(monkeypatch)
         topology_qd_emitter_mutation_rate=0.27,
         topology_qd_archive_path="results/topology_qd.pkl",
         topology_qd_load_archive=True,
+        topology_qd_trust_archive_pickle=True,
         topology_qd_autosave_archive=True,
         topology_max_lock_key_rules=2,
         topology_enable_rule_credit_assignment=True,
@@ -487,6 +515,7 @@ def test_prepare_dungeon_generation_uses_pipeline_topology_defaults(monkeypatch)
     assert captured["qd_emitter_mutation_rate"] == pytest.approx(0.27)
     assert captured["qd_archive_path"] == "results/topology_qd.pkl"
     assert captured["qd_load_archive"] is True
+    assert captured["qd_trust_archive_pickle"] is True
     assert captured["qd_autosave_archive"] is True
     assert captured["max_lock_key_rules"] == 2
     assert captured["enable_rule_credit_assignment"] is True

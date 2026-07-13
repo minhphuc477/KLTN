@@ -1,4 +1,4 @@
-﻿from src.gui.services.topology_helpers import (
+﻿from src.gui.topology.helpers import (
     build_room_adjacency_from_graph,
     capture_precheck_snapshot,
     local_bfs_4dir,

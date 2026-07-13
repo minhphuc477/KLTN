@@ -1,6 +1,6 @@
 ﻿from types import SimpleNamespace
 
-from src.gui.overlay.display_diagnostics import handle_watchdog_screenshot, report_ui_state
+from src.gui.runtime.display_diagnostics import handle_watchdog_screenshot, report_ui_state
 
 
 class _Display:

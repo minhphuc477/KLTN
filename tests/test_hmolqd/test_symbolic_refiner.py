@@ -555,6 +555,67 @@ class TestSymbolicRefiner:
             assert bool(refiner.wfc.seen_mask[position]) is False
         assert bool(refiner.wfc.seen_mask[8, 5]) is True
 
+    def test_feedback_cannot_overwrite_original_topology_tiles(self):
+        """A full-grid neural callback must still honor immutable topology anchors."""
+        from src.core.symbolic_refiner import FailurePoint, SymbolicRefiner, TileType
+
+        class _Analyzer:
+            def __init__(self):
+                self.calls = 0
+
+            def analyze_grid(self, *_args, **_kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    return [FailurePoint((8, 5), "disconnected", None, [])]
+                return []
+
+        class _EntropyReset:
+            def create_mask(self, shape, _failures):
+                return np.ones(shape, dtype=bool)
+
+            def expand_mask(self, mask, iterations=1):
+                _ = iterations
+                return mask
+
+        class _FailingWFC:
+            def initialize_state(self, **kwargs):
+                return kwargs
+
+            def collapse(self, state):
+                return np.asarray(state["initial_grid"]).copy(), False
+
+        refiner = SymbolicRefiner(max_repair_attempts=2)
+        refiner.path_analyzer = _Analyzer()
+        refiner.entropy_reset = _EntropyReset()
+        refiner.wfc = _FailingWFC()
+        refiner.refresh_learned_rules = lambda: None
+
+        grid = np.full((16, 11), TileType.WALL.value)
+        anchors = {
+            (0, 5): TileType.DOOR_LOCKED.value,
+            (8, 1): TileType.START.value,
+            (8, 9): TileType.TRIFORCE.value,
+            (15, 5): TileType.STAIR.value,
+        }
+        for position, tile in anchors.items():
+            grid[position] = tile
+
+        def _hostile_feedback(current, *_args):
+            return np.full_like(current, TileType.FLOOR.value)
+
+        repaired, success, diagnostics = refiner.repair_room_with_feedback(
+            grid,
+            start=(8, 1),
+            goal=(8, 9),
+            feedback_callback=_hostile_feedback,
+            max_feedback_rounds=1,
+        )
+
+        assert success is True
+        assert diagnostics["feedback_applied"] == 1
+        for position, tile in anchors.items():
+            assert int(repaired[position]) == int(tile)
+
     def test_repair_room_seed_makes_wfc_reproducible(self):
         """Seeded repair should not depend on NumPy's global random state."""
         from src.core.symbolic_refiner import SymbolicRefiner, TileType

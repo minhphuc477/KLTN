@@ -1,7 +1,7 @@
 ﻿import math
 from types import SimpleNamespace
 
-from src.gui.overlay.status_display import (
+from src.gui.rendering.status_display import (
     render_error_banner,
     render_solver_status_banner,
     render_status_bar,
@@ -69,8 +69,16 @@ class _Pygame:
 
     class font:
         @staticmethod
-        def SysFont(name, size):
-            _ = (name, size)
+        def get_init():
+            return True
+
+        @staticmethod
+        def init():
+            return None
+
+        @staticmethod
+        def SysFont(name, size, bold=False, italic=False):
+            _ = (name, size, bold, italic)
             return _Font()
 
     class draw:

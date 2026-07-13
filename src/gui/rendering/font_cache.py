@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, Tuple
 
-_FONT_CACHE: Dict[Tuple[str, int, bool, bool], Any] = {}
-_DEFAULT_FONT_CACHE: Dict[int, Any] = {}
+_FONT_CACHE: Dict[Tuple[int, str, int, bool, bool], Any] = {}
+_DEFAULT_FONT_CACHE: Dict[Tuple[int, int], Any] = {}
 
 
 def get_sys_font(
@@ -17,12 +17,15 @@ def get_sys_font(
     italic: bool = False,
 ) -> Any:
     """Return a cached ``pygame.font.SysFont`` instance."""
-    key = (str(name), int(size), bool(bold), bool(italic))
+    # A process may host more than one pygame-compatible rendering context
+    # (tests, plugins, display reinitialization).  Font objects are owned by
+    # their font subsystem and must not leak across those contexts.
+    key = (id(pygame.font), str(name), int(size), bool(bold), bool(italic))
     font = _FONT_CACHE.get(key)
     if font is None:
         if not pygame.font.get_init():
             pygame.font.init()
-        font = pygame.font.SysFont(key[0], key[1], bold=key[2], italic=key[3])
+        font = pygame.font.SysFont(key[1], key[2], bold=key[3], italic=key[4])
         _FONT_CACHE[key] = font
     return font
 
@@ -35,11 +38,11 @@ def clear_font_cache() -> None:
 
 def get_default_font(pygame: Any, size: int) -> Any:
     """Return a cached default pygame font."""
-    key = int(size)
+    key = (id(pygame.font), int(size))
     font = _DEFAULT_FONT_CACHE.get(key)
     if font is None:
         if not pygame.font.get_init():
             pygame.font.init()
-        font = pygame.font.Font(None, key)
+        font = pygame.font.Font(None, key[1])
         _DEFAULT_FONT_CACHE[key] = font
     return font

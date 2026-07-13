@@ -1,6 +1,6 @@
 ﻿from types import SimpleNamespace
 
-from src.gui.controls.viewport_controls import auto_fit_zoom, center_view, change_zoom
+from src.gui.map.viewport import auto_fit_zoom, center_view, change_zoom
 
 
 def _make_gui():

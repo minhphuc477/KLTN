@@ -1,7 +1,7 @@
 ﻿import time
 from types import SimpleNamespace
 
-from src.gui.services.solver_comparison_runner import run_solver_comparison, set_last_solver_metrics
+from src.gui.solver.comparison_runner import run_solver_comparison, set_last_solver_metrics
 
 
 class _DummyThread:

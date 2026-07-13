@@ -167,6 +167,12 @@ def _validate_mission_graph_exact(pipeline, graph: nx.Graph) -> Dict[str, Any]:
         ),
         "failure_reason": str(result.failure_reason or ""),
         "solution_path": list(result.solution_path or []),
+        "route_replay_status": str(
+            getattr(result, "route_replay_status", "not_run")
+        ),
+        "route_replay_error": str(
+            getattr(result, "route_replay_error", "") or ""
+        ),
         "all_rooms_reachable": bool(
             room_reachability["complete"]
             and not room_reachability["unreachable_nodes"]
@@ -383,6 +389,7 @@ def prepare_dungeon_generation(
     qd_emitter_mutation_rate: Optional[float] = None,
     qd_archive_path: Optional[str] = None,
     qd_load_archive: Optional[bool] = None,
+    qd_trust_archive_pickle: Optional[bool] = None,
     qd_autosave_archive: Optional[bool] = None,
     max_lock_key_rules: Optional[int] = None,
     enable_rule_credit_assignment: Optional[bool] = None,
@@ -454,6 +461,11 @@ def prepare_dungeon_generation(
         resolved_qd_load_archive = bool(
             pipeline.topology_qd_load_archive if qd_load_archive is None else qd_load_archive
         )
+        resolved_qd_trust_archive_pickle = bool(
+            pipeline.topology_qd_trust_archive_pickle
+            if qd_trust_archive_pickle is None
+            else qd_trust_archive_pickle
+        )
         resolved_qd_autosave_archive = bool(
             pipeline.topology_qd_autosave_archive if qd_autosave_archive is None else qd_autosave_archive
         )
@@ -496,6 +508,7 @@ def prepare_dungeon_generation(
             qd_emitter_mutation_rate=resolved_qd_emitter_mutation_rate,
             qd_archive_path=resolved_qd_archive_path,
             qd_load_archive=resolved_qd_load_archive,
+            qd_trust_archive_pickle=resolved_qd_trust_archive_pickle,
             qd_autosave_archive=resolved_qd_autosave_archive,
             max_lock_key_rules=resolved_max_lock_key_rules,
             enable_rule_credit_assignment=resolved_enable_rule_credit_assignment,
@@ -911,6 +924,7 @@ def generate_dungeon(
     qd_emitter_mutation_rate: Optional[float] = None,
     qd_archive_path: Optional[str] = None,
     qd_load_archive: Optional[bool] = None,
+    qd_trust_archive_pickle: Optional[bool] = None,
     qd_autosave_archive: Optional[bool] = None,
     max_lock_key_rules: Optional[int] = None,
     enable_rule_credit_assignment: Optional[bool] = None,
@@ -1035,6 +1049,7 @@ def generate_dungeon(
         qd_emitter_mutation_rate=qd_emitter_mutation_rate,
         qd_archive_path=qd_archive_path,
         qd_load_archive=qd_load_archive,
+        qd_trust_archive_pickle=qd_trust_archive_pickle,
         qd_autosave_archive=qd_autosave_archive,
         max_lock_key_rules=max_lock_key_rules,
         enable_rule_credit_assignment=enable_rule_credit_assignment,

@@ -25,6 +25,7 @@ from src.core.definitions import (
     SEMANTIC_PALETTE,
     TileID,
 )
+from src.core.graph_grid_attention import GraphToGridCrossAttention
 
 logger = logging.getLogger(__name__)
 
@@ -314,6 +315,43 @@ class DiscreteMaskedRoomModel(nn.Module):
                 f"got {context_attention_mode!r}."
             )
         self.context_attention_mode = mode
+        topology_mode = str(topology_conditioning_mode).strip().lower()
+        if topology_mode in {"graph", "cross_attention", "spatial_graph"}:
+            topology_mode = "graph_cross_attention"
+        if topology_mode not in {"additive", "graph_cross_attention"}:
+            raise ValueError(
+                "topology_conditioning_mode must be 'additive' or "
+                f"'graph_cross_attention', got {topology_conditioning_mode!r}."
+            )
+        self.topology_conditioning_mode = topology_mode
+        normalized_attention_mode = str(attention_mode).strip().lower()
+        if normalized_attention_mode not in {"softmax", "linear_hedgehog"}:
+            raise ValueError(
+                "attention_mode must be 'softmax' or 'linear_hedgehog', "
+                f"got {attention_mode!r}."
+            )
+        if self.topology_conditioning_mode == "additive" and normalized_attention_mode != "softmax":
+            raise ValueError(
+                "attention_mode only controls the graph_cross_attention ablation; "
+                "use attention_mode='softmax' with topology_conditioning_mode='additive'."
+            )
+        self.attention_mode = normalized_attention_mode
+        inactive_graph_controls = {
+            "hedgehog_feature_dim": (int(hedgehog_feature_dim), 32),
+            "graph_auto_linear_attention_nodes": (int(graph_auto_linear_attention_nodes), 128),
+            "spatial_graph_gate_init": (float(spatial_graph_gate_init), -2.0),
+        }
+        changed_inactive_graph_controls = [
+            name
+            for name, (value, default) in inactive_graph_controls.items()
+            if value != default
+        ]
+        if self.topology_conditioning_mode == "additive" and changed_inactive_graph_controls:
+            raise ValueError(
+                "The additive baseline does not execute graph-to-grid attention; "
+                "these controls must remain at defaults unless topology_conditioning_mode="
+                f"'graph_cross_attention': {changed_inactive_graph_controls}."
+            )
         self.mask_token_id = int(self.num_classes if mask_token_id is None else mask_token_id)
         self.vocab_size = int(max(self.mask_token_id + 1, self.num_classes + 1))
 
@@ -325,11 +363,6 @@ class DiscreteMaskedRoomModel(nn.Module):
 
         ignored_legacy_args = {
             "model_channels": (model_channels, 64),
-            "attention_mode": (attention_mode, "softmax"),
-            "topology_conditioning_mode": (topology_conditioning_mode, "additive"),
-            "hedgehog_feature_dim": (hedgehog_feature_dim, 32),
-            "graph_auto_linear_attention_nodes": (graph_auto_linear_attention_nodes, 128),
-            "spatial_graph_gate_init": (spatial_graph_gate_init, -2.0),
             "spatial_topology_gate_init": (spatial_topology_gate_init, -2.0),
             "unet_attention_resolutions": (tuple(unet_attention_resolutions), (0, 1)),
         }
@@ -353,6 +386,23 @@ class DiscreteMaskedRoomModel(nn.Module):
             room_topology_channels=room_topology_channels,
             context_attention_mode=self.context_attention_mode,
         )
+        if self.topology_conditioning_mode == "graph_cross_attention":
+            self.graph_grid_attention: Optional[GraphToGridCrossAttention] = GraphToGridCrossAttention(
+                grid_dim=self.hidden_dim,
+                graph_dim=self.context_dim,
+                num_heads=int(unet_num_heads),
+                dropout=float(unet_dropout),
+                attention_mode=self.attention_mode,
+                hedgehog_feature_dim=int(hedgehog_feature_dim),
+                auto_linear_attention_nodes=int(graph_auto_linear_attention_nodes),
+                use_edge_semantics=False,
+            )
+            self.spatial_graph_gate = nn.Parameter(
+                torch.tensor(float(spatial_graph_gate_init), dtype=torch.float32)
+            )
+        else:
+            self.graph_grid_attention = None
+            self.register_parameter("spatial_graph_gate", None)
         self.classifier = nn.Conv2d(self.hidden_dim, self.num_classes, kernel_size=1)
 
         # --- Edge-Aware Logit Bias ---
@@ -428,12 +478,27 @@ class DiscreteMaskedRoomModel(nn.Module):
         }
 
     def attention_complexity_metrics(self, context_tokens: int) -> Dict[str, float]:
-        return self.backbone.attention_complexity_metrics(
+        metrics = self.backbone.attention_complexity_metrics(
             context_tokens=int(context_tokens),
             room_height=ROOM_HEIGHT,
             room_width=ROOM_WIDTH,
             mode=self.context_attention_mode,
         )
+        graph_pairs = (
+            ROOM_HEIGHT * ROOM_WIDTH * int(max(0, context_tokens))
+            if self.graph_grid_attention is not None
+            else 0
+        )
+        metrics.update(
+            {
+                "graph_grid_attention_enabled": float(self.graph_grid_attention is not None),
+                "graph_grid_attention_pairs": float(graph_pairs),
+                "total_attention_pairs_with_graph_grid": float(
+                    metrics["total_attention_pairs"] + graph_pairs
+                ),
+            }
+        )
+        return metrics
 
     @staticmethod
     def _build_generator(*, device: torch.device, seed: Optional[int]) -> Optional[torch.Generator]:
@@ -876,62 +941,25 @@ class DiscreteMaskedRoomModel(nn.Module):
         fixed_tokens[door_mask] = tokens[door_mask].clamp(0, num_classes - 1)
         return fixed_tokens, fixed_mask
 
-    def _extract_context_topology(
-        self,
-        context: Tensor,
-        graph_data: Optional[Dict[str, Tensor]],
-    ) -> Tuple[Optional[Tensor], Optional[Tensor]]:
-        if graph_data is None or context.dim() != 3:
-            return None, None
-        edge_index = graph_data.get("edge_index")
-        if not isinstance(edge_index, torch.Tensor):
-            return None, None
-
-        batch_size = int(context.shape[0])
-        adjusted = edge_index.to(context.device)
-        if adjusted.dim() == 2:
-            adjusted = adjusted.unsqueeze(0)
-            if batch_size > 1:
-                adjusted = adjusted.expand(batch_size, -1, -1)
-        elif adjusted.dim() == 3 and int(adjusted.shape[0]) == 1 and batch_size > 1:
-            adjusted = adjusted.expand(batch_size, -1, -1)
-        if adjusted.dim() != 3 or int(adjusted.shape[0]) != batch_size or int(adjusted.shape[1]) != 2:
-            raise ValueError(
-                f"edge_index shape {tuple(adjusted.shape)} must match [B,2,E] for batch size {batch_size}."
-            )
-        node_mask = graph_data.get("node_mask")
-        if isinstance(node_mask, torch.Tensor):
-            node_mask = node_mask.to(context.device)
-            if node_mask.dim() == 1:
-                node_mask = node_mask.unsqueeze(0)
-                if batch_size > 1:
-                    node_mask = node_mask.expand(batch_size, -1)
-            if node_mask.dim() != 2 or int(node_mask.shape[0]) != batch_size:
-                raise ValueError(
-                    f"node_mask shape {tuple(node_mask.shape)} must match context batch size {batch_size}."
-                )
-        else:
-            node_mask = None
-
-        has_room_anchor = bool(graph_data.get("has_room_anchor", False))
-        if has_room_anchor:
-            adjusted = adjusted + 1
-            if node_mask is not None:
-                anchor = torch.ones(node_mask.shape[0], 1, device=node_mask.device, dtype=node_mask.dtype)
-                node_mask = torch.cat([anchor, node_mask], dim=1)
-
-        return adjusted, node_mask
-
     def _extract_spatial_graph_context(
         self,
         context: Tensor,
         graph_data: Optional[Dict[str, Tensor]],
-    ) -> Optional[Dict[str, Tensor]]:
+    ) -> Dict[str, Tensor]:
+        if context.dim() != 3:
+            raise ModelContextContractError(
+                "graph_cross_attention requires node-sequence context with shape [B,N,C]; "
+                f"got {tuple(context.shape)}."
+            )
         if not isinstance(graph_data, dict):
-            return None
+            raise ModelContextContractError(
+                "graph_cross_attention requires graph_data with node_features, edge_index, and node_mask."
+            )
         node_features = graph_data.get("node_features")
         if not isinstance(node_features, torch.Tensor):
-            return None
+            raise ModelContextContractError(
+                "graph_cross_attention requires graph_data['node_features'] to establish node alignment."
+            )
 
         batch_size = int(context.shape[0])
         node_features = node_features.to(context.device)
@@ -940,20 +968,20 @@ class DiscreteMaskedRoomModel(nn.Module):
             if batch_size > 1:
                 node_features = node_features.expand(batch_size, -1, -1)
         if int(node_features.shape[0]) != batch_size:
-            raise ValueError(
+            raise ModelContextContractError(
                 f"node_features batch size {int(node_features.shape[0])} does not match context batch size {batch_size}."
             )
         num_nodes = int(node_features.shape[1])
         spatial: Dict[str, Tensor] = {}
         has_room_anchor = bool(graph_data.get("has_room_anchor", False))
 
-        if context.dim() == 3:
-            needed = num_nodes + (1 if has_room_anchor else 0)
-            if int(context.shape[1]) < needed:
-                raise ValueError(
-                    f"context sequence length {int(context.shape[1])} is too short for {num_nodes} graph nodes."
-                )
-            spatial["graph_nodes"] = context[:, 1:1 + num_nodes, :] if has_room_anchor else context[:, :num_nodes, :]
+        needed = num_nodes + (1 if has_room_anchor else 0)
+        if int(context.shape[1]) != needed:
+            raise ModelContextContractError(
+                f"context sequence length {int(context.shape[1])} must equal {needed} "
+                f"for {num_nodes} graph nodes and has_room_anchor={has_room_anchor}."
+            )
+        spatial["graph_nodes"] = context[:, 1:] if has_room_anchor else context
 
         node_mask = graph_data.get("node_mask")
         if isinstance(node_mask, torch.Tensor):
@@ -963,7 +991,7 @@ class DiscreteMaskedRoomModel(nn.Module):
                 if batch_size > 1:
                     node_mask = node_mask.expand(batch_size, -1)
             if tuple(node_mask.shape) != (batch_size, num_nodes):
-                raise ValueError(
+                raise ModelContextContractError(
                     f"node_mask shape {tuple(node_mask.shape)} must match [B,N]=({batch_size},{num_nodes})."
                 )
             spatial["node_mask"] = node_mask
@@ -988,15 +1016,15 @@ class DiscreteMaskedRoomModel(nn.Module):
                 if batch_size > 1:
                     value = value.expand(batch_size, -1, -1, -1)
             if key == "edge_index" and (value.dim() != 3 or int(value.shape[1]) != 2):
-                raise ValueError(
+                raise ModelContextContractError(
                     f"edge_index shape {tuple(value.shape)} must match [B,2,E] for batch size {batch_size}."
                 )
             if int(value.shape[0]) != batch_size:
-                raise ValueError(
+                raise ModelContextContractError(
                     f"{key} batch size {int(value.shape[0])} does not match context batch size {batch_size}."
                 )
             spatial["node_tpe" if key == "tpe" else key] = value
-        return spatial or None
+        return spatial
 
     def _embed_tokens(self, tokens: Tensor) -> Tensor:
         x = self.token_embedding(tokens.long())  # [B,H,W,C]
@@ -1021,6 +1049,29 @@ class DiscreteMaskedRoomModel(nn.Module):
             context,
             graph_data=graph_data,
         )
+        if self.graph_grid_attention is not None:
+            spatial = self._extract_spatial_graph_context(context, graph_data)
+            graph_nodes = spatial.get("graph_nodes")
+            edge_index = spatial.get("edge_index")
+            if not isinstance(graph_nodes, torch.Tensor) or not isinstance(edge_index, torch.Tensor):
+                raise ModelContextContractError(
+                    "graph_cross_attention requires node-aligned context and graph_data['edge_index']; "
+                    "refusing to silently degrade to additive conditioning."
+                )
+            conditioned = self.graph_grid_attention(
+                hidden,
+                graph_nodes,
+                edge_index=edge_index,
+                node_positions=spatial.get("node_positions"),
+                node_tpe=spatial.get("node_tpe"),
+                current_node_distance=spatial.get("current_node_distance"),
+                node_mask=spatial.get("node_mask"),
+            )
+            gate = torch.sigmoid(self.spatial_graph_gate).to(
+                device=hidden.device,
+                dtype=hidden.dtype,
+            )
+            hidden = hidden + gate * (conditioned - hidden)
         logits = self.classifier(hidden)
         if return_hidden:
             return logits, hidden
@@ -1320,5 +1371,6 @@ def create_discrete_masked_model(
 
 __all__ = [
     "DiscreteMaskedRoomModel",
+    "ModelContextContractError",
     "create_discrete_masked_model",
 ]

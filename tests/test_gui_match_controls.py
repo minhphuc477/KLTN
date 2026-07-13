@@ -1,6 +1,6 @@
 ﻿from types import SimpleNamespace
 
-from src.gui.controls.match_controls import apply_tentative_matches, match_missing_nodes, undo_last_match
+from src.gui.topology.match_controls import apply_tentative_matches, match_missing_nodes, undo_last_match
 
 
 class _Logger:

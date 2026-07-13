@@ -1,6 +1,6 @@
 ﻿from types import SimpleNamespace
 
-from src.gui.overlay.inventory_manager import (
+from src.gui.gameplay.inventory_manager import (
     remove_from_path_items,
     sync_inventory_counters,
     track_item_usage,

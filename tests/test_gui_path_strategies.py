@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from src.gui.services.path_strategies import graph_guided_path, hybrid_graph_grid_path, smart_grid_path
+from src.gui.gameplay.path_strategies import graph_guided_path, hybrid_graph_grid_path, smart_grid_path
 
 
 class _Logger:

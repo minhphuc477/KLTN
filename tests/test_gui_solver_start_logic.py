@@ -1,4 +1,4 @@
-﻿from src.gui.services.solver_start_logic import (
+﻿from src.gui.solver.start_logic import (
     default_solver_timeout_for_algorithm,
     evaluate_solver_recovery_state,
     scale_timeout_by_grid_size,

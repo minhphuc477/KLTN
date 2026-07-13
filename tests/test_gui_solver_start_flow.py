@@ -1,4 +1,4 @@
-﻿from src.gui.services.solver_start_flow import start_auto_solve
+﻿from src.gui.solver.start_flow import start_auto_solve
 
 
 class DummyLogger:

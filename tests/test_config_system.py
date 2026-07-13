@@ -172,6 +172,31 @@ def test_config_accepts_masked_room_context_attention_ablation(tmp_path: Path):
     assert kwargs["context_attention_mode"] == "cross_decoder"
 
 
+def test_config_accepts_masked_room_graph_to_grid_attention_ablation(tmp_path: Path):
+    cfg_path = tmp_path / "masked_graph_cross_attention.yaml"
+    _write_yaml(
+        cfg_path,
+        {
+            "masked_room": {
+                "topology_conditioning_mode": "graph_cross_attention",
+                "attention_mode": "linear_hedgehog",
+                "hedgehog_feature_dim": 24,
+                "graph_auto_linear_attention_nodes": 64,
+                "spatial_graph_gate_init": -1.5,
+            }
+        },
+    )
+
+    resolved = merge_config(yaml_path=str(cfg_path), cli_overrides=None)
+    kwargs = masked_room_training_kwargs_from_resolved_config(resolved)
+
+    assert kwargs["topology_conditioning_mode"] == "graph_cross_attention"
+    assert kwargs["attention_mode"] == "linear_hedgehog"
+    assert kwargs["hedgehog_feature_dim"] == 24
+    assert kwargs["graph_auto_linear_attention_nodes"] == 64
+    assert kwargs["spatial_graph_gate_init"] == pytest.approx(-1.5)
+
+
 def test_diffusion_unet_list_fields_merge_from_yaml_and_cli(tmp_path: Path):
     cfg_path = tmp_path / "config.yaml"
     _write_yaml(
@@ -1432,6 +1457,7 @@ def test_topology_helper_preserves_yaml_generation_knobs(tmp_path: Path):
                 "qd_emitter_mutation_rate": 0.27,
                 "qd_archive_path": "results/topology_qd.pkl",
                 "qd_load_archive": True,
+                "qd_trust_archive_pickle": True,
                 "qd_autosave_archive": True,
                 "max_lock_key_rules": 2,
                 "enable_rule_credit_assignment": True,
@@ -1459,6 +1485,7 @@ def test_topology_helper_preserves_yaml_generation_knobs(tmp_path: Path):
     assert kwargs["qd_emitter_mutation_rate"] == pytest.approx(0.27)
     assert kwargs["qd_archive_path"] == "results/topology_qd.pkl"
     assert kwargs["qd_load_archive"] is True
+    assert kwargs["qd_trust_archive_pickle"] is True
     assert kwargs["qd_autosave_archive"] is True
     assert kwargs["max_lock_key_rules"] == 2
     assert kwargs["enable_rule_credit_assignment"] is True

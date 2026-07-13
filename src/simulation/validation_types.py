@@ -16,6 +16,7 @@ class ValidationResult:
     path_length: int
     backtracking_score: float
     logical_errors: List[str]
+    path_cost: Optional[float] = None
     path: List[Tuple[int, int]] = field(default_factory=list)
     error_message: str = ""
     solver_used: str = "astar"
@@ -26,9 +27,13 @@ class ValidationResult:
     proven_unsolvable: bool = False
     final_inventory: Optional[Dict[str, Any]] = None
     path_interactions: Dict[str, int] = field(default_factory=dict)
+    route_replay_status: str = "not_run"
+    route_replay_error: str = ""
+    route_replay_path_cost: Optional[float] = None
     solver_consistency_status: str = "not_requested"
     solver_consistent: Optional[bool] = None
     solver_consistency_path_length: Optional[int] = None
+    solver_consistency_path_cost: Optional[float] = None
     solver_consistency_states_explored: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
@@ -37,6 +42,7 @@ class ValidationResult:
             "is_valid_syntax": self.is_valid_syntax,
             "reachability": self.reachability,
             "path_length": self.path_length,
+            "path_cost": self.path_cost,
             "backtracking_score": self.backtracking_score,
             "logical_errors": self.logical_errors,
             "error_message": self.error_message,
@@ -44,9 +50,13 @@ class ValidationResult:
             "proven_unsolvable": self.proven_unsolvable,
             "final_inventory": dict(self.final_inventory or {}),
             "path_interactions": dict(self.path_interactions or {}),
+            "route_replay_status": self.route_replay_status,
+            "route_replay_error": self.route_replay_error,
+            "route_replay_path_cost": self.route_replay_path_cost,
             "solver_consistency_status": self.solver_consistency_status,
             "solver_consistent": self.solver_consistent,
             "solver_consistency_path_length": self.solver_consistency_path_length,
+            "solver_consistency_path_cost": self.solver_consistency_path_cost,
             "solver_consistency_states_explored": self.solver_consistency_states_explored,
         }
 
@@ -86,8 +96,12 @@ class SolverDiagnostics:
     time_taken_ms: float = 0.0
     failure_reason: str = ""
     path_length: int = 0
+    path_cost: Optional[float] = None
     final_inventory: Optional[Dict[str, Any]] = None
     termination_status: str = "unknown"
+    route_replay_status: str = "not_run"
+    route_replay_error: str = ""
+    route_replay_path_cost: Optional[float] = None
 
     def summary(self) -> str:
         status = "SUCCESS" if self.success else f"FAILED: {self.failure_reason}"

@@ -1,4 +1,4 @@
-﻿from src.gui.controls.runtime_flags import load_runtime_flags
+﻿from src.gui.runtime.flags import load_runtime_flags
 
 
 def test_load_runtime_flags_defaults(monkeypatch):

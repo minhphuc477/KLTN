@@ -54,8 +54,15 @@ def _score_puzzle_stage_semantics(
     graph_data: Mapping[str, Any],
     *,
     room_id: Any,
+    stage: str = "raw",
+    enforce_reject: bool = True,
 ) -> Dict[str, float]:
-    """Report or selectively reject pre-repair logits using the trained auxiliary head."""
+    """Score raw or constrained logits using a proven-trained auxiliary head.
+
+    Reject mode is intentionally applied to the raw neural decode by the caller.
+    Target-aware constrained decoding is reported separately so publication
+    metrics cannot mistake deterministic intervention for model capability.
+    """
     mode = str(
         getattr(pipeline, "default_puzzle_stage_semantics_validation_mode", "off") or "off"
     ).strip().lower()
@@ -63,6 +70,12 @@ def _score_puzzle_stage_semantics(
         return {}
     if mode not in {"report", "reject"}:
         raise ValueError(f"Unsupported puzzle-stage semantics validation mode: {mode!r}.")
+    normalized_stage = str(stage or "raw").strip().lower()
+    if normalized_stage not in {"raw", "constrained"}:
+        raise ValueError(
+            f"Unsupported puzzle-stage semantics scoring stage: {stage!r}."
+        )
+    metric_prefix = f"puzzle_stage_semantics_{normalized_stage}"
 
     condition = graph_data.get("puzzle_stage_condition") if isinstance(graph_data, Mapping) else None
     condition_available = float(isinstance(condition, Mapping) and bool(condition))
@@ -70,6 +83,8 @@ def _score_puzzle_stage_semantics(
     metrics = {
         "puzzle_stage_semantics_condition_available": condition_available,
         "puzzle_stage_semantics_head_loaded": float(head is not None),
+        f"{metric_prefix}_condition_available": condition_available,
+        f"{metric_prefix}_head_loaded": float(head is not None),
     }
     if condition_available == 0.0:
         return metrics
@@ -82,31 +97,37 @@ def _score_puzzle_stage_semantics(
 
     scores = head.score_expected_semantics(logits, [condition])
     scalar_keys = {
-        "joint_confidence": "puzzle_stage_semantics_joint_confidence",
-        "gate_confidence": "puzzle_stage_semantics_gate_confidence",
-        "sequence_confidence": "puzzle_stage_semantics_sequence_confidence",
-        "count_confidence": "puzzle_stage_semantics_count_confidence",
-        "slot_confidence": "puzzle_stage_semantics_slot_confidence",
-        "exact_match": "puzzle_stage_semantics_exact_match",
+        "joint_confidence": "joint_confidence",
+        "gate_confidence": "gate_confidence",
+        "sequence_confidence": "sequence_confidence",
+        "count_confidence": "count_confidence",
+        "slot_confidence": "slot_confidence",
+        "exact_match": "exact_match",
     }
-    for source_key, metric_key in scalar_keys.items():
+    for source_key, metric_suffix in scalar_keys.items():
         value = scores[source_key]
         if not isinstance(value, torch.Tensor) or value.numel() != 1:
             raise RuntimeError(
                 f"Puzzle-stage semantics head returned invalid {source_key!r} shape."
             )
-        metrics[metric_key] = float(value.detach().float().item())
+        scalar = float(value.detach().float().item())
+        metrics[f"{metric_prefix}_{metric_suffix}"] = scalar
+        # Preserve the established metric names as raw-neural aliases. These
+        # aliases used to be measured after target-aware constrained decoding.
+        if normalized_stage == "raw":
+            metrics[f"puzzle_stage_semantics_{metric_suffix}"] = scalar
 
-    if mode == "reject":
+    if mode == "reject" and bool(enforce_reject):
         threshold = getattr(pipeline, "default_puzzle_stage_semantics_min_confidence", None)
         if threshold is None:
             raise PuzzleStageSemanticsValidationError(
                 "Puzzle-stage semantics reject mode requires a calibrated confidence threshold."
             )
-        if metrics["puzzle_stage_semantics_joint_confidence"] < float(threshold):
+        confidence = metrics[f"{metric_prefix}_joint_confidence"]
+        if confidence < float(threshold):
             raise PuzzleStageSemanticsValidationError(
                 f"Room {room_id!r} puzzle-stage semantics confidence "
-                f"{metrics['puzzle_stage_semantics_joint_confidence']:.6f} is below "
+                f"{confidence:.6f} is below "
                 f"the calibrated threshold {float(threshold):.6f}."
             )
     return metrics
@@ -406,9 +427,18 @@ def generate_room_batch(
             raise ValueError(f"Inconsistent condition tensor ranks inside batch: {dims}")
         condition_batch = torch.cat(batch_conditions, dim=0)
     first_room_graph_context = per_room_inputs[0]['graph_context']
+    room_anchor_flags = {
+        bool(inp['graph_context'].get('has_room_anchor', False))
+        for inp in per_room_inputs
+    }
+    if len(room_anchor_flags) != 1:
+        raise ValueError(
+            "Batched room conditions disagree on has_room_anchor; refusing to misalign graph tokens."
+        )
 
     graph_ctx_for_guidance = {
         'graph_scope': 'dungeon',
+        'has_room_anchor': room_anchor_flags.pop(),
         'node_features': graph_data.get('node_features'),
         'edge_index': graph_data.get('edge_index'),
         'edge_features': graph_data.get('edge_features'),
@@ -1063,6 +1093,17 @@ def generate_room(
         ),
     )
 
+    # Measure the unmodified neural output before any graph-derived door clamp
+    # or semantic marker bias. This is the defensible raw-capability number.
+    puzzle_stage_semantics_metrics = _score_puzzle_stage_semantics(
+        pipeline,
+        logits,
+        graph_data,
+        room_id=room_id,
+        stage="raw",
+        enforce_reject=True,
+    )
+
     post_decode_started_at = time.perf_counter()
 
     # BLOCK II.a: Topology-Enforced Constrained Decoding
@@ -1130,12 +1171,25 @@ def generate_room(
             int(semantic_decode_stats.get("planned_markers", 0)),
         )
 
-    puzzle_stage_semantics_metrics = _score_puzzle_stage_semantics(
+    constrained_semantics_metrics = _score_puzzle_stage_semantics(
         pipeline,
         logits,
         graph_data,
         room_id=room_id,
+        stage="constrained",
+        enforce_reject=False,
     )
+    puzzle_stage_semantics_metrics.update(constrained_semantics_metrics)
+    raw_confidence = puzzle_stage_semantics_metrics.get(
+        "puzzle_stage_semantics_raw_joint_confidence"
+    )
+    constrained_confidence = puzzle_stage_semantics_metrics.get(
+        "puzzle_stage_semantics_constrained_joint_confidence"
+    )
+    if raw_confidence is not None and constrained_confidence is not None:
+        puzzle_stage_semantics_metrics[
+            "puzzle_stage_semantics_constraint_confidence_delta"
+        ] = float(constrained_confidence) - float(raw_confidence)
 
     neural_grid = logits.argmax(dim=1).detach().cpu().numpy()[0]  # (16, 11)
     if effective_room_generator_mode == "discrete_masked" and sampled_tokens is not None:

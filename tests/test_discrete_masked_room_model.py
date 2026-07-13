@@ -5,7 +5,11 @@ import pytest
 import torch
 
 from src.core.definitions import ROOM_HEIGHT, ROOM_TOPOLOGY_CHANNELS, ROOM_WIDTH, SEMANTIC_PALETTE
-from src.core.discrete_masked_model import DiscreteMaskedRoomModel, create_discrete_masked_model
+from src.core.discrete_masked_model import (
+    DiscreteMaskedRoomModel,
+    ModelContextContractError,
+    create_discrete_masked_model,
+)
 from src.pipeline.dungeon_pipeline import NeuralSymbolicDungeonPipeline
 from src.pipeline.room_topology_conditioning import build_room_semantic_anchor_points
 from src.train_masked_room import (
@@ -319,6 +323,84 @@ def test_masked_context_attention_ablation_reports_attention_pair_metrics():
     assert base_metrics["total_attention_pairs"] == base_metrics["baseline_concat_attention_pairs"]
     assert ablation_metrics["total_attention_pairs"] < base_metrics["total_attention_pairs"]
     assert 0.0 < ablation_metrics["relative_to_concat"] < 1.0
+
+
+def _masked_graph_attention_inputs(*, context_dim: int = 8):
+    context = torch.randn(1, 4, context_dim)
+    graph_data = {
+        "node_features": torch.randn(1, 4, 14),
+        "edge_index": torch.tensor([[[0, 1, 2], [1, 2, 3]]], dtype=torch.long),
+        "node_mask": torch.tensor([[True, True, True, True]]),
+        "node_positions": torch.tensor(
+            [[[0.0, 0.0], [0.0, 1.0], [1.0, 1.0], [1.0, 2.0]]]
+        ),
+        "tpe": torch.randn(1, 4, 8),
+        "current_node_distance": torch.randn(1, 4, 4),
+    }
+    return context, graph_data
+
+
+@pytest.mark.parametrize("attention_mode", ["softmax", "linear_hedgehog"])
+def test_masked_graph_to_grid_attention_ablation_runs_and_backpropagates(attention_mode: str):
+    model = create_discrete_masked_model(
+        num_classes=44,
+        hidden_dim=16,
+        context_dim=8,
+        num_steps=2,
+        topology_conditioning_mode="graph_cross_attention",
+        attention_mode=attention_mode,
+        unet_channel_mult=(1,),
+        unet_num_res_blocks=1,
+        unet_num_heads=4,
+        unet_dropout=0.0,
+    )
+    tokens = torch.zeros(1, ROOM_HEIGHT, ROOM_WIDTH, dtype=torch.long)
+    step = torch.zeros(1, dtype=torch.long)
+    context, graph_data = _masked_graph_attention_inputs()
+
+    logits = model(tokens, step, context, graph_data=graph_data)
+    logits.square().mean().backward()
+
+    assert logits.shape == (1, 44, ROOM_HEIGHT, ROOM_WIDTH)
+    assert torch.isfinite(logits).all()
+    assert model.graph_grid_attention is not None
+    assert model.spatial_graph_gate.grad is not None
+    assert torch.isfinite(model.spatial_graph_gate.grad).all()
+    assert model.graph_grid_attention.q_proj.weight.grad is not None
+
+
+def test_masked_graph_to_grid_attention_fails_closed_without_aligned_graph_data():
+    model = create_discrete_masked_model(
+        hidden_dim=16,
+        context_dim=8,
+        topology_conditioning_mode="graph_cross_attention",
+        unet_num_heads=4,
+    )
+    tokens = torch.zeros(1, ROOM_HEIGHT, ROOM_WIDTH, dtype=torch.long)
+    step = torch.zeros(1, dtype=torch.long)
+    context = torch.randn(1, 4, 8)
+
+    with pytest.raises(ModelContextContractError, match="requires graph_data"):
+        model(tokens, step, context)
+
+
+def test_masked_graph_to_grid_attention_reports_extra_attention_cost():
+    baseline = create_discrete_masked_model(context_dim=8, hidden_dim=16)
+    graph_ablation = create_discrete_masked_model(
+        context_dim=8,
+        hidden_dim=16,
+        topology_conditioning_mode="graph_cross_attention",
+    )
+
+    baseline_metrics = baseline.attention_complexity_metrics(context_tokens=32)
+    graph_metrics = graph_ablation.attention_complexity_metrics(context_tokens=32)
+
+    assert baseline_metrics["graph_grid_attention_enabled"] == 0.0
+    assert graph_metrics["graph_grid_attention_enabled"] == 1.0
+    assert graph_metrics["graph_grid_attention_pairs"] == pytest.approx(
+        float(ROOM_HEIGHT * ROOM_WIDTH * 32)
+    )
+    assert graph_metrics["total_attention_pairs_with_graph_grid"] > graph_metrics["total_attention_pairs"]
 
 
 def test_masked_room_token_conversion_accepts_raw_and_normalized_maps():
@@ -837,6 +919,7 @@ def test_masked_room_trainer_passes_configurable_mask_schedule(monkeypatch):
         unet_num_heads=4,
     )
     trainer = MaskedRoomTrainer(config)
+    assert trainer.puzzle_stage_semantics_head is None
     captured = {}
 
     def _fake_training_loss(*args, **kwargs):

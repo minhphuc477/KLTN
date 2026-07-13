@@ -12,12 +12,11 @@ This module provides:
 
 """
 
-import os
 import heapq
 import logging
 import math
 import numpy as np
-from typing import Dict, List, Tuple, Optional, Set, Any, FrozenSet, Mapping
+from typing import Dict, List, Tuple, Optional, Set, Any, FrozenSet, Mapping, Sequence
 from collections import defaultdict, deque
 
 # Import semantic palette from CANONICAL source: src.core.definitions
@@ -39,6 +38,7 @@ from src.simulation.validation_helpers import (
     MetricsEngine,
     DiversityEvaluator,
 )
+from src.simulation import validator_rendering as _validator_rendering
 from src.simulation.state import (  # noqa: F401 - compatibility re-exports
     ACTION_DELTAS,
     BLOCKING_IDS,
@@ -154,6 +154,7 @@ class ZeldaLogicEnv:
             bomb_count=self.solver_options.start_bombs,
             has_boss_key=self.solver_options.start_boss_key,
             has_item=self.solver_options.start_item,
+            item_names={"*"} if self.solver_options.start_item else set(),
             current_floor=self.floor_for_position(
                 self.start_pos if self.start_pos else (0, 0),
                 default=0,
@@ -216,6 +217,31 @@ class ZeldaLogicEnv:
     def get_room_for_position(self, pos: Tuple[int, int]) -> Optional[Tuple[int, int]]:
         return self._get_room_for_position(pos)
 
+    @staticmethod
+    def _normalize_item_name(value: Any) -> Optional[str]:
+        text = str(value or "").strip().upper()
+        return text or None
+
+    def _item_names_for_position(self, pos: Tuple[int, int]) -> Set[str]:
+        """Resolve typed graph-item identities represented by a KEY_ITEM tile."""
+        room = self._get_room_for_position(tuple(pos))
+        if room is None or not self.room_to_node or self.graph is None:
+            return {"*"}
+        node_id = self.room_to_node.get(room)
+        if node_id is None or node_id not in self.graph:
+            return {"*"}
+        attrs = dict(self.graph.nodes[node_id])
+        names = {
+            normalized
+            for normalized in (
+                self._normalize_item_name(attrs.get("item_type")),
+                self._normalize_item_name(attrs.get("protection_item_id")),
+                self._normalize_item_name(attrs.get("item_id")),
+            )
+            if normalized is not None
+        }
+        return names or {"*"}
+
     def is_room_cleared(self, room_pos: Optional[Tuple[int, int]], state: GameState) -> bool:
         return self._is_room_cleared(room_pos, state)
 
@@ -250,6 +276,7 @@ class ZeldaLogicEnv:
             new_state.has_boss_key = True
         elif int(tile) == SEMANTIC_PALETTE['KEY_ITEM']:
             new_state.has_item = True
+            new_state.item_names.update(self._item_names_for_position(pos))
         elif int(tile) == SEMANTIC_PALETTE['ITEM_MINOR']:
             new_state.bomb_count = state.bomb_count + 4
         return new_state, 0.0, {'msg': 'Picked up exposed item', 'item': ID_TO_NAME.get(int(tile), str(tile))}
@@ -480,6 +507,7 @@ class ZeldaLogicEnv:
             bomb_count=self.solver_options.start_bombs,
             has_boss_key=self.solver_options.start_boss_key,
             has_item=self.solver_options.start_item,
+            item_names={"*"} if self.solver_options.start_item else set(),
             current_floor=self.floor_for_position(
                 self.start_pos if self.start_pos else (0, 0),
                 default=0,
@@ -770,6 +798,7 @@ class ZeldaLogicEnv:
         
         if tile == SEMANTIC_PALETTE['KEY_ITEM']:
             state.has_item = True
+            state.item_names.update(self._item_names_for_position(pos))
             self.grid[pos] = SEMANTIC_PALETTE['FLOOR']
             return state, 10.0, {'msg': 'Picked up key item', 'item': 'key_item'}
         
@@ -959,6 +988,9 @@ class ZeldaLogicEnv:
                     new_state.has_boss_key = True
                 elif target_tile == SEMANTIC_PALETTE['KEY_ITEM']:
                     new_state.has_item = True
+                    new_state.item_names.update(
+                        self._item_names_for_position(target_pos)
+                    )
                 elif target_tile == SEMANTIC_PALETTE['ITEM_MINOR']:
                     # ITEM_MINOR represents bomb pickups in VGLC Zelda dungeons
                     new_state.bomb_count = state.bomb_count + 4  # Consumable: add 4 bombs
@@ -1107,127 +1139,19 @@ class ZeldaLogicEnv:
     
     def _init_render(self):
         """Initialize Pygame rendering."""
-        try:
-            import pygame
-            pygame.init()  # pylint: disable=no-member
-            
-            self.TILE_SIZE = 32
-            screen_w = self.width * self.TILE_SIZE
-            screen_h = self.height * self.TILE_SIZE + 60  # Extra space for HUD
-            
-            self._screen = pygame.display.set_mode((screen_w, screen_h))
-            pygame.display.set_caption("ZAVE: Zelda Validation Environment")
-            self._font = pygame.font.SysFont('Arial', 18, bold=True)
-            
-            self._load_images()
-        except ImportError:
-            print("Warning: Pygame not available. Rendering disabled.")
-            self.render_mode = False
+        _validator_rendering.init_render(self)
     
     def _load_images(self):
         """Load tile images or create colored fallbacks."""
-        import pygame
-        
-        TILE_SIZE = self.TILE_SIZE
-        
-        # Color fallbacks for each tile type
-        color_map = {
-            SEMANTIC_PALETTE['VOID']: (0, 0, 0),
-            SEMANTIC_PALETTE['FLOOR']: (200, 180, 140),
-            SEMANTIC_PALETTE['WALL']: (70, 70, 150),
-            SEMANTIC_PALETTE['BLOCK']: (139, 90, 43),
-            SEMANTIC_PALETTE['DOOR_OPEN']: (50, 50, 50),
-            SEMANTIC_PALETTE['DOOR_LOCKED']: (139, 69, 19),
-            SEMANTIC_PALETTE['DOOR_BOMB']: (100, 100, 100),
-            SEMANTIC_PALETTE['DOOR_BOSS']: (200, 50, 50),
-            SEMANTIC_PALETTE['DOOR_PUZZLE']: (150, 100, 200),
-            SEMANTIC_PALETTE['ENEMY']: (200, 50, 50),
-            SEMANTIC_PALETTE['START']: (100, 200, 100),
-            SEMANTIC_PALETTE['TRIFORCE']: (255, 215, 0),
-            SEMANTIC_PALETTE['KEY_SMALL']: (255, 200, 50),
-            SEMANTIC_PALETTE['KEY_BOSS']: (200, 100, 50),
-            SEMANTIC_PALETTE['ELEMENT']: (50, 50, 200),
-            SEMANTIC_PALETTE['ELEMENT_FLOOR']: (100, 100, 200),
-        }
-        
-        assets_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'assets')
-        
-        for tile_id, color in color_map.items():
-            # Try to load image
-            tile_name = ID_TO_NAME.get(tile_id, 'unknown').lower()
-            img_path = os.path.join(assets_dir, f'{tile_name}.png')
-            
-            if os.path.exists(img_path):
-                try:
-                    img = pygame.image.load(img_path)
-                    self._images[tile_id] = pygame.transform.scale(img, (TILE_SIZE, TILE_SIZE))
-                    continue
-                except (pygame.error, OSError, ValueError, TypeError) as e:
-                    logger.debug("Could not load asset image %s: %s", img_path, e, exc_info=True)
-            
-            # Fallback: colored square
-            surf = pygame.Surface((TILE_SIZE, TILE_SIZE))
-            surf.fill(color)
-            self._images[tile_id] = surf
-        
-        # Create Link sprite
-        link_path = os.path.join(assets_dir, 'link.png')
-        if os.path.exists(link_path):
-            try:
-                img = pygame.image.load(link_path)
-                self._link_img = pygame.transform.scale(img, (TILE_SIZE, TILE_SIZE))
-            except (pygame.error, OSError, ValueError, TypeError) as e:
-                logger.debug("Could not load link asset %s: %s", link_path, e, exc_info=True)
+        _validator_rendering.load_images(self)
+
     def render(self):
         """Render current state to screen."""
-        if not self.render_mode or self._screen is None:
-            return
-        
-        import pygame
-        
-        # Clear screen
-        self._screen.fill((30, 30, 30))
-        
-        # Draw grid
-        for r in range(self.height):
-            for c in range(self.width):
-                tile_id = self.grid[r, c]
-                img = self._images.get(tile_id, self._images.get(SEMANTIC_PALETTE['FLOOR']))
-                self._screen.blit(img, (c * self.TILE_SIZE, r * self.TILE_SIZE))
-        
-        # Draw agent (Link)
-        r, c = self.state.position
-        x, y = c * self.TILE_SIZE, r * self.TILE_SIZE
-        
-        if self._link_img:
-            self._screen.blit(self._link_img, (x, y))
-        else:
-            pygame.draw.rect(self._screen, (0, 255, 0), 
-                           (x + 4, y + 4, self.TILE_SIZE - 8, self.TILE_SIZE - 8))
-        
-        # Draw HUD
-        hud_y = self.height * self.TILE_SIZE
-        pygame.draw.rect(self._screen, (0, 0, 0), 
-                        (0, hud_y, self.width * self.TILE_SIZE, 60))
-        
-        hud_text = f"Keys: {self.state.keys} | Bombs: {self.state.bomb_count} | Boss Key: {'Y' if self.state.has_boss_key else 'N'} | Steps: {self.step_count}"
-        text_surf = self._font.render(hud_text, True, (255, 255, 255))
-        self._screen.blit(text_surf, (10, hud_y + 10))
-        
-        status = "WON!" if self.won else ("DONE" if self.done else "Playing...")
-        status_surf = self._font.render(status, True, (255, 255, 0) if self.won else (255, 255, 255))
-        self._screen.blit(status_surf, (10, hud_y + 35))
-        
-        pygame.display.flip()
+        _validator_rendering.render(self)
     
     def close(self):
         """Clean up resources."""
-        if self.render_mode:
-            try:
-                import pygame
-                pygame.quit()  # pylint: disable=no-member
-            except (ImportError, RuntimeError, OSError) as e:
-                logger.debug("Error during pygame.quit(): %s", e, exc_info=True)
+        _validator_rendering.close(self)
 
 
 # ==========================================
@@ -1398,7 +1322,7 @@ class StateSpaceAStar:
         self._bomb_doors_cache = self.env.find_all_positions(SEMANTIC_PALETTE['DOOR_BOMB'])
         self._element_tiles_cache = self.env.find_all_positions(SEMANTIC_PALETTE['ELEMENT'])
 
-        # ── HIERARCHICAL SOLVER PRECOMPUTATION ──
+        # -- HIERARCHICAL SOLVER PRECOMPUTATION --
         # Precompute graph BFS distance (hops) from every node to the goal node.
         # Used by the hierarchical solver and as a tighter heuristic.
         self._graph_bfs_dist: Dict[Any, int] = {}
@@ -1510,7 +1434,7 @@ class StateSpaceAStar:
         except (AttributeError, TypeError, ValueError, KeyError) as exc:
             logger.debug("Failed to precompute node item hints; continuing without hints: %s", exc)
 
-        # ── PLAN-GUIDED HEURISTIC STATE (Upgrade 3) ──
+        # -- PLAN-GUIDED HEURISTIC STATE (Upgrade 3) --
         # Populated lazily in solve() after room-level A* runs.
         # _abstract_plan: ordered list of graph node IDs from start->goal
         # _abstract_plan_rooms: dict node->index-in-plan for O(1) lookup
@@ -1692,10 +1616,10 @@ class StateSpaceAStar:
         ---------
         1. **Graph level** - forward BFS from start-node, backward BFS
            from goal-node (reversing directed / soft-locked edges).
-           Traps = forward − backward.
+           Traps = forward - backward.
         2. **Grid level** - forward flood-fill from START position on
            the walkable tile grid, backward flood-fill from GOAL
-           (reversing one-way DOOR_SOFT tiles).  Traps = forward − backward.
+           (reversing one-way DOOR_SOFT tiles).  Traps = forward - backward.
 
         Returns
         -------
@@ -1716,7 +1640,7 @@ class StateSpaceAStar:
             'backward_grid': 0,
         }
 
-        # ── GRAPH-LEVEL ──
+        # -- GRAPH-LEVEL --
         G = getattr(self.env, 'graph', None)
         r2n = getattr(self.env, 'room_to_node', None)
         rpos = getattr(self.env, 'room_positions', None)
@@ -1793,7 +1717,7 @@ class StateSpaceAStar:
                 logger.debug('Graph reachability: fwd=%d bwd=%d traps=%d',
                              len(fwd), len(bwd), len(fwd - bwd))
 
-        # ── GRID-LEVEL ──
+        # -- GRID-LEVEL --
         grid = self.env.original_grid
         h, w = grid.shape
 
@@ -2672,6 +2596,8 @@ class StateSpaceAStar:
             states_explored: Number of states explored
         """
         self.env.reset()
+        self.last_solution_cost: Optional[float] = None
+        self.last_solution_inventory: Optional[Dict[str, Any]] = None
         
         if self.env.goal_pos is None:
             return False, [], 0
@@ -2679,7 +2605,7 @@ class StateSpaceAStar:
         if self.env.start_pos is None:
             return False, [], 0
 
-        # ── STRATEGY 1: Room-level hierarchical solver ──
+        # -- STRATEGY 1: Room-level hierarchical solver --
         # Much faster for large dungeons (D2, D9) with many rooms.
         # Operates on the graph, not the tile grid.
         graph_available = bool(
@@ -2700,7 +2626,7 @@ class StateSpaceAStar:
                 graph_states_explored += h_states
                 if h_success:
                     logger.debug('Hierarchical solver succeeded: %d states', h_states)
-                    # ── UPGRADE 3: Store abstract plan for heuristic guidance ──
+                    # -- UPGRADE 3: Store abstract plan for heuristic guidance --
                     self._populate_abstract_plan(h_path)
                     if self.representation == 'graph':
                         return True, h_path, h_states
@@ -2717,7 +2643,7 @@ class StateSpaceAStar:
             except (RuntimeError, ValueError, KeyError, TypeError) as e:
                 logger.debug('Hierarchical solver error: %s, falling back', e)
 
-        # ── STRATEGY 1.5: Macro-Action A* (POI-to-POI) ──
+        # -- STRATEGY 1.5: Macro-Action A* (POI-to-POI) --
         # Intermediate resolution: jumps between Points of Interest
         # (doors, items, stairs) with pre-computed intra-room BFS costs.
         # Much faster than tile-level but more precise than room-level.
@@ -2743,7 +2669,7 @@ class StateSpaceAStar:
             except (RuntimeError, ValueError, KeyError, TypeError) as e:
                 logger.debug('Macro-action solver error: %s, falling back', e)
 
-        # ── STRATEGY 2: Tile-level A* (original, with improvements) ──
+        # -- STRATEGY 2: Tile-level A* (original, with improvements) --
         
         if self.graph_only:
             if not graph_available:
@@ -2841,6 +2767,18 @@ class StateSpaceAStar:
             # Check win condition
             if current_state.position == self.env.goal_pos:
                 path = self._reconstruct_parent_path(parents, positions, current_key)
+                self.last_solution_cost = float(current_g)
+                self.last_solution_inventory = {
+                    'keys': current_state.keys,
+                    'bomb_count': current_state.bomb_count,
+                    'has_bomb': current_state.has_bomb,
+                    'has_boss_key': current_state.has_boss_key,
+                    'has_item': current_state.has_item,
+                    'item_names': sorted(str(name) for name in current_state.item_names),
+                    'current_floor': current_state.current_floor,
+                    'doors_opened': len(current_state.opened_doors),
+                    'items_collected': len(current_state.collected_items),
+                }
                 return True, path, states_explored
             
             # Explore neighbors using pure state-based logic (NO grid copies)
@@ -3089,6 +3027,178 @@ class StateSpaceAStar:
         path.reverse()
         return path
 
+    def verify_position_path(
+        self,
+        path: Sequence[Tuple[int, int]],
+    ) -> Tuple[bool, str, Optional[GameState], Optional[float]]:
+        """Replay a reconstructed route from a fresh state.
+
+        Position-only paths can be ambiguous when graph transitions connect the
+        same pair of tiles under different inventory states. The replay keeps a
+        small deduplicated frontier of every legal state compatible with each
+        reported position instead of choosing an arbitrary transition.
+        """
+        positions = [tuple(map(int, position)) for position in path]
+        if not positions:
+            return False, "empty route", None, None
+        if self.env.start_pos is None or positions[0] != tuple(self.env.start_pos):
+            return (
+                False,
+                f"route starts at {positions[0]}, expected {self.env.start_pos}",
+                None,
+                None,
+            )
+
+        initial_state = self.env.reset()
+        candidates: Dict[Tuple[Any, ...], Tuple[GameState, float]] = {
+            self._state_key(initial_state): (initial_state, 0.0)
+        }
+        grid = self.env.original_grid
+        height, width = grid.shape
+
+        for step_index, target_pos in enumerate(positions[1:], start=1):
+            row, col = target_pos
+            if not (0 <= row < height and 0 <= col < width):
+                return (
+                    False,
+                    f"step {step_index}: target {target_pos} is out of bounds",
+                    None,
+                    None,
+                )
+
+            next_candidates: Dict[Tuple[Any, ...], Tuple[GameState, float]] = {}
+            target_tile = int(grid[row, col])
+            for state, accumulated_cost in candidates.values():
+                current_pos = tuple(state.position)
+                current_row, current_col = current_pos
+                delta_row = abs(row - current_row)
+                delta_col = abs(col - current_col)
+                transition_specs: list[Tuple[Optional[str], float]] = []
+
+                if delta_row + delta_col == 1:
+                    transition_specs.append((None, float(CARDINAL_COST)))
+                elif (
+                    self.allow_diagonals
+                    and delta_row == 1
+                    and delta_col == 1
+                ):
+                    vertical_tile = int(grid[row, current_col])
+                    horizontal_tile = int(grid[current_row, col])
+                    corner_tiles = (vertical_tile, horizontal_tile)
+                    if not any(
+                        tile in BLOCKING_IDS
+                        or tile in CONDITIONAL_IDS
+                        or tile in PUSHABLE_IDS
+                        or tile in WATER_IDS
+                        for tile in corner_tiles
+                    ):
+                        transition_specs.append((None, float(DIAGONAL_COST)))
+
+                current_tile = int(grid[current_row, current_col])
+                is_stair = current_tile == int(SEMANTIC_PALETTE['STAIR'])
+                is_door = current_tile in {
+                    int(SEMANTIC_PALETTE['DOOR_OPEN']),
+                    int(SEMANTIC_PALETTE['DOOR_SOFT']),
+                    int(SEMANTIC_PALETTE['DOOR_LOCKED']),
+                    int(SEMANTIC_PALETTE['DOOR_BOMB']),
+                    int(SEMANTIC_PALETTE['DOOR_BOSS']),
+                }
+                is_at_boundary = False
+                if self.env.room_positions:
+                    for row_offset, col_offset in self.env.room_positions.values():
+                        if (
+                            row_offset <= current_row < row_offset + ROOM_HEIGHT
+                            and col_offset <= current_col < col_offset + ROOM_WIDTH
+                        ):
+                            local_row = current_row - row_offset
+                            local_col = current_col - col_offset
+                            is_at_boundary = bool(
+                                local_row <= 1
+                                or local_row >= ROOM_HEIGHT - 2
+                                or local_col <= 1
+                                or local_col >= ROOM_WIDTH - 2
+                            )
+                            break
+
+                if self.vglc_strict_mode:
+                    can_teleport = is_stair or is_door
+                else:
+                    can_teleport = is_stair or is_door or is_at_boundary
+                if self.strict_original_mode:
+                    can_teleport = is_stair
+
+                if is_stair and target_pos in self._get_stair_destinations(current_pos):
+                    transition_specs.append(("stair", 1.0))
+                if can_teleport and not self.strict_original_mode:
+                    graph_destinations = (
+                        self._get_controlled_virtual_destinations(current_pos, state)
+                        + self._get_graph_warp_destinations(current_pos, state)
+                    )
+                    transition_specs.extend(
+                        (str(edge_type), float(cost))
+                        for destination, cost, edge_type in graph_destinations
+                        if tuple(destination) == target_pos
+                    )
+
+                for edge_type, base_cost in dict.fromkeys(transition_specs):
+                    transition_state = state
+                    if edge_type not in {None, "stair"}:
+                        allowed, transition_state = self.apply_graph_edge_transition(
+                            state,
+                            current_pos,
+                            target_pos,
+                            str(edge_type),
+                        )
+                        if not allowed:
+                            continue
+                    allowed, next_state = self._try_move_pure(
+                        transition_state,
+                        target_pos,
+                        target_tile,
+                    )
+                    if not allowed:
+                        continue
+                    next_state.current_floor = self.env.floor_for_position(
+                        target_pos,
+                        default=state.current_floor,
+                    )
+                    if self.search_mode == "bfs":
+                        next_cost = accumulated_cost + 1.0
+                    else:
+                        move_cost = self._get_movement_cost(
+                            target_tile,
+                            target_pos,
+                            state,
+                        )
+                        next_cost = accumulated_cost + float(move_cost) * float(base_cost)
+                    next_key = self._state_key(next_state)
+                    previous = next_candidates.get(next_key)
+                    if previous is None or next_cost < previous[1]:
+                        next_candidates[next_key] = (next_state, next_cost)
+
+            if not next_candidates:
+                return (
+                    False,
+                    f"step {step_index}: no legal transition reaches {target_pos}",
+                    None,
+                    None,
+                )
+            candidates = next_candidates
+
+        if self.env.goal_pos is None or positions[-1] != tuple(self.env.goal_pos):
+            return (
+                False,
+                f"route ends at {positions[-1]}, expected goal {self.env.goal_pos}",
+                None,
+                None,
+            )
+        final_key = min(
+            candidates,
+            key=lambda key: (candidates[key][1], repr(key)),
+        )
+        final_state, final_cost = candidates[final_key]
+        return True, "", final_state, float(final_cost)
+
     def solve_with_diagnostics(self) -> Tuple[bool, List[Tuple[int, int]], SolverDiagnostics]:
         """
         Find a solution path with detailed diagnostics.
@@ -3220,12 +3330,14 @@ class StateSpaceAStar:
                     time_taken_ms=elapsed_ms,
                     failure_reason="",
                     path_length=max(0, len(path) - 1),
+                    path_cost=float(current_g),
                     final_inventory={
                         'keys': current_state.keys,
                         'bomb_count': current_state.bomb_count,
                         'has_bomb': current_state.has_bomb,
                         'has_boss_key': current_state.has_boss_key,
                         'has_item': current_state.has_item,
+                        'item_names': sorted(str(name) for name in current_state.item_names),
                         'current_floor': current_state.current_floor,
                         'doors_opened': len(current_state.opened_doors),
                         'items_collected': len(current_state.collected_items),
@@ -3407,6 +3519,11 @@ class StateSpaceAStar:
                 'has_bomb': final_state.has_bomb if final_state else False,
                 'has_boss_key': final_state.has_boss_key if final_state else False,
                 'has_item': final_state.has_item if final_state else False,
+                'item_names': (
+                    sorted(str(name) for name in final_state.item_names)
+                    if final_state
+                    else []
+                ),
                 'current_floor': final_state.current_floor if final_state else 0,
                 'doors_opened': len(final_state.opened_doors) if final_state else 0,
                 'items_collected': len(final_state.collected_items) if final_state else 0,
@@ -3471,10 +3588,53 @@ class StateSpaceAStar:
             )
         )
         normalized = str(edge_type or "open").strip().lower()
+        raw_edge_data = self.env.graph.get_edge_data(current_node, target_node, {}) or {}
+        edge_data: Dict[str, Any]
+        if (
+            isinstance(raw_edge_data, Mapping)
+            and raw_edge_data
+            and not any(
+                key in raw_edge_data
+                for key in (
+                    "edge_type",
+                    "type",
+                    "label",
+                    "item_required",
+                    "protection_item_id",
+                )
+            )
+            and all(isinstance(value, Mapping) for value in raw_edge_data.values())
+        ):
+            candidates = [dict(value) for value in raw_edge_data.values()]
+            edge_data = next(
+                (
+                    candidate
+                    for candidate in candidates
+                    if normalized
+                    in parse_edge_type_tokens(
+                        label=str(candidate.get("label", "") or ""),
+                        edge_type=str(
+                            candidate.get("edge_type", candidate.get("type", ""))
+                            or ""
+                        ),
+                    )
+                ),
+                candidates[0] if candidates else {},
+            )
+        else:
+            edge_data = dict(raw_edge_data) if isinstance(raw_edge_data, Mapping) else {}
+
+        def _has_required_item(raw_required: Any) -> bool:
+            required = self.env._normalize_item_name(raw_required)
+            if required is None:
+                return bool(state.has_item)
+            inventory = {str(name).upper() for name in state.item_names}
+            return bool(state.has_item and ("*" in inventory or required in inventory))
+
         if normalized in {"open", "path", "stair", "soft_locked", "one_way", "switch", "puzzle"}:
             return True, state.copy()
         if normalized in {"hazard", "hazard_protected"}:
-            if not state.has_item:
+            if not _has_required_item(edge_data.get("protection_item_id")):
                 return False, state
             return True, state.copy()
         if edge_key in state.opened_graph_edges:
@@ -3493,7 +3653,7 @@ class StateSpaceAStar:
             if not new_state.has_boss_key:
                 return False, state
         elif normalized in {"item_locked", "item_gate"}:
-            if not new_state.has_item:
+            if not _has_required_item(edge_data.get("item_required")):
                 return False, state
         else:
             return False, state
@@ -4258,7 +4418,26 @@ class ZeldaValidator:
             "node_to_room": node_to_room,
             "room_puzzle_metadata": room_puzzle_metadata,
         }
-        graph_guided_primary = bool(graph is not None and room_to_node and room_positions)
+        typed_item_contract = False
+        if graph is not None and hasattr(graph, "edges"):
+            try:
+                for _source, _target, edge_data in graph.edges(data=True):
+                    if not isinstance(edge_data, Mapping):
+                        continue
+                    if any(
+                        str(edge_data.get(field, "") or "").strip()
+                        for field in ("item_required", "protection_item_id")
+                    ):
+                        typed_item_contract = True
+                        break
+            except (AttributeError, TypeError, ValueError):
+                typed_item_contract = False
+        graph_guided_primary = bool(
+            graph is not None
+            and room_to_node
+            and room_positions
+            and not typed_item_contract
+        )
 
         def _run_solver(search_mode: str) -> Tuple[bool, List[Tuple[int, int]], SolverDiagnostics]:
             local_env = ZeldaLogicEnv(semantic_grid, **env_kwargs)
@@ -4292,6 +4471,14 @@ class ZeldaValidator:
                             )
                         ),
                         path_length=max(0, len(path_i or []) - 1),
+                        path_cost=(
+                            float(solver.last_solution_cost)
+                            if getattr(solver, "last_solution_cost", None) is not None
+                            else None
+                        ),
+                        final_inventory=dict(
+                            getattr(solver, "last_solution_inventory", None) or {}
+                        ),
                         termination_status=(
                             "solved"
                             if bool(success_i)
@@ -4304,6 +4491,56 @@ class ZeldaValidator:
                     )
                 else:
                     success_i, path_i, diagnostics_i = solver.solve_with_diagnostics()
+                if success_i:
+                    replay_ok, replay_error, replay_final_state, replay_path_cost = (
+                        solver.verify_position_path(path_i)
+                    )
+                    diagnostics_i.route_replay_path_cost = replay_path_cost
+                    reported_path_cost = getattr(diagnostics_i, "path_cost", None)
+                    if (
+                        replay_ok
+                        and replay_path_cost is not None
+                        and reported_path_cost is not None
+                        and not math.isclose(
+                            float(replay_path_cost),
+                            float(reported_path_cost),
+                            rel_tol=1e-9,
+                            abs_tol=1e-9,
+                        )
+                    ):
+                        replay_ok = False
+                        replay_error = (
+                            "replayed route cost does not match the solver cost: "
+                            f"replay={float(replay_path_cost):.12g}, "
+                            f"solver={float(reported_path_cost):.12g}"
+                        )
+                    diagnostics_i.route_replay_status = (
+                        "verified" if replay_ok else "failed"
+                    )
+                    diagnostics_i.route_replay_error = str(replay_error or "")
+                    if replay_ok and replay_final_state is not None:
+                        diagnostics_i.final_inventory = {
+                            'keys': replay_final_state.keys,
+                            'bomb_count': replay_final_state.bomb_count,
+                            'has_bomb': replay_final_state.has_bomb,
+                            'has_boss_key': replay_final_state.has_boss_key,
+                            'has_item': replay_final_state.has_item,
+                            'item_names': sorted(
+                                str(name) for name in replay_final_state.item_names
+                            ),
+                            'current_floor': replay_final_state.current_floor,
+                            'doors_opened': len(replay_final_state.opened_doors),
+                            'items_collected': len(replay_final_state.collected_items),
+                        }
+                    if not replay_ok:
+                        success_i = False
+                        path_i = []
+                        diagnostics_i.success = False
+                        diagnostics_i.failure_reason = (
+                            "Post-route replay rejected the reconstructed solution: "
+                            f"{replay_error}"
+                        )
+                        diagnostics_i.termination_status = "route_replay_failed"
                 return bool(success_i), list(path_i or []), diagnostics_i
             finally:
                 try:
@@ -4359,6 +4596,7 @@ class ZeldaValidator:
                 getattr(fallback_diagnostics, "termination_status", "unknown")
             )
             budget_exhausted = final_status == "budget_exhausted"
+            replay_failed = final_status == "route_replay_failed"
             return ValidationResult(
                 is_solvable=False,
                 is_valid_syntax=True,
@@ -4369,20 +4607,40 @@ class ZeldaValidator:
                 error_message=(
                     f"Search budget exhausted after exploring {exact_states} states"
                     if budget_exhausted
-                    else f"No solution found after exhausting {exact_states} states"
+                    else (
+                        str(getattr(diagnostics, "failure_reason", "") or "route replay failed")
+                        if replay_failed
+                        else f"No solution found after exhausting {exact_states} states"
+                    )
                 ),
                 solver_used=solver_used,
                 primary_solver_solved=False,
                 primary_solver_error=primary_failure,
                 states_explored=exact_states,
-                termination_status="budget_exhausted" if budget_exhausted else "exhausted",
-                proven_unsolvable=not budget_exhausted,
+                termination_status=(
+                    "budget_exhausted"
+                    if budget_exhausted
+                    else "route_replay_failed" if replay_failed else "exhausted"
+                ),
+                proven_unsolvable=not budget_exhausted and not replay_failed,
                 final_inventory=dict(getattr(diagnostics, "final_inventory", {}) or {}),
+                route_replay_status=str(
+                    getattr(diagnostics, "route_replay_status", "not_run")
+                ),
+                route_replay_error=str(
+                    getattr(diagnostics, "route_replay_error", "") or ""
+                ),
+                route_replay_path_cost=getattr(
+                    diagnostics,
+                    "route_replay_path_cost",
+                    None,
+                ),
             )
 
         consistency_status = "not_requested"
         solver_consistent: Optional[bool] = None
         consistency_path_length: Optional[int] = None
+        consistency_path_cost: Optional[float] = None
         consistency_states_explored = 0
         if bool(verify_dijkstra_consistency):
             reference_success, reference_path, reference_diagnostics = _run_solver(
@@ -4393,12 +4651,23 @@ class ZeldaValidator:
             )
             if reference_success:
                 consistency_path_length = max(0, len(reference_path) - 1)
-                solver_consistent = bool(
-                    consistency_path_length == max(0, len(path) - 1)
+                reference_cost = getattr(reference_diagnostics, "path_cost", None)
+                primary_cost = getattr(diagnostics, "path_cost", None)
+                consistency_path_cost = (
+                    float(reference_cost) if reference_cost is not None else None
                 )
-                consistency_status = (
-                    "consistent" if solver_consistent else "path_cost_mismatch"
-                )
+                if primary_cost is None or reference_cost is None:
+                    consistency_status = "indeterminate_missing_path_cost"
+                else:
+                    solver_consistent = math.isclose(
+                        float(primary_cost),
+                        float(reference_cost),
+                        rel_tol=1e-9,
+                        abs_tol=1e-9,
+                    )
+                    consistency_status = (
+                        "consistent" if solver_consistent else "path_cost_mismatch"
+                    )
             elif str(
                 getattr(reference_diagnostics, "termination_status", "unknown")
             ) == "budget_exhausted":
@@ -4465,6 +4734,11 @@ class ZeldaValidator:
             is_valid_syntax=True,
             reachability=reachability,
             path_length=max(0, len(path) - 1),
+            path_cost=(
+                float(diagnostics.path_cost)
+                if diagnostics.path_cost is not None
+                else None
+            ),
             backtracking_score=backtracking,
             logical_errors=logical_errors,
             path=path,
@@ -4475,9 +4749,21 @@ class ZeldaValidator:
             termination_status="solved",
             final_inventory=final_inventory,
             path_interactions=path_interactions,
+            route_replay_status=str(
+                getattr(diagnostics, "route_replay_status", "not_run")
+            ),
+            route_replay_error=str(
+                getattr(diagnostics, "route_replay_error", "") or ""
+            ),
+            route_replay_path_cost=getattr(
+                diagnostics,
+                "route_replay_path_cost",
+                None,
+            ),
             solver_consistency_status=consistency_status,
             solver_consistent=solver_consistent,
             solver_consistency_path_length=consistency_path_length,
+            solver_consistency_path_cost=consistency_path_cost,
             solver_consistency_states_explored=consistency_states_explored,
         )
     

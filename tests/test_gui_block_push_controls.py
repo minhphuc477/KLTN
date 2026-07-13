@@ -1,6 +1,6 @@
 ﻿import numpy as np
 
-from src.gui.services.block_push_controls import (
+from src.gui.gameplay.block_push_controls import (
     check_and_start_block_push,
     get_animating_block_positions,
     start_block_push_animation,

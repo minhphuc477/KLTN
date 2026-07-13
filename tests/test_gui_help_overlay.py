@@ -1,4 +1,4 @@
-﻿from src.gui.overlay.help_overlay import render_help_overlay
+﻿from src.gui.rendering.help_overlay import render_help_overlay
 
 
 class FakeSurface:

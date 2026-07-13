@@ -1,6 +1,6 @@
 # Search Algorithm Audit And Recommendation
 
-Last updated: 2026-07-10.
+Last updated: 2026-07-13.
 
 This note answers which pathfinding algorithms should be used in H-MOLQD and
 which algorithms should remain diagnostics or ablations. It is intentionally
@@ -189,6 +189,19 @@ Current fixes applied:
   certified the map. This keeps learned-policy failure from being mislabeled
   as mechanical unsolvability and keeps online RL variance out of the default
   MAP-Elites feasibility gate.
+- A successful A* or uniform-cost route is not accepted from parent-pointer
+  reconstruction alone. The validator replays the reported position sequence
+  from a fresh full game state through the canonical tile and graph transition
+  functions. Invalid reconstruction becomes `route_replay_failed`, and the
+  publication contract treats a solved route without a replay certificate as
+  indeterminate. Replay also recomputes accumulated transition cost and rejects
+  a mismatch with the solver's stored `g` value. This is a route-legality and
+  bookkeeping certificate against the canonical rules, not an independent
+  second implementation of Zelda mechanics.
+- The exact mission-graph oracle follows the same policy through
+  `AgentSimulator.replay_path()`. Graph progression is not accepted by the
+  end-to-end contract when its reported route lacks a verified replay
+  certificate.
 - P-CBS working memory now has explicit ablation parameters for spatial recall
   error (`spatial_memory_error_rate` and `spatial_memory_error_radius`). The
   weaker `Novice` and `Forgetful` personas use nonzero spatial confusion by

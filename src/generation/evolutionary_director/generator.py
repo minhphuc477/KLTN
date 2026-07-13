@@ -9,7 +9,7 @@ import pickle
 import random
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 import networkx as nx
 import numpy as np
@@ -40,6 +40,8 @@ from .executor import GraphGrammarExecutor
 from .individual import Individual
 
 logger = logging.getLogger(__name__)
+
+QD_ARCHIVE_SCHEMA_VERSION = 4
 
 class EvolutionaryTopologyGenerator:
     """
@@ -75,6 +77,7 @@ class EvolutionaryTopologyGenerator:
         qd_emitter_mutation_rate: float = 0.18,
         qd_archive_path: Optional[str] = None,
         qd_load_archive: bool = False,
+        qd_trust_archive_pickle: bool = False,
         qd_autosave_archive: bool = False,
         max_lock_key_rules: int = 3,
         realism_tuning: Optional[Dict[str, float]] = None,
@@ -116,14 +119,16 @@ class EvolutionaryTopologyGenerator:
                 starts and reproducible QD continuation.
             qd_load_archive: If True, load qd_archive_path before CVT search
                 when the file exists.
+            qd_trust_archive_pickle: Explicitly trust the configured pickle
+                archive. Pickle loading is refused when this is False.
             qd_autosave_archive: If True, save qd_archive_path after each
                 completed generation and at the end of CVT search.
             max_lock_key_rules: Hard cap on progression key/lock-style rule
                 applications permitted during genome execution.
             enforce_generation_constraints: If True, reject rule outcomes that
                 violate lock/progression constraints during genome execution.
-                Default is False to preserve QD diversity and avoid hard-kill
-                behavior in early generations.
+                Default is True so infeasible progression mechanics cannot enter
+                the archive merely to increase descriptor diversity.
             allow_candidate_repairs: If True, attempt local candidate repair
                 when generation constraints fail.
             graph_oracle_max_states: State-expansion budget for exact
@@ -153,6 +158,7 @@ class EvolutionaryTopologyGenerator:
         self.qd_emitter_mutation_rate = float(np.clip(float(qd_emitter_mutation_rate), 0.01, 0.95))
         self.qd_archive_path = Path(qd_archive_path) if qd_archive_path else None
         self.qd_load_archive = bool(qd_load_archive)
+        self.qd_trust_archive_pickle = bool(qd_trust_archive_pickle)
         self.qd_autosave_archive = bool(qd_autosave_archive)
         self.max_lock_key_rules = int(max(0, max_lock_key_rules))
         self.realism_tuning = self._merge_realism_tuning(realism_tuning)
@@ -2862,6 +2868,195 @@ class EvolutionaryTopologyGenerator:
             seed=(None if self.seed is None else int(self.seed) + 17),
         )
 
+    def qd_archive_provenance(self) -> Dict[str, Any]:
+        """Return the genotype and fitness contract required to reuse elites.
+
+        Gene IDs are positional indices into ``executor.rules``. Persisting an
+        archive without this schema can silently reinterpret every genome when
+        the rule profile changes. Fitness targets are included because stored
+        elite comparisons are invalid after changing the objective contract.
+        """
+        return {
+            "schema_version": QD_ARCHIVE_SCHEMA_VERSION,
+            "rule_schema": {
+                "rule_space": str(self.rule_space),
+                "rule_names": [str(name) for name in self.executor.rule_names],
+            },
+            "fitness_contract": {
+                "target_curve": [float(value) for value in self.target_curve],
+                "descriptor_targets": copy.deepcopy(self.descriptor_targets),
+                "max_nodes": int(self.max_nodes),
+                "max_lock_key_rules": int(self.max_lock_key_rules),
+                "enforce_generation_constraints": bool(
+                    self.enforce_generation_constraints
+                ),
+                "allow_candidate_repairs": bool(self.allow_candidate_repairs),
+                "graph_oracle_max_states": int(self.graph_oracle_max_states),
+                "realism_tuning": copy.deepcopy(self.realism_tuning),
+            },
+            "search_contract": {
+                "population_size": int(self.population_size),
+                "mutation_rate": float(self.mutation_rate),
+                "crossover_rate": float(self.crossover_rate),
+                "genome_length": int(self.genome_length),
+                "rule_weight_overrides": copy.deepcopy(
+                    self.rule_weight_overrides
+                ),
+                "transition_matrix": copy.deepcopy(self.transition_matrix),
+                "transition_mix": float(self.transition_mix),
+                "seed": self.seed,
+                "search_strategy": str(self.search_strategy),
+                "qd_archive_cells": int(self.qd_archive_cells),
+                "qd_init_random_fraction": float(self.qd_init_random_fraction),
+                "qd_emitter_mutation_rate": float(
+                    self.qd_emitter_mutation_rate
+                ),
+                "enable_rule_credit_assignment": bool(
+                    self.enable_rule_credit_assignment
+                ),
+            },
+            "generator_kwargs": {
+                "target_curve": [float(value) for value in self.target_curve],
+                "zelda_transition_matrix": copy.deepcopy(self.transition_matrix),
+                "population_size": int(self.population_size),
+                "generations": int(self.generations),
+                "mutation_rate": float(self.mutation_rate),
+                "crossover_rate": float(self.crossover_rate),
+                "genome_length": int(self.genome_length),
+                "max_nodes": int(self.max_nodes),
+                "rule_space": str(self.rule_space),
+                "rule_weight_overrides": copy.deepcopy(self.rule_weight_overrides),
+                "descriptor_targets": copy.deepcopy(self.descriptor_targets),
+                "transition_mix": float(self.transition_mix),
+                "seed": self.seed,
+                "search_strategy": str(self.search_strategy),
+                "qd_archive_cells": int(self.qd_archive_cells),
+                "qd_init_random_fraction": float(self.qd_init_random_fraction),
+                "qd_emitter_mutation_rate": float(self.qd_emitter_mutation_rate),
+                "max_lock_key_rules": int(self.max_lock_key_rules),
+                "realism_tuning": copy.deepcopy(self.realism_tuning),
+                "enable_rule_credit_assignment": bool(
+                    self.enable_rule_credit_assignment
+                ),
+                "enforce_generation_constraints": bool(
+                    self.enforce_generation_constraints
+                ),
+                "allow_candidate_repairs": bool(self.allow_candidate_repairs),
+                "graph_oracle_max_states": int(self.graph_oracle_max_states),
+            },
+        }
+
+    def _qd_runtime_state(self) -> Dict[str, Any]:
+        """Capture all mutable RNG streams needed for exact QD continuation."""
+        constraint_grammar = getattr(self.executor, "_constraint_grammar", None)
+        constraint_rng = getattr(constraint_grammar, "rng", None)
+        return {
+            "generator_rng_state": self.rng.getstate(),
+            "executor_rng_state": self.executor.rng.getstate(),
+            "constraint_rng_state": (
+                constraint_rng.getstate() if constraint_rng is not None else None
+            ),
+            "global_rule_weights": dict(self._global_rule_weights),
+        }
+
+    def _restore_qd_runtime_state(self, state: Mapping[str, Any]) -> None:
+        """Restore QD RNG streams, rejecting partial continuation state."""
+        generator_state = state.get("generator_rng_state")
+        executor_state = state.get("executor_rng_state")
+        loaded_rule_weights = state.get("global_rule_weights")
+        if (
+            generator_state is None
+            or executor_state is None
+            or not isinstance(loaded_rule_weights, Mapping)
+        ):
+            raise ValueError(
+                "QD archive runtime state is incomplete; exact continuation "
+                "would not be reproducible."
+            )
+        try:
+            self.rng.setstate(generator_state)
+            self.executor.rng.setstate(executor_state)
+            constraint_grammar = getattr(self.executor, "_constraint_grammar", None)
+            constraint_rng = getattr(constraint_grammar, "rng", None)
+            constraint_state = state.get("constraint_rng_state")
+            if constraint_rng is not None:
+                if constraint_state is None:
+                    raise ValueError(
+                        "QD archive omits the constraint-grammar RNG state."
+                    )
+                constraint_rng.setstate(constraint_state)
+            parsed_rule_weights = {
+                int(rule_id): float(weight)
+                for rule_id, weight in loaded_rule_weights.items()
+            }
+            if set(parsed_rule_weights) != set(self._rule_ids) or not all(
+                np.isfinite(weight) and weight > 0.0
+                for weight in parsed_rule_weights.values()
+            ):
+                raise ValueError("QD archive contains invalid adaptive rule weights.")
+            self._global_rule_weights = parsed_rule_weights
+            self._renormalize_global_rule_probs()
+        except (TypeError, ValueError) as exc:
+            raise ValueError("QD archive contains an invalid RNG state.") from exc
+
+    def validate_qd_archive_provenance(self, payload: Mapping[str, Any]) -> None:
+        """Fail closed when persisted genomes or fitness values are ambiguous."""
+        version = int(payload.get("version", 0) or 0)
+        provenance = payload.get("provenance")
+        if version < 2 or not isinstance(provenance, Mapping):
+            raise ValueError(
+                "Legacy QD archive has no genotype/fitness provenance and cannot "
+                "be safely resumed. Regenerate it with the current archive schema."
+            )
+        provenance_version = int(provenance.get("schema_version", 0) or 0)
+        if provenance_version != version:
+            raise ValueError(
+                "QD archive payload/provenance schema versions disagree: "
+                f"payload={version}, provenance={provenance_version}."
+            )
+
+        expected = self.qd_archive_provenance()
+        loaded_rule_schema = dict(provenance.get("rule_schema", {}) or {})
+        if loaded_rule_schema != expected["rule_schema"]:
+            raise ValueError(
+                "QD archive grammar schema mismatch; stored gene IDs would be "
+                "reinterpreted under the current rule profile."
+            )
+
+        loaded_fitness = dict(provenance.get("fitness_contract", {}) or {})
+        if loaded_fitness != expected["fitness_contract"]:
+            raise ValueError(
+                "QD archive fitness contract mismatch. Stored elite rankings "
+                "cannot be reused under different targets or feasibility rules."
+            )
+        loaded_search = dict(provenance.get("search_contract", {}) or {})
+        if loaded_search != expected["search_contract"]:
+            raise ValueError(
+                "QD archive search contract mismatch. Exact continuation "
+                "requires the same genome, emitter, prior, and population settings."
+            )
+
+    def finalize_archived_phenotype(
+        self,
+        phenotype: MissionGraph,
+        *,
+        directed_output: bool = True,
+    ) -> nx.Graph:
+        """Compile an archived evaluated phenotype through final export gates.
+
+        Replaying only its genome is not equivalent: grammar rules draw from a
+        stateful RNG whose position depends on earlier population evaluations.
+        """
+        if not isinstance(phenotype, MissionGraph):
+            raise TypeError(
+                "Archived topology phenotype must be a MissionGraph, got "
+                f"{type(phenotype).__name__}."
+            )
+        return self._finalize_graph_output(
+            copy.deepcopy(phenotype),
+            directed_output=bool(directed_output),
+        )
+
     def _load_qd_archive_or_new(self) -> Any:
         """Load a persisted CVT archive when requested, otherwise create a fresh one."""
         archive = self._new_qd_archive()
@@ -2872,9 +3067,30 @@ class EvolutionaryTopologyGenerator:
         if not self.qd_archive_path.exists():
             logger.info("QD archive path does not exist yet: %s", self.qd_archive_path)
             return archive
+        if not self.qd_trust_archive_pickle:
+            raise ValueError(
+                "Loading a QD archive executes Python pickle content. Set "
+                "qd_trust_archive_pickle=True only for a trusted local archive."
+            )
 
         with self.qd_archive_path.open("rb") as f:
             payload = pickle.load(f)
+        if not isinstance(payload, dict):
+            raise ValueError(
+                f"QD archive {self.qd_archive_path} lacks a versioned payload."
+            )
+        self.validate_qd_archive_provenance(payload)
+        version = int(payload.get("version", 0) or 0)
+        runtime_state = payload.get("runtime_state")
+        if version < QD_ARCHIVE_SCHEMA_VERSION or not isinstance(
+            runtime_state,
+            Mapping,
+        ):
+            raise ValueError(
+                "QD archive cannot be resumed reproducibly because it lacks "
+                "the complete generator RNG state. Regenerate it with the "
+                "current archive schema."
+            )
         loaded_archive = payload.get("archive") if isinstance(payload, dict) else payload
         if loaded_archive is None:
             raise ValueError(f"Invalid QD archive payload in {self.qd_archive_path}")
@@ -2885,6 +3101,7 @@ class EvolutionaryTopologyGenerator:
             )
         if int(getattr(loaded_archive, "feature_dims", 4)) != 4:
             raise ValueError("QD archive feature dimension mismatch; expected 4D topology descriptors.")
+        self._restore_qd_runtime_state(runtime_state)
         logger.info(
             "Loaded QD archive from %s (%d elites)",
             self.qd_archive_path,
@@ -2893,14 +3110,14 @@ class EvolutionaryTopologyGenerator:
         return loaded_archive
 
     def _save_qd_archive(self, archive: Any) -> None:
-        """Best-effort persistence for CVT archives used by topology QD search."""
+        """Atomically persist a CVT archive or report the write failure."""
         if self.qd_archive_path is None:
             return
         try:
             self.qd_archive_path.parent.mkdir(parents=True, exist_ok=True)
             stats = archive.get_stats()
             payload = {
-                "version": 1,
+                "version": QD_ARCHIVE_SCHEMA_VERSION,
                 "archive": archive,
                 "stats": {
                     "coverage": float(stats.coverage),
@@ -2911,19 +3128,35 @@ class EvolutionaryTopologyGenerator:
                     "infeasible_rejections": int(
                         getattr(archive, "total_rejections", 0)
                     ),
+                    "materialization_ready_elites": int(
+                        sum(
+                            1
+                            for elite in archive.get_all_elites()
+                            if isinstance(
+                                dict(getattr(elite, "metadata", {}) or {}).get(
+                                    "phenotype"
+                                ),
+                                MissionGraph,
+                            )
+                        )
+                    ),
                 },
                 "config": {
                     "qd_archive_cells": int(self.qd_archive_cells),
                     "feature_dims": 4,
                     "seed": self.seed,
                 },
+                "provenance": self.qd_archive_provenance(),
+                "runtime_state": self._qd_runtime_state(),
             }
             tmp_path = self.qd_archive_path.with_name(f"{self.qd_archive_path.name}.tmp")
             with tmp_path.open("wb") as f:
                 pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
             tmp_path.replace(self.qd_archive_path)
         except (AttributeError, OSError, pickle.PickleError, TypeError, ValueError) as exc:
-            logger.warning("Failed to persist QD archive to %s: %s", self.qd_archive_path, exc)
+            raise RuntimeError(
+                f"Failed to persist QD archive to {self.qd_archive_path}."
+            ) from exc
 
     def _evolve_cvt_emitter(self, *, directed_output: bool = False) -> nx.Graph:
         """
@@ -2939,12 +3172,42 @@ class EvolutionaryTopologyGenerator:
         init_random = max(8, int(round(self.qd_init_random_fraction * float(total_evaluations))))
         archive = self._load_qd_archive_or_new()
 
-        best: Optional[Individual] = None
+        prior_evaluations = int(max(0, getattr(archive, "total_evaluations", 0)))
         feasible_candidates: List[Individual] = []
+        for elite in archive.get_all_elites():
+            metadata = dict(getattr(elite, "metadata", {}) or {})
+            phenotype = metadata.get("phenotype")
+            if not isinstance(phenotype, MissionGraph):
+                continue
+            feasible_candidates.append(
+                Individual(
+                    genome=[int(gene) for gene in elite.solution],
+                    fitness=float(elite.fitness),
+                    feasible=bool(metadata.get("feasible", True)),
+                    target_constraints_satisfied=bool(
+                        metadata.get("target_constraints_satisfied", False)
+                    ),
+                    constraint_violation=float(
+                        metadata.get("constraint_violation", 0.0)
+                    ),
+                    phenotype=copy.deepcopy(phenotype),
+                    descriptor_metrics=dict(
+                        metadata.get("descriptor_metrics", {}) or {}
+                    ),
+                    generation=int(metadata.get("evaluation_generation", 0)),
+                    evaluated=True,
+                )
+            )
+        best: Optional[Individual] = (
+            min(feasible_candidates, key=self._individual_sort_key)
+            if feasible_candidates
+            else None
+        )
         batch: List[Individual] = []
-        generation_counter = 0
+        generation_counter = prior_evaluations // max(1, int(self.population_size))
 
-        for eval_idx in range(total_evaluations):
+        for local_eval_idx in range(total_evaluations):
+            eval_idx = prior_evaluations + local_eval_idx
             if eval_idx < init_random:
                 genome = self._sample_weighted_genome()
             else:
@@ -2974,6 +3237,11 @@ class EvolutionaryTopologyGenerator:
                     ),
                     "constraint_violation": float(ind.constraint_violation),
                     "descriptor_metrics": dict(dm),
+                    # Genome replay is not phenotype replay because grammar
+                    # execution consumes a population-global RNG.
+                    "phenotype": copy.deepcopy(ind.phenotype),
+                    "evaluation_index": int(eval_idx),
+                    "evaluation_generation": int(generation_counter),
                 },
                 feasible=bool(ind.feasible),
             )
@@ -2984,7 +3252,10 @@ class EvolutionaryTopologyGenerator:
             ):
                 best = ind
 
-            if ((eval_idx + 1) % max(1, int(self.population_size)) == 0) or (eval_idx == total_evaluations - 1):
+            if (
+                (eval_idx + 1) % max(1, int(self.population_size)) == 0
+                or local_eval_idx == total_evaluations - 1
+            ):
                 generation_counter += 1
                 archive_stats = archive.get_stats()
                 qd_stats = {

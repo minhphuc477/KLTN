@@ -1,7 +1,7 @@
 ﻿import numpy as np
 
 from src.core.definitions import SEMANTIC_PALETTE
-from src.gui.controls.minimap_controls import handle_minimap_click, render_minimap
+from src.gui.map.minimap import handle_minimap_click, render_minimap
 
 
 class DummyState:
@@ -63,7 +63,15 @@ class FakePygame:
 
     def __init__(self):
         self.draw = FakeDraw()
-        self.font = type("F", (), {"SysFont": lambda *a, **k: FakeFont()})
+        self.font = type(
+            "F",
+            (),
+            {
+                "get_init": staticmethod(lambda: True),
+                "init": staticmethod(lambda: None),
+                "SysFont": staticmethod(lambda *a, **k: FakeFont()),
+            },
+        )
 
     def Surface(self, size, _flags=None):
         return FakeSurface(size)

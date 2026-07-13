@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from src.gui.services.path_analysis import scan_items_along_path
+from src.gui.gameplay.path_analysis import scan_items_along_path
 
 
 def test_scan_items_along_path_counts_items_and_doors():

@@ -1,4 +1,4 @@
-﻿from src.gui.services.solver_core_state import clear_solver_state, sync_solver_dropdown_settings
+﻿from src.gui.solver.core_state import clear_solver_state, sync_solver_dropdown_settings
 
 
 class DummyLogger:

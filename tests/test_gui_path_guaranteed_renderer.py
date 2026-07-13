@@ -1,6 +1,6 @@
 ﻿from types import SimpleNamespace
 
-from src.gui.services.path_guaranteed_renderer import render_path_guaranteed
+from src.gui.rendering.path_guaranteed_renderer import render_path_guaranteed
 
 
 class _Surface:

@@ -1055,11 +1055,11 @@ class AblationStudy:
 
     def _build_non_evolution_graph(self, seed: int) -> nx.Graph:
         grammar = MissionGrammar(seed=seed)
-        graph = grammar.generate(
+        graph = grammar.generate_validated(
             difficulty=Difficulty.MEDIUM,
             num_rooms=self.num_rooms,
             max_keys=max(1, self.num_rooms // 4),
-            validate_all=True,
+            max_attempts=8,
         )
         return mission_graph_to_networkx(graph)
 

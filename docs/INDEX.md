@@ -53,6 +53,8 @@ Superseded notes belong under `docs/archive/`.
   [`pathfinder_ablation_protocol.md`](pathfinder_ablation_protocol.md)
 - Human playtest provenance, synthetic structural OOD, and QD archive heatmaps:
   [`HUMAN_PLAYTEST_AND_OOD_QD_PROTOCOL.md`](HUMAN_PLAYTEST_AND_OOD_QD_PROTOCOL.md)
+- Topology-QD archive generation and exact final-map materialization commands:
+  [`TOPOLOGY_COMMANDS.md`](TOPOLOGY_COMMANDS.md)
 
 ## Architecture And Rationale
 

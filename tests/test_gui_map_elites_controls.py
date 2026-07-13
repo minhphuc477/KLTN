@@ -1,6 +1,6 @@
 ﻿from types import SimpleNamespace
 
-from src.gui.controls.map_elites_controls import map_elites_worker, start_map_elites
+from src.gui.gameplay.map_elites_controls import map_elites_worker, start_map_elites
 
 
 class _Thread:

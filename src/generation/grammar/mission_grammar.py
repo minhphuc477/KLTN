@@ -174,6 +174,62 @@ class MissionGrammar:
             logger.info("All validation checks passed")
         
         return all_passed
+
+    def generate_validated(
+        self,
+        difficulty: Difficulty = Difficulty.MEDIUM,
+        num_rooms: int = 8,
+        max_keys: int = 2,
+        *,
+        max_attempts: int = 8,
+    ) -> MissionGraph:
+        """Generate a graph that passes the complete progression contract.
+
+        ``generate`` remains the single-attempt grammar operator used by
+        failure-rate and expressive-range experiments.  Production callers
+        should use this method: failed repair convergence is retried with
+        deterministic derived seeds and can never be returned as a certified
+        dungeon.
+        """
+        attempts = int(max_attempts)
+        if attempts < 1:
+            raise ValueError("max_attempts must be at least 1")
+
+        base_seed = (
+            int(self.seed)
+            if self.seed is not None
+            else int(self.rng.randrange(0, 2**31 - 1))
+        )
+        attempted_seeds: list[int] = []
+        for attempt_index in range(attempts):
+            # A large prime stride makes retries reproducible without sampling
+            # adjacent pseudo-random streams from the same grammar instance.
+            candidate_seed = int((base_seed + attempt_index * 104_729) % (2**31 - 1))
+            attempted_seeds.append(candidate_seed)
+            candidate_grammar = type(self)(seed=candidate_seed)
+            graph = candidate_grammar.generate(
+                difficulty=difficulty,
+                num_rooms=num_rooms,
+                max_keys=max_keys,
+                validate_all=True,
+            )
+            if not candidate_grammar.validate_all_constraints(graph):
+                continue
+            graph.ensure_generation_stats_defaults()
+            graph.generation_stats.update(
+                {
+                    "validation_status": "certified",
+                    "validated_generation_attempts": int(attempt_index + 1),
+                    "validated_generation_seed": int(candidate_seed),
+                }
+            )
+            return graph
+
+        raise RuntimeError(
+            "Mission grammar could not produce a graph satisfying the complete "
+            f"validation contract after {attempts} attempts "
+            f"(seeds={attempted_seeds}, rooms={int(num_rooms)}, keys={int(max_keys)})."
+        )
     
     def generate(
         self,
@@ -321,17 +377,25 @@ class MissionGrammar:
             if self.validate_all_constraints(graph):
                 break
 
-        if validate_all and not self.validate_all_constraints(graph):
-            logger.warning(
-                "Graph validation failed on some checks even after repair. "
-                "Graph is being returned but may have constraint violations. "
-                "Consider regenerating with different seed or parameters."
+        if validate_all:
+            final_valid = bool(self.validate_all_constraints(graph))
+            graph.generation_stats["validation_status"] = (
+                "certified" if final_valid else "invalid_candidate"
             )
-        elif not validate_all and not self.validate_lock_key_ordering(graph):
+            if not final_valid:
+                logger.warning(
+                    "Graph validation failed on some checks even after repair. "
+                    "This raw candidate is marked invalid_candidate; production "
+                    "callers must use generate_validated()."
+                )
+        elif not self.validate_lock_key_ordering(graph):
+            graph.generation_stats["validation_status"] = "unchecked_invalid_lock_order"
             logger.warning(
                 "Lock-key repair could not fully satisfy constraints; "
                 "invalid locks were downgraded to preserve solvability."
             )
+        else:
+            graph.generation_stats["validation_status"] = "partial_lock_check_only"
         
         # Update positions for layout
         graph = self._layout_graph(graph)

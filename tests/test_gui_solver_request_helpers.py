@@ -1,4 +1,4 @@
-﻿from src.gui.services.solver_request_helpers import (
+﻿from src.gui.solver.request_helpers import (
     build_priority_options,
     build_solver_request,
     get_solver_map_context,

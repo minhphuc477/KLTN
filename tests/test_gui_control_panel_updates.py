@@ -1,4 +1,4 @@
-from src.gui.controls.control_panel_updates import (
+from src.gui.control_panel.updates import (
     apply_algorithm_dropdown_update,
     apply_checkbox_widget_update,
     apply_control_panel_widget_updates,

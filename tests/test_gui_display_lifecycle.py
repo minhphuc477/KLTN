@@ -1,6 +1,6 @@
 ﻿from types import SimpleNamespace
 
-from src.gui.overlay.display_lifecycle import attempt_display_reinit, ensure_display_alive, safe_set_mode
+from src.gui.runtime.display_lifecycle import attempt_display_reinit, ensure_display_alive, safe_set_mode
 
 
 class _Screen:

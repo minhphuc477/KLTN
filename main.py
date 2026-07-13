@@ -7,6 +7,7 @@ Usage:
     python main.py topology-visualize --seed 20260406
     python main.py topology-compare-manual --run-dir outputs/zelda_hmolqd_semantic_anchor_retrain_v1 --output-dir outputs/manual_compare
     python main.py topology-audit-fixed-graph --run-dir outputs/zelda_hmolqd_semantic_anchor_retrain_v1 --output-dir outputs/fixed_graph_audit
+    python main.py topology-materialize-archive --archive results/topology_qd.pkl --trust-pickle --output-dir results/materialized_qd
 
 Legacy validation usage without a subcommand is preserved:
     python main.py --dungeon 1 --variant 1
@@ -71,6 +72,10 @@ from src.zelda_data.zelda_core import (
 from scripts.export_manual_rich_topology_compare import run_from_args as run_manual_topology_compare_from_args
 from scripts.run_fixed_graph_multi_seed_audit import run_from_args as run_fixed_graph_audit_from_args
 from scripts.run_fast_sampler_visual_audit import add_generation_override_args as add_generation_export_override_args
+from scripts.materialize_topology_qd_archive import (
+    add_arguments as add_topology_materialization_args,
+    run_from_args as run_topology_materialization_from_args,
+)
 from scripts.visualize_block_i_graphs import run_from_args as run_topology_visualize_from_args
 
 
@@ -327,6 +332,20 @@ def _build_topology_fixed_graph_audit_parser(subparsers: argparse._SubParsersAct
     add_generation_export_override_args(fixed_parser)
 
 
+def _build_topology_materialization_parser(
+    subparsers: argparse._SubParsersAction,
+) -> None:
+    materialize_parser = subparsers.add_parser(
+        "topology-materialize-archive",
+        help=(
+            "Compile every provenance-bearing topology-QD elite into final "
+            "maps and report exact surviving archive coverage."
+        ),
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    add_topology_materialization_args(materialize_parser)
+
+
 def _build_root_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="KLTN entry point for training, validation, and topology-driven export workflows.",
@@ -338,6 +357,7 @@ def _build_root_parser() -> argparse.ArgumentParser:
     _build_topology_visualize_parser(subparsers)
     _build_topology_compare_manual_parser(subparsers)
     _build_topology_fixed_graph_audit_parser(subparsers)
+    _build_topology_materialization_parser(subparsers)
     return parser
 
 
@@ -605,6 +625,8 @@ def main(argv: Optional[list[str]] = None) -> None:
         run_manual_topology_compare_from_args(args)
     elif args.command == "topology-audit-fixed-graph":
         run_fixed_graph_audit_from_args(args)
+    elif args.command == "topology-materialize-archive":
+        run_topology_materialization_from_args(args)
     else:
         parser.print_help()
 

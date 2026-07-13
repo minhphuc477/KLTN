@@ -1,4 +1,4 @@
-﻿from src.gui.controls.control_panel_interactions import (
+﻿from src.gui.control_panel.interactions import (
     control_panel_hit_rect,
     handle_outside_control_panel_click,
     refresh_control_panel_layout_if_needed,

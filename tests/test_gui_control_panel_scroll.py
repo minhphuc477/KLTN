@@ -1,6 +1,6 @@
 ﻿from types import SimpleNamespace
 
-from src.gui.controls.control_panel_scroll import update_control_panel_scroll
+from src.gui.control_panel.scroll import update_control_panel_scroll
 
 
 def _make_gui():

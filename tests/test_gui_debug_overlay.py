@@ -1,6 +1,6 @@
 ﻿from types import SimpleNamespace
 
-from src.gui.overlay.debug_overlay import render_debug_overlay
+from src.gui.rendering.debug_overlay import render_debug_overlay
 
 
 class _Rendered:
@@ -33,9 +33,19 @@ class _Pygame:
         return _Surface()
 
     class font:
+        initialized = False
+
+        @classmethod
+        def get_init(cls):
+            return cls.initialized
+
+        @classmethod
+        def init(cls):
+            cls.initialized = True
+
         @staticmethod
-        def SysFont(name, size):
-            _ = (name, size)
+        def SysFont(name, size, bold=False, italic=False):
+            _ = (name, size, bold, italic)
             return _Font()
 
     class mouse:

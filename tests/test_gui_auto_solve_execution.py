@@ -1,4 +1,4 @@
-﻿from src.gui.services.auto_solve_execution import execute_auto_solve, execute_auto_solve_from_preview
+﻿from src.gui.gameplay.auto_solve_execution import execute_auto_solve, execute_auto_solve_from_preview
 
 
 class DummyLogger:

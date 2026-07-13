@@ -140,6 +140,7 @@ class GameState:
     bomb_count: int = 0
     has_boss_key: bool = False
     has_item: bool = False
+    item_names: Set[str] = field(default_factory=set)
     opened_doors: Set[Tuple[int, int]] = field(default_factory=set)
     collected_items: Set[Tuple[int, int]] = field(default_factory=set)
     pushed_blocks: Set[Tuple[Tuple[int, int], Tuple[int, int]]] = field(default_factory=set)
@@ -174,6 +175,7 @@ class GameState:
             bomb_count=self.bomb_count,
             has_boss_key=self.has_boss_key,
             has_item=self.has_item,
+            item_names=set(self.item_names),
             opened_doors=set(self.opened_doors),
             collected_items=set(self.collected_items),
             pushed_blocks=set(self.pushed_blocks),
@@ -194,6 +196,7 @@ def game_state_key(state: GameState) -> Tuple[Any, ...]:
         state.bomb_count,
         state.has_boss_key,
         state.has_item,
+        frozenset(str(name).upper() for name in state.item_names),
         frozenset(state.opened_doors),
         frozenset(state.collected_items),
         frozenset(state.pushed_blocks),
@@ -245,6 +248,10 @@ def dominates(state_a: GameState, state_b: GameState) -> bool:
     if not state_a.has_boss_key and state_b.has_boss_key:
         return False
     if not state_a.has_item and state_b.has_item:
+        return False
+    if not {
+        str(name).upper() for name in state_a.item_names
+    }.issuperset(str(name).upper() for name in state_b.item_names):
         return False
     if not state_a.opened_doors.issuperset(state_b.opened_doors):
         return False

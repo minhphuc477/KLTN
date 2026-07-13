@@ -1370,14 +1370,10 @@ Repository modularization boundary:
   same class objects, preserving imports and serialized class identity while
   removing another dependency-light responsibility from the simulator/search
   implementation.
-- The apparent `src/gui/services`, `src/gui/controls`, and selected
-  `src/gui/overlay` "dead files" are documented compatibility shims that
-  re-export canonical modules under `src/gui/solver`, `src/gui/gameplay`, and
-  `src/gui/control_panel`. Tests intentionally exercise those public paths.
-  Deleting them is a versioned API-removal decision, not dead-code cleanup.
-  The remaining production import through `controls/control_panel_logic` was
-  migrated to the canonical `control_panel.logic` path. A future major release
-  may remove shims after a deprecation window and import-usage telemetry.
+- The forwarding-only `src/gui/services`, `src/gui/controls`, and
+  `src/gui/overlay` packages were retained during migration, then removed once
+  production imports and behavior tests used canonical domain paths. The GUI
+  module catalog is filesystem-backed so removed paths cannot remain listed.
 - `train_diffusion.py` remains oversized. Frozen VQ-VAE checkpoint metadata,
   architecture resolution, and legacy-state compatibility now live in
   `src/training/diffusion_checkpoint_contracts.py`, with compatibility aliases
@@ -1494,10 +1490,8 @@ Current-source verification rejected several stale audit claims:
   the Big Key;
 - `LightweightGCNLayer` already batches disjoint graphs with offset indices and
   `index_add_`, without a Python batch loop;
-- `src/gui/services` and the legacy `src/gui/ai` names are compatibility APIs,
-  not an unreferenced 45-file graveyard. The catalog's one nonexistent legacy
-  service entry was removed, but tested shims remain until a versioned API
-  removal.
+- the forwarding-only GUI compatibility packages had no production consumers;
+  their tests were migrated to canonical modules and the packages were removed.
 
 The deeper pass found and corrected real contract gaps:
 
@@ -1582,3 +1576,206 @@ new feasibility closure or claim full-suite success.
   scale and out-of-distribution generalization require dedicated experiments
   rather than inference from in-distribution validity
   ([PCGRL+, 2024](https://arxiv.org/abs/2408.12525)).
+
+### End-To-End QD Archive Materialization (2026-07-13)
+
+- CVT archive schema version 4 stores the evaluated `MissionGraph` phenotype
+  for every admitted elite plus the ordered grammar rule schema and complete
+  fitness/feasibility contract. It also stores every mutable grammar/search RNG
+  stream required for exact warm-start continuation. A genome alone is not reproducible here:
+  grammar rules consume a population-global RNG, so replaying one genome from
+  the initial seed can produce a different graph.
+- Archive warm starts now fail closed when rule IDs, target curves, descriptor
+  targets, node/resource limits, or feasibility settings differ. Stored
+  fitness values are not compared under a new objective contract.
+- `python main.py topology-materialize-archive` compiles each archived
+  phenotype through the final graph export oracle and generates paired-seed
+  final maps under `end_to_end_validation_mode=reject`. It reports topology
+  coverage separately from any-seed and all-seeds surviving final-map
+  coverage, preserves per-cell failures, and labels limited runs incomplete.
+- Native archives remain pickle files, so materialization requires explicit
+  `--trust-pickle`. Legacy genome-only archives cannot support defensible
+  final-map claims and must be regenerated.
+
+### Masked-Room Graph-To-Grid Attention Ablation (2026-07-13)
+
+- The masked-room branch now has an executable, opt-in
+  `topology_conditioning_mode=graph_cross_attention`. The canonical
+  `additive` topology-map path remains unchanged for checkpoint compatibility.
+- The ablation uses each spatial token as a query over node-aligned graph
+  context, with a vectorized edge-aware GCN prepass, optional graph positions,
+  topological encodings, current-room distance features, and padding masks.
+  Its learned sigmoid gate blends only the cross-attention delta into the
+  MaskGIT hidden grid.
+- Missing or misaligned node context is a non-retryable model contract error.
+  The implementation does not silently truncate nodes or degrade to additive
+  conditioning while reporting the graph-attention ablation.
+- `attention_mode=linear_hedgehog` and the graph attention width/threshold/gate
+  controls are valid only for this ablation. Configuration rejects inactive
+  non-default controls, and masked-room inference reads them from the
+  masked-room checkpoint/fallback contract rather than diffusion defaults.
+- Reported complexity now separates transformer attention pairs from the
+  additional `H * W * N` graph-to-grid interactions. Quality, exact raw/final
+  solvability, topology drift, runtime, peak memory, and fallback rate must be
+  compared under paired seeds; the new branch is a hypothesis, not a claimed
+  improvement.
+
+This design keeps MaskGIT's parallel masked-token objective
+([Chang et al., CVPR 2022](https://openaccess.thecvf.com/content/CVPR2022/html/Chang_MaskGIT_Masked_Generative_Image_Transformer_CVPR_2022_paper.html))
+while using query-to-context cross-attention in the style of variable-input
+latent routing
+([Perceiver IO, ICLR 2022](https://arxiv.org/abs/2107.14795)). Graph structure
+is encoded before spatial attention, consistent with the local-plus-global
+separation studied by
+[GraphGPS](https://arxiv.org/abs/2205.12454). These papers motivate the
+ablation but do not establish superiority for Zelda room generation.
+
+### Validator Cost Contract And Cohesive Refactors (2026-07-13)
+
+- The publication validator was already wired into canonical, advanced, and
+  symbolic generation. The attached proposal's claims that lock closure,
+  topology-preserving room fallback, boss-gauntlet exclusion, and batched GCN
+  processing were absent are stale against the current source.
+- Solver consistency previously compared transition counts even though enemy,
+  pickup, door, and puzzle transitions have different costs. `ValidationResult`
+  and `SolverDiagnostics` now retain the winning full-state `g` cost; the
+  optional A* versus uniform-cost check compares accumulated costs with a tight
+  numerical tolerance and reports path lengths only as descriptive evidence.
+  Missing costs are indeterminate rather than silently accepted.
+- Every successful tile-oracle route is now replayed from a fresh `GameState`
+  through the canonical movement and graph-transition rules before it can be
+  reported as solved. The replay covers consumable keys and bombs, persistent
+  items, opened doors, pushed-block geometry, staged puzzles, stairs, virtual
+  nodes, graph warps, one-way constraints, and floor changes. A failed replay
+  changes the oracle result to `route_replay_failed`; a solved result without a
+  replay certificate is indeterminate in the publication contract.
+- Tile replay also recomputes accumulated transition cost from the reconstructed
+  route. A legal path whose replayed cost disagrees with the solver's stored
+  `g` value is rejected, preventing stale parent/cost bookkeeping from
+  contaminating solver-consistency or pacing evidence.
+- The replay retains all distinct legal states compatible with each reported
+  position. This avoids choosing an arbitrary inventory interpretation when a
+  position-only route can represent more than one graph transition. Behavioral
+  checks exercise mandatory small-key use, block pushing, cross-floor stairs,
+  and rejection of a fabricated route through a wall.
+- The resource-state graph oracle now applies the same rule at its own
+  representation boundary. `AgentSimulator.replay_path()` is the single graph
+  transition replay owner, `PathVerifier` delegates to it, and solved graph
+  evidence without `route_replay_status=verified` is indeterminate. This keeps
+  mission-graph path reconstruction and final tile-route reconstruction under
+  parallel fail-closed contracts.
+- Advisory pacing now reports consecutive landmark segments with graph path
+  cost, corridor-edge count, and intermediate-room count. It operates on the
+  original discrete route before smoothing. No threshold is used as a hard
+  definition of fun or quality.
+- Safetensors inference sidecars now include the optional puzzle-stage
+  semantics head, matching `.pth` checkpoint behavior. Loading a checkpoint
+  whose optional LogicNet or puzzle head is disabled in the current ablation
+  emits an explicit warning instead of dereferencing a missing module.
+- Pygame rendering was extracted from `simulation/validator.py` into
+  `simulation/validator_rendering.py`, and diffusion checkpoint I/O was
+  extracted into `training/diffusion_checkpoint_io.py`. Public trainer and
+  validator methods remain compatibility delegates; search rules and training
+  semantics were not moved.
+- The forwarding-only `src/gui/services`, `src/gui/controls`, and
+  `src/gui/overlay` packages were removed after every repository caller and
+  behavior test migrated to its canonical domain module. The two MAP-Elites
+  implementations and two LogicNet modules remain because import tracing and
+  source inspection show intentionally different APIs; file count alone is
+  not evidence of duplication.
+
+Scientific boundary: the staged contract can reject representation errors,
+resource-progression failures, graph-to-grid drift, invalid reconstructed
+routes, incomplete exact search, and solver-cost disagreement. Route replay is
+an executable certificate against the same canonical transition model; it is
+not an independent implementation of the game rules. The contract still
+cannot prove player enjoyment or human pacing, and automatic validation does
+not remove the need for a human study when making experience claims. This
+separation follows the evaluation taxonomy of
+[Withington et al. (FDG 2024)](https://arxiv.org/abs/2404.18657) and the
+feasibility/quality distinction used in constrained PCG search
+([Gallotta et al., 2022](https://arxiv.org/abs/2205.05834)). BSP therefore
+remains a matched layout baseline, not a mandatory replacement for the current
+graph-aware stitcher.
+
+The attached hardening proposal's four immediate source claims are stale in
+the current revision. `MissionGrammar.validate_all_constraints()` runs the
+consumable-state `validate_exact_progression()` oracle after its diagnostic
+prefilters, so cyclic key dependencies are not certified by excluding one lock
+at a time. `AddBossGauntlet` blocks every approach edge while placing the big
+key. The advanced pipeline's opt-in fallback reconstructs the canonical
+boundary, graph markers, and puzzle scaffold, then reapplies boundary authority.
+`LightweightGCNLayer` flattens `[B, N]` indices and uses batched `index_add_`
+without a Python batch loop. Replacing these with the proposal's blanket
+"exclude all locks" check would reject valid sequential key progression and is
+therefore not adopted.
+
+Verification for this pass: 253 checks passed across tile mechanics, stitching,
+the end-to-end validator, rendering, diffusion conditioning/checkpoint I/O,
+masked-room architecture/configuration/ablation manifests, topology generation,
+the neural pipeline, and search-factory behavior. The masked graph-to-grid
+softmax and linear branches passed forward, backward, fail-closed, and
+complexity checks; `compileall` passed for `src/` and `tests/`.
+
+Route-certificate extension verification: 268 non-overlapping checks passed
+across full-state tile search, graph evaluation, grammar integration, topology
+reproducibility, advanced and canonical pipelines, batched GCN behavior, and
+fallback contracts. `compileall` and `git diff --check` also passed. Dependency
+warnings from PyG and `requests` remain environment warnings, not suppressed
+test failures.
+
+### Fail-Closed Grammar Generation And Canonical GUI Imports (2026-07-13)
+
+- A direct multi-seed generation probe found complete-contract acceptance of
+  `9/10` at 8 rooms, `6/10` at 12 rooms, and `2/10` at 20 rooms. Consequently,
+  one grammar attempt cannot be described as guaranteed-valid output.
+- `MissionGrammar.generate()` remains the raw one-attempt operator needed to
+  report failure rates and expressive range. It now marks output as
+  `certified`, `invalid_candidate`, or `partial_lock_check_only` in generation
+  metadata, so downstream analyses cannot confuse an attempted graph with a
+  validated artifact.
+- `MissionGrammar.generate_validated()` is the production contract. It retries
+  independent deterministic seed streams, reruns the complete diagnostic plus
+  consumable-state oracle, records the accepted seed/attempt count, and raises
+  after exhaustion. GUI generation and non-evolution ablation/export paths use
+  this fail-closed API.
+- The proposed blanket test that removes every lock simultaneously was not
+  adopted. The current lock-node validator keeps all unresolved locks closed,
+  collects reachable keys, and unlocks matching locks in waves. This rejects
+  mutual key-lock cycles while accepting valid nested progression. The exact
+  state-space oracle remains the final authority for consumed small keys.
+- Fifty-six forwarding-only GUI files were deleted after test imports migrated
+  to canonical packages. The module catalog now discovers real modules from
+  the filesystem instead of retaining a hand-maintained list of deleted paths.
+- The migrated GUI behavior suites passed in two batches (`80 + 66` tests).
+  Their execution exposed a real cross-context font-cache defect: font objects
+  were keyed only by style and could leak between Pygame-compatible runtimes.
+  Cache keys now include the owning font subsystem identity.
+- The proposed Zelda-data deletion list was re-audited rather than applied
+  mechanically. `src/zelda_data/modules/` is already empty, while
+  `adapter_io.py`, `conversion.py`, and `visual_extractor.py` have active
+  production importers and unique implementations, so deleting them would be
+  data-path regression rather than cleanup.
+- The large-file refactor is already staged by ownership: validator state,
+  result types, helper metrics, and rendering live in separate modules;
+  diffusion configuration, checkpoint contracts, and checkpoint I/O are also
+  separate. Remaining solver/trainer extraction must preserve public APIs and
+  is not justified by line-count targets alone.
+
+Scientific boundary: exact validators establish feasibility under the encoded
+mechanics, not fun. Pacing and topology statistics remain advisory objectives,
+and persistent-homology losses remain ablations until paired experiments show
+improved graph-to-grid fidelity without reducing valid diversity. This follows
+the evaluation-taxonomy caution in
+[Withington et al. (2024)](https://arxiv.org/abs/2404.18657), the explicit
+designer-constraint framing of
+[Linden et al. (2013)](https://ojs.aaai.org/index.php/AIIDE/article/view/12592),
+and the use of topology layers as learnable priors rather than correctness
+proofs in
+[Gabrielsson et al. (2020)](https://proceedings.mlr.press/v108/gabrielsson20a.html).
+
+Verification for this pass used executable contracts rather than source-only
+claims: 85 graph-to-tile/advanced-pipeline tests and 207
+puzzle-semantics/MaskGIT/neural-pipeline/config/ablation tests passed. A
+five-seed 20-room generation probe also produced certified graphs in 1-5
+attempts, and every accepted graph passed the complete validation contract.

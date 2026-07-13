@@ -1,225 +1,54 @@
-"""Categorized index of GUI modules for navigation and maintenance.
+"""Filesystem-backed index of canonical GUI modules.
 
-Canonical orchestration modules live under ``orchestration/*``.
-Legacy ``<domain>/*_orchestration.py`` modules are backward-compatible shims.
+The catalog is navigation metadata, not an import registry.  Deriving it from
+the package prevents deleted or moved modules from remaining advertised as
+valid APIs.
 """
 
+from __future__ import annotations
+
+from pathlib import Path
+
+
+_GUI_ROOT = Path(__file__).resolve().parents[1]
+_CANONICAL_DOMAINS = (
+    "ai",
+    "app",
+    "common",
+    "components",
+    "control_panel",
+    "gameplay",
+    "map",
+    "orchestration",
+    "rendering",
+    "runtime",
+    "solver",
+    "topology",
+)
+
+
+def _discover_domain_modules(domain: str) -> list[str]:
+    """Return import-like module paths relative to :mod:`src.gui`."""
+    root = _GUI_ROOT / domain
+    if not root.is_dir():
+        return []
+    modules: list[str] = []
+    for path in root.rglob("*.py"):
+        if path.name == "__init__.py" or "__pycache__" in path.parts:
+            continue
+        modules.append(path.relative_to(_GUI_ROOT).with_suffix("").as_posix())
+    return sorted(modules)
+
+
 GUI_MODULE_CATEGORIES = {
-    # Public categorized facades introduced to reduce monolithic imports.
-    "controls": [
-        "controls/control_panel_animation",
-        "controls/control_panel_interactions",
-        "controls/control_panel_logic",
-        "controls/control_panel_scroll",
-        "controls/control_panel_updates",
-        "controls/control_panel_view",
-        "controls/manual_step_controller",
-        "controls/map_elites_controls",
-        "controls/map_loading",
-        "controls/match_controls",
-        "controls/minimap_controls",
-        "controls/path_controls",
-        "controls/runtime_flags",
-        "controls/sidebar_render_sections",
-        "controls/view_navigation",
-        "controls/viewport_controls",
-        "controls/window_focus",
-    ],
-    "overlay": [
-        "overlay/debug_overlay",
-        "overlay/display_diagnostics",
-        "overlay/display_lifecycle",
-        "overlay/help_overlay",
-        "overlay/inventory_display",
-        "overlay/inventory_manager",
-        "overlay/item_markers",
-        "overlay/status_display",
-        "overlay/toast_messages",
-        "overlay/toast_notification",
-    ],
-    "services": [
-        "services/auto_solve_execution",
-        "services/auto_step_controller",
-        "services/block_push_controls",
-        "services/path_analysis",
-        "services/path_guaranteed_renderer",
-        "services/path_strategies",
-        "services/route_io",
-        "services/route_payload",
-        "services/solver_comparison_runner",
-        "services/solver_core_state",
-        "services/solver_launching",
-        "services/solver_metrics_tooltips",
-        "services/solver_prestart_cleanup",
-        "services/solver_process_worker",
-        "services/solver_recovery",
-        "services/solver_request_helpers",
-        "services/solver_scheduling",
-        "services/solver_start_flow",
-        "services/solver_start_logic",
-        "services/solver_sync_execution",
-        "services/solver_utils",
-        "services/solver_worker_bootstrap",
-        "services/topology_export",
-        "services/topology_helpers",
-        "services/topology_precheck",
-        "services/watchdog_monitor",
-    ],
-    "common": [
-        "common/bottom_panel",
-        "common/constants",
-        "common/fallbacks",
-        "common/module_catalog",
-        "common/preview_startup",
-        "common/tier2_components",
-        "common/widget_tooltips",
-        "common/widgets",
-    ],
-    # Canonical domain implementations.
-    "domain_control_panel": [
-        "control_panel/animation",
-        "control_panel/animation_orchestration",
-        "control_panel/click_render_orchestration",
-        "control_panel/interactions",
-        "control_panel/layout_orchestration",
-        "control_panel/logic",
-        "control_panel/scroll",
-        "control_panel/updates",
-        "control_panel/view",
-    ],
-    "domain_solver": [
-        "solver/start_flow",
-        "solver/start_logic",
-        "solver/sync_execution",
-        "solver/scheduling",
-        "solver/request_helpers",
-        "solver/request_orchestration",
-        "solver/launching",
-        "solver/launch_orchestration",
-        "solver/worker_bootstrap",
-        "solver/process_worker",
-        "solver/process_api_orchestration",
-        "solver/core_state",
-        "solver/recovery",
-        "solver/prestart_cleanup",
-        "solver/session_orchestration",
-        "solver/utils",
-        "solver/comparison_runner",
-        "solver/comparison_orchestration",
-        "solver/metrics_tooltips",
-    ],
-    "domain_rendering": [
-        "rendering/helpers",
-        "rendering/map_overlays",
-        "rendering/sidebar_sections",
-        "rendering/bottom_panel",
-        "rendering/status_display",
-        "rendering/help_overlay",
-        "rendering/debug_overlay",
-        "rendering/frame_orchestration",
-        "rendering/path_guaranteed_renderer",
-        "rendering/inventory_display",
-        "rendering/panel_overlay_orchestration",
-        "rendering/status_toast_orchestration",
-    ],
-    "domain_runtime": [
-        "runtime/flags",
-        "runtime/display_lifecycle",
-        "runtime/display_diagnostics",
-        "runtime/display_orchestration",
-        "runtime/window_focus",
-        "runtime/watchdog_monitor",
-        "runtime/temp_file_tools",
-        "runtime/temp_file_management",
-        "runtime/route_payload",
-        "runtime/route_io",
-        "runtime/route_orchestration",
-        "runtime/toast_messages",
-        "runtime/toast_notification",
-    ],
-    "domain_map": [
-        "map/asset_orchestration",
-        "map/loading",
-        "map/navigation",
-        "map/navigation_orchestration",
-        "map/viewport",
-        "map/minimap",
-    ],
-    "domain_gameplay": [
-        "gameplay/action_orchestration",
-        "gameplay/control_actions_orchestration",
-        "gameplay/dungeon_generation_orchestration",
-        "gameplay/inventory_orchestration",
-        "gameplay/path_analysis",
-        "gameplay/path_controls",
-        "gameplay/path_strategies",
-        "gameplay/inventory_manager",
-        "gameplay/item_markers",
-        "gameplay/manual_step_controller",
-        "gameplay/auto_step_controller",
-        "gameplay/auto_solve_execution",
-        "gameplay/block_push_controls",
-        "gameplay/map_elites_controls",
-        "gameplay/preview_startup",
-    ],
-    "domain_topology": [
-        "topology/export",
-        "topology/helper_orchestration",
-        "topology/helpers",
-        "topology/match_orchestration",
-        "topology/orchestration",
-        "topology/precheck",
-        "topology/match_controls",
-    ],
-    "domain_orchestration": [
-        "orchestration/app/asset_boot_orchestration",
-        "orchestration/app/entrypoint_orchestration",
-        "orchestration/app/runtime_loop_orchestration",
-        "orchestration/control_panel/animation_orchestration",
-        "orchestration/control_panel/click_render_orchestration",
-        "orchestration/control_panel/layout_orchestration",
-        "orchestration/gameplay/action_orchestration",
-        "orchestration/gameplay/control_actions_orchestration",
-        "orchestration/gameplay/dungeon_generation_orchestration",
-        "orchestration/gameplay/inventory_orchestration",
-        "orchestration/map/asset_orchestration",
-        "orchestration/map/navigation_orchestration",
-        "orchestration/rendering/frame_orchestration",
-        "orchestration/rendering/panel_overlay_orchestration",
-        "orchestration/rendering/status_toast_orchestration",
-        "orchestration/runtime/display_orchestration",
-        "orchestration/runtime/route_orchestration",
-        "orchestration/solver/comparison_orchestration",
-        "orchestration/solver/launch_orchestration",
-        "orchestration/solver/process_api_orchestration",
-        "orchestration/solver/request_orchestration",
-        "orchestration/solver/session_orchestration",
-        "orchestration/topology/helper_orchestration",
-        "orchestration/topology/match_orchestration",
-        "orchestration/topology/orchestration",
-    ],
-    "domain_components": [
-        "components/constants",
-        "components/fallbacks",
-        "components/widgets",
-        "components/tier2_components",
-    ],
-    "domain_ai": [
-        "ai/generation_controls",
-        "ai/generation_pipeline",
-        "ai/generation_worker",
-    ],
-    "domain_app": [
-        "app/asset_boot_orchestration",
-        "app/entrypoint_orchestration",
-        "app/gui_startup",
-        "app/map_adapter_loader",
-        "app/run_loop_pipeline",
-        "app/runtime_loop_orchestration",
-    ],
+    f"domain_{domain}": _discover_domain_modules(domain)
+    for domain in _CANONICAL_DOMAINS
 }
 
 
 def list_categories() -> list[str]:
     """Return sorted category names."""
-    return sorted(GUI_MODULE_CATEGORIES.keys())
+    return sorted(GUI_MODULE_CATEGORIES)
+
+
+__all__ = ["GUI_MODULE_CATEGORIES", "list_categories"]
