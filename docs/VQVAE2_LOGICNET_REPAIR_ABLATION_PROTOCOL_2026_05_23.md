@@ -64,7 +64,7 @@ runs:
 python src\train_vqvae.py `
   --config configs\zelda_hmolqd.yaml `
   --architecture vqvae `
-  --output-dir outputs\vqvae_baseline_v1
+  --save-dir outputs\vqvae_baseline_v1\checkpoints\vqvae
 ```
 
 ```powershell
@@ -73,7 +73,7 @@ python src\train_vqvae.py `
   --architecture vqvae2 `
   --top-codebook-size 128 `
   --top-latent-dim 64 `
-  --output-dir outputs\vqvae2_hierarchical_v1
+  --save-dir outputs\vqvae2_hierarchical_v1\checkpoints\vqvae
 ```
 
 Each run must export:

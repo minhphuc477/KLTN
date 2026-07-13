@@ -550,6 +550,12 @@ class AdvancedNeuralSymbolicPipeline:
             'failure_reason': str(result.failure_reason or ''),
             'termination_status': str(result.termination_status),
             'proven_unsolvable': bool(result.proven_unsolvable),
+            'route_replay_status': str(
+                getattr(result, 'route_replay_status', 'not_run')
+            ),
+            'route_replay_error': str(
+                getattr(result, 'route_replay_error', '') or ''
+            ),
             'all_rooms_reachable': bool(
                 room_reachability['complete']
                 and not room_reachability['unreachable_nodes']

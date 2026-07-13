@@ -56,6 +56,7 @@ from .graph_types import (
     Tensor,
     _require_torch_adapters,
 )
+from .progression_solver import solve_mission_progression
 from src.generation.grammar_validators import (
     validate_battery_reachability,
     validate_exact_progression,
@@ -174,6 +175,74 @@ class MissionGrammar:
             logger.info("All validation checks passed")
         
         return all_passed
+
+    def repair_all_constraints(
+        self,
+        graph: MissionGraph,
+        *,
+        validate_all: bool = True,
+        max_rounds: Optional[int] = None,
+    ) -> MissionGraph:
+        """Run the same bounded repair convergence used by generation.
+
+        This is the authoritative post-grammar repair contract for mutation,
+        ablation, and rule-interaction experiments.  Callers that need the raw
+        candidate for comparison should pass a copy because repairs may mutate
+        graph-owned nodes, edges, and generation statistics.
+        """
+        graph.ensure_generation_stats_defaults()
+        rounds = int(max_rounds) if max_rounds is not None else (4 if validate_all else 2)
+        if rounds < 1:
+            raise ValueError("max_rounds must be at least 1")
+
+        for _ in range(rounds):
+            graph = self._ensure_anchor_nodes(graph)
+            graph.sanitize()
+            repairs_before = int(graph.generation_stats.get("total_repairs", 0))
+            round_had_repairs = False
+
+            lock_ok = self.validate_lock_key_ordering(graph)
+            if not lock_ok:
+                logger.warning("Generated graph failed lock-key validation, fixing...")
+                graph = self._fix_lock_key_ordering(graph)
+                graph = self._ensure_anchor_nodes(graph)
+                graph.sanitize()
+                round_had_repairs = int(
+                    graph.generation_stats.get("total_repairs", 0)
+                ) > repairs_before
+
+            if not validate_all:
+                if round_had_repairs:
+                    graph.generation_stats["repair_rounds"] = int(
+                        graph.generation_stats.get("repair_rounds", 0)
+                    ) + 1
+                if self.validate_lock_key_ordering(graph):
+                    break
+                continue
+
+            if self.validate_all_constraints(graph):
+                if round_had_repairs:
+                    graph.generation_stats["repair_rounds"] = int(
+                        graph.generation_stats.get("repair_rounds", 0)
+                    ) + 1
+                break
+
+            graph = self._repair_progression_constraints(graph)
+            graph = self._repair_wave3_constraints(graph)
+            graph = self._ensure_anchor_nodes(graph)
+            graph.sanitize()
+            round_had_repairs = int(
+                graph.generation_stats.get("total_repairs", 0)
+            ) > repairs_before
+            if round_had_repairs:
+                graph.generation_stats["repair_rounds"] = int(
+                    graph.generation_stats.get("repair_rounds", 0)
+                ) + 1
+
+            if self.validate_all_constraints(graph):
+                break
+
+        return graph
 
     def generate_validated(
         self,
@@ -331,51 +400,11 @@ class MissionGrammar:
             elif isinstance(selected_rule, InsertChallengeRule):
                 num_challenges_added += 1
 
-        # Repair/validation convergence loop.
-        # Multiple rounds are needed because one repair can expose another issue.
-        rounds = 4 if validate_all else 2
-        for _ in range(rounds):
-            graph = self._ensure_anchor_nodes(graph)
-            graph.sanitize()
-            repairs_before = int(graph.generation_stats.get("total_repairs", 0))
-            round_had_repairs = False
-
-            lock_ok = self.validate_lock_key_ordering(graph)
-            if not lock_ok:
-                logger.warning("Generated graph failed lock-key validation, fixing...")
-                graph = self._fix_lock_key_ordering(graph)
-                graph = self._ensure_anchor_nodes(graph)
-                graph.sanitize()
-                round_had_repairs = int(graph.generation_stats.get("total_repairs", 0)) > repairs_before
-
-            if not validate_all:
-                if round_had_repairs:
-                    graph.generation_stats["repair_rounds"] = int(
-                        graph.generation_stats.get("repair_rounds", 0)
-                    ) + 1
-                if self.validate_lock_key_ordering(graph):
-                    break
-                continue
-
-            if self.validate_all_constraints(graph):
-                if round_had_repairs:
-                    graph.generation_stats["repair_rounds"] = int(
-                        graph.generation_stats.get("repair_rounds", 0)
-                    ) + 1
-                break
-
-            graph = self._repair_progression_constraints(graph)
-            graph = self._repair_wave3_constraints(graph)
-            graph = self._ensure_anchor_nodes(graph)
-            graph.sanitize()
-            round_had_repairs = int(graph.generation_stats.get("total_repairs", 0)) > repairs_before
-            if round_had_repairs:
-                graph.generation_stats["repair_rounds"] = int(
-                    graph.generation_stats.get("repair_rounds", 0)
-                ) + 1
-
-            if self.validate_all_constraints(graph):
-                break
+        graph = self.repair_all_constraints(
+            graph,
+            validate_all=bool(validate_all),
+            max_rounds=4 if validate_all else 2,
+        )
 
         if validate_all:
             final_valid = bool(self.validate_all_constraints(graph))
@@ -1271,33 +1300,22 @@ class MissionGrammar:
         if (require_goal_gauntlet or has_goal_gauntlet_artifacts) and not self.validate_goal_gauntlet(graph, log_failures=log_failures):
             return False
 
-        # Individual provider checks validate gate metadata, but cannot reject
-        # mutually dependent edge gates on their own. Compute one closure with
-        # every gate active so providers reached only by assuming another gate
-        # is open cannot certify the graph.
-        progression_reachable = self._progression_reachable_nodes(
-            graph,
-            start.id,
-            exclude_nodes=set(),
-            exclude_edges=set(),
-        )
-        traversable_nodes = {
-            node_id
-            for node_id in graph.nodes
-            if node_id == start.id
-            or any(
-                edge.edge_type not in graph.NON_TRAVERSABLE_EDGE_TYPES
-                and (edge.source == node_id or edge.target == node_id)
-                for edge in graph.edges
-            )
-        }
-        unreachable = traversable_nodes - progression_reachable
-        if unreachable:
+        # Provider existence is not a progression proof. Use the shared state
+        # planner so mutually dependent persistent gates are rejected and one
+        # fungible key cannot be reused to open several doors.
+        progression = solve_mission_progression(graph, start.id)
+        if progression.exhausted:
             if log_failures:
                 logger.warning(
-                    "Progression closure leaves nodes unreachable with all gates "
-                    "active: %s",
-                    sorted(unreachable),
+                    "Progression validation exhausted after %d states; graph is not certified.",
+                    progression.explored_states,
+                )
+            return False
+        if not progression.all_reachable:
+            if log_failures:
+                logger.warning(
+                    "Progression planner leaves nodes unreachable with all gates active: %s",
+                    sorted(progression.unreachable_nodes),
                 )
             return False
 

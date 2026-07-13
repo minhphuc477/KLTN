@@ -28,6 +28,8 @@ Superseded notes belong under `docs/archive/`.
 
 ## Current Protocols
 
+- Canonical dependency-ordered training commands:
+  [`TRAINING_COMMANDS_IN_ORDER.md`](TRAINING_COMMANDS_IN_ORDER.md)
 - Designer controllability and compute/sample-efficiency:
   [`DESIGNER_CONTROLLABILITY_AND_COMPUTE_PROTOCOL.md`](DESIGNER_CONTROLLABILITY_AND_COMPUTE_PROTOCOL.md)
 - VQ-VAE-2, conditioning, LogicNet, repair, and P-CBS ablation protocol:
@@ -38,7 +40,7 @@ Superseded notes belong under `docs/archive/`.
   [`KAGGLE_RESEARCH_EVIDENCE_RUNBOOK.md`](KAGGLE_RESEARCH_EVIDENCE_RUNBOOK.md)
 - Local research evidence runbook:
   [`LOCAL_RESEARCH_EVIDENCE_RUNBOOK.md`](LOCAL_RESEARCH_EVIDENCE_RUNBOOK.md)
-- Training hyperparameter/batch preflight command:
+- Full training, ablation, and evaluation reference:
   [`FULL_TRAINING_ABLATION_AND_EVAL_COMMAND_BOOK_2026_04_18.md`](FULL_TRAINING_ABLATION_AND_EVAL_COMMAND_BOOK_2026_04_18.md)
 - Thesis hyperparameter evidence and protocol justification:
   [`THESIS_HYPERPARAMETER_SEARCH_AND_PROTOCOL_JUSTIFICATION_2026_04_19.md`](THESIS_HYPERPARAMETER_SEARCH_AND_PROTOCOL_JUSTIFICATION_2026_04_19.md)

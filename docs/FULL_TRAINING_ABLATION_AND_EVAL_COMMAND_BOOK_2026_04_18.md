@@ -2,6 +2,10 @@
 
 Last updated: 2026-05-24
 
+For the shortest dependency-ordered training sequence, use
+[`TRAINING_COMMANDS_IN_ORDER.md`](TRAINING_COMMANDS_IN_ORDER.md). This document
+remains the expanded ablation and evaluation reference.
+
 This is the practical runbook for rebuilding the repo from scratch and
 reproducing the main ablations. It is intentionally operational.
 
@@ -47,7 +51,7 @@ trained diffusion timestep count.
 
 ## 2. Recommended Search Strategy For Training / Eval
 
-This is not hyperparameter search for search algorithms. It is the repo’s
+This is not hyperparameter search for search algorithms. It is the repo's
 recommended evaluation stack:
 
 - hard correctness oracle:
@@ -337,7 +341,7 @@ python src\train_vqvae.py `
   --architecture vqvae2 `
   --top-codebook-size 128 `
   --top-latent-dim 64 `
-  --output-dir outputs\vqvae2_hierarchical_v1
+  --save-dir outputs\vqvae2_hierarchical_v1\checkpoints\vqvae
 ```
 
 ### 6.6 Conditioning, LogicNet, and repair matrix

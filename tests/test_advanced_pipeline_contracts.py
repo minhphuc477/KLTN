@@ -235,6 +235,8 @@ def test_advanced_graph_oracle_rejects_unreachable_side_room_contract():
     result = pipeline._validate_mission_graph(graph)
 
     assert result["solvable"] is True
+    assert result["route_replay_status"] == "verified"
+    assert result["route_replay_error"] == ""
     assert result["all_rooms_reachable"] is False
     assert result["unreachable_rooms"] == [2]
 

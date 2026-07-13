@@ -531,6 +531,70 @@ class TestAdvancedRulesIntegration:
 
         assert not grammar.validate_progression_constraints(graph)
 
+    def test_fungible_keys_are_consumed_across_sequential_locks(self):
+        """One small key cannot certify two sequential one-key doors."""
+        grammar = MissionGrammar(seed=42)
+        graph = MissionGraph()
+        for node in [
+            MissionNode(id=0, node_type=NodeType.START),
+            MissionNode(id=1, node_type=NodeType.KEY),
+            MissionNode(id=2, node_type=NodeType.EMPTY),
+            MissionNode(id=3, node_type=NodeType.EMPTY),
+            MissionNode(id=4, node_type=NodeType.GOAL),
+        ]:
+            graph.add_node(node)
+        graph.add_edge(0, 1, EdgeType.PATH)
+        first_lock = MissionEdge(1, 2, EdgeType.LOCKED, requires_key_count=1)
+        second_lock = MissionEdge(2, 3, EdgeType.LOCKED, requires_key_count=1)
+        graph.edges.extend([first_lock, second_lock])
+        graph.add_edge(3, 4, EdgeType.PATH)
+        graph.sanitize()
+
+        assert not grammar.validate_progression_constraints(graph, log_failures=False)
+
+    def test_fungible_key_search_accepts_new_key_behind_first_lock(self):
+        """The progression planner must allow a valid staged key economy."""
+        grammar = MissionGrammar(seed=42)
+        graph = MissionGraph()
+        for node in [
+            MissionNode(id=0, node_type=NodeType.START),
+            MissionNode(id=1, node_type=NodeType.KEY),
+            MissionNode(id=2, node_type=NodeType.EMPTY),
+            MissionNode(id=3, node_type=NodeType.KEY),
+            MissionNode(id=4, node_type=NodeType.EMPTY),
+            MissionNode(id=5, node_type=NodeType.GOAL),
+        ]:
+            graph.add_node(node)
+        graph.add_edge(0, 1, EdgeType.PATH)
+        graph.edges.append(MissionEdge(1, 2, EdgeType.LOCKED, requires_key_count=1))
+        graph.add_edge(2, 3, EdgeType.PATH)
+        graph.edges.append(MissionEdge(3, 4, EdgeType.LOCKED, requires_key_count=1))
+        graph.add_edge(4, 5, EdgeType.PATH)
+        graph.sanitize()
+
+        assert grammar.validate_progression_constraints(graph, log_failures=False)
+
+    def test_multi_lock_requires_matching_token_family(self):
+        """Unrelated collection tokens must not open a typed multi-lock."""
+        grammar = MissionGrammar(seed=42)
+        graph = MissionGraph()
+        graph.add_node(MissionNode(id=0, node_type=NodeType.START))
+        graph.add_node(MissionNode(id=1, node_type=NodeType.TOKEN, token_id="MOON"))
+        graph.add_node(MissionNode(id=2, node_type=NodeType.GOAL))
+        graph.add_edge(0, 1, EdgeType.PATH)
+        graph.edges.append(
+            MissionEdge(
+                1,
+                2,
+                EdgeType.MULTI_LOCK,
+                token_count=1,
+                token_id="SUN",
+            )
+        )
+        graph.sanitize()
+
+        assert not grammar.validate_progression_constraints(graph, log_failures=False)
+
     def test_big_room_merging(self):
         """Test big room formation (RULE #2)."""
         grammar = MissionGrammar(seed=123)
