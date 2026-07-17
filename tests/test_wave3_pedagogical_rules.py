@@ -290,6 +290,10 @@ class TestGateAndBranchRewards:
         graph = rule.apply(graph, {'rng': None, 'difficulty': 0.5})
 
         assert sum(1 for node in graph.nodes.values() if node.node_type == NodeType.BIG_KEY) == 1
+        state_blocks = [edge for edge in graph.edges if edge.edge_type == EdgeType.STATE_BLOCK]
+        assert state_blocks
+        assert state_blocks[0].switch_id is not None
+        assert state_blocks[0].switches_required == [state_blocks[0].switch_id]
 
 
 class TestAddPacingBreakerRule:
@@ -399,6 +403,11 @@ class TestAddResourceLoopRule:
         farm = farms[0]
         assert farm.drops_resource == "BOMBS"
         assert farm.difficulty_rating == "SAFE"
+        assert not any(
+            edge.edge_type == EdgeType.SHORTCUT
+            and {edge.source, edge.target} == {farm.id, start.id}
+            for edge in graph.edges
+        )
         
         # Verify validation
         assert validate_resource_loops(graph)

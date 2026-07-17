@@ -65,7 +65,11 @@ from src.pipeline.room_topology_conditioning import (
     infer_puzzle_room_structure_enabled,
     nearest_walkable_point,
 )
-from src.pipeline.spatial_utils import clamp_room_coord, parse_room_coord, stable_node_sort_key
+from src.pipeline.spatial_utils import (
+    canonical_node_order,
+    clamp_room_coord,
+    parse_room_coord,
+)
 from src.utils.style_tokens import iter_style_metadata_candidates, resolve_style_token_id
 from src.zelda_data.splits import DEFAULT_TRAIN_DUNGEONS, normalize_dungeon_ids, normalize_variants
 
@@ -232,7 +236,7 @@ def _extract_graph_from_dungeon(
             room_position_by_graph_node[graph_node_id] = (int(room_pos[0]), int(room_pos[1]))
 
     idx = 0
-    ordered_node_rows = sorted(graph.nodes(data=True), key=lambda item: stable_node_sort_key(item[0]))
+    ordered_node_rows = [(node_id, graph.nodes[node_id]) for node_id in canonical_node_order(graph)]
     for node_id, data in ordered_node_rows:
         if data.get('is_start_pointer', False):
             continue
@@ -300,7 +304,7 @@ def _extract_graph_from_dungeon(
 
     filtered_nodes = [
         node_id
-        for node_id in sorted(graph.nodes(), key=stable_node_sort_key)
+        for node_id in canonical_node_order(graph)
         if node_id in node_id_to_idx
     ]
     tpe_tensor = compute_tpe_features(

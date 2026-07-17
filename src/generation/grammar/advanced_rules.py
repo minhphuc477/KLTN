@@ -1164,7 +1164,7 @@ class AddFungibleLockRule(ProductionRule):
                 or (e.source == key_id and e.target == key_edge.target)
             )
         ]
-        graph.add_edge(key_edge.source, key_edge.target, EdgeType.PATH)
+        graph.edges.insert(min(int(key_edge_idx), len(graph.edges)), key_edge)
         graph.sanitize()
         logger.debug(
             "AddFungibleLockRule: No pre-gate-valid lock edge after key insertion; rolled back key %s",
@@ -1213,6 +1213,11 @@ class FormBigRoomRule(ProductionRule):
             node_b = graph.nodes.get(edge.target)
             if not node_a or not node_b:
                 continue
+
+            floor_a = int(node_a.position[2]) if len(node_a.position) > 2 else 0
+            floor_b = int(node_b.position[2]) if len(node_b.position) > 2 else 0
+            if floor_a != floor_b:
+                continue
             
             # Check spatial adjacency (Manhattan distance = 1 horizontally)
             dist = abs(node_a.position[0] - node_b.position[0]) + abs(node_a.position[1] - node_b.position[1])
@@ -1236,6 +1241,11 @@ class FormBigRoomRule(ProductionRule):
             node_b = graph.nodes.get(edge.target)
             if not node_a or not node_b:
                 continue
+
+            floor_a = int(node_a.position[2]) if len(node_a.position) > 2 else 0
+            floor_b = int(node_b.position[2]) if len(node_b.position) > 2 else 0
+            if floor_a != floor_b:
+                continue
             
             dist = abs(node_a.position[0] - node_b.position[0]) + abs(node_a.position[1] - node_b.position[1])
             if dist <= 2:
@@ -1249,12 +1259,14 @@ class FormBigRoomRule(ProductionRule):
         node_a_id, node_b_id = rng.choice(candidates)
         node_a = graph.nodes[node_a_id]
         node_b = graph.nodes[node_b_id]
+
+        floor = int(node_a.position[2]) if len(node_a.position) > 2 else 0
         
         # Merge node_b into node_a
         merged_pos = (
             min(node_a.position[0], node_b.position[0]),
             min(node_a.position[1], node_b.position[1]),
-            node_a.position[2],
+            floor,
         )
         
         # Determine room size based on spatial relationship
@@ -1603,7 +1615,7 @@ class AddCollectionChallengeRule(ProductionRule):
                 continue
             
             # Place token at end of branch
-            target_node_id = branch[-1] if branch else branch[0]
+            target_node_id = branch[-1]
             
             # Create TOKEN node
             token_id = max(graph.nodes.keys()) + 1
@@ -1784,24 +1796,61 @@ class AddSectorRule(ProductionRule):
         # Start from branch point
         current_id = branch_point.id
         sector_nodes = [current_id]
+        added_nodes: List[int] = []
         
         for i in range(chain_length):
             # Create new node in sector
             new_id = max(graph.nodes.keys()) + 1
+            anchor = graph.nodes[current_id].position
+            position = _bounded_free_position(
+                graph,
+                anchor,
+                [
+                    (1, 0),
+                    (0, 1),
+                    (-1, 0),
+                    (0, -1),
+                    (1, 1),
+                    (1, -1),
+                    (-1, 1),
+                    (-1, -1),
+                ],
+                rng,
+                context,
+            )
+            occupied = {
+                (
+                    int(node.position[0]),
+                    int(node.position[1]),
+                    int(node.position[2]) if len(node.position) > 2 else 0,
+                )
+                for node in graph.nodes.values()
+            }
+            if position in occupied:
+                added_set = set(added_nodes)
+                graph.edges = [
+                    edge
+                    for edge in graph.edges
+                    if edge.source not in added_set and edge.target not in added_set
+                ]
+                for added_id in added_nodes:
+                    graph.nodes.pop(added_id, None)
+                graph.sanitize()
+                logger.debug(
+                    "AddSectorRule: Insufficient free cells inside layout_bounds; rolled back sector."
+                )
+                return graph
             new_node = MissionNode(
                 id=new_id,
                 node_type=rng.choice([NodeType.ENEMY, NodeType.PUZZLE, NodeType.EMPTY]),
-                position=(
-                    branch_point.position[0] + i + 1,
-                    branch_point.position[1] + rng.randint(-1, 1),
-                    branch_point.position[2],
-                ),
+                position=position,
                 difficulty=context.get('difficulty', 0.5) * rng.uniform(0.6, 0.9),
                 sector_id=sector_id,
                 sector_theme=sector_theme,
             )
             graph.add_node(new_node)
             graph.add_edge(current_id, new_id, EdgeType.PATH)
+            added_nodes.append(new_id)
             sector_nodes.append(new_id)
             current_id = new_id
         
@@ -1916,6 +1965,7 @@ class AddEntangledBranchesRule(ProductionRule):
             target=reward_id,
             edge_type=EdgeType.STATE_BLOCK,
             switch_id=switch_id,
+            switches_required=[switch_id],
         )
         graph.edges.append(block_edge)
         graph._adjacency[block_anchor].append(reward_id)
@@ -2631,13 +2681,10 @@ class AddResourceLoopRule(ProductionRule):
             )
             graph.add_node(farm_node)
             graph.add_edge(gate_source, farm_id, EdgeType.PATH)
-            
-            # Try to create loop (cycle back)
-            start = graph.get_start_node()
-            if start and start.id != gate_source:
-                # Connect farm back toward start (create loop)
-                graph.add_edge(farm_id, start.id, EdgeType.SHORTCUT)
-            
+
+            # The farm is a pre-gate spur. Connecting it directly to START via
+            # a bidirectional SHORTCUT would also create START -> farm and can
+            # bypass every progression gate between START and gate_source.
             logger.info(f"AddResourceLoopRule: Created {required_item} farm {farm_id} near gate {gate_source}->{gate_edge.target}")
         else:
             # Convert existing neighbor to farm
@@ -2758,7 +2805,7 @@ class AddMultiLockRule(ProductionRule):
     def apply(self, graph: MissionGraph, context: Dict[str, Any]) -> MissionGraph:
         """Create multi-switch battery pattern."""
         rng = context.get('rng') or random
-        original = copy.deepcopy(graph)
+        original = graph
         
         # Find hub with 3+ branches
         hubs = [n for n in graph.nodes.values() if graph.get_node_degree(n.id) >= 3]
@@ -2770,6 +2817,10 @@ class AddMultiLockRule(ProductionRule):
         
         if len(branches) < 3:
             return graph
+
+        hub_id = hub.id
+        graph = copy.deepcopy(graph)
+        hub = graph.nodes[hub_id]
         
         # Create battery ID
         battery_id = max([e.battery_id for e in graph.edges if e.battery_id is not None], default=0) + 1

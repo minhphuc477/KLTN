@@ -138,9 +138,13 @@ class GraphConfig:
     default_validator_plan_max_states: int = DEFAULT_VALIDATOR_PLAN_MAX_STATES
     default_puzzle_stage_topology_enabled: bool = False
     default_puzzle_stage_trace_decay: float = DEFAULT_PUZZLE_STAGE_TRACE_DECAY
+    diffusion_puzzle_stage_conditioning_enabled: bool = False
+    diffusion_puzzle_stage_token_scale: float = 0.20
+    masked_room_puzzle_stage_conditioning_enabled: bool = False
+    masked_room_puzzle_stage_token_scale: float = 0.20
     default_puzzle_stage_semantics_validation_mode: str = "off"
     default_puzzle_stage_semantics_min_confidence: Optional[float] = None
-    default_end_to_end_validation_mode: str = "report"
+    default_end_to_end_validation_mode: str = "reject"
     default_verify_solver_consistency: bool = False
     default_topology_betti_metrics_enabled: bool = False
     default_deterministic_graph_marker_overlay_enabled: bool = True

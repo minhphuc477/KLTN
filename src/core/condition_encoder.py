@@ -236,7 +236,28 @@ class LocalStreamEncoder(nn.Module):
         Returns:
             Local conditioning vector [B, output_dim]
         """
+        if position.dim() != 2 or int(position.shape[1]) != 2:
+            raise ValueError(f"position must be [B,2], got {tuple(position.shape)}.")
         batch_size = position.shape[0]
+        module_device = self.null_token.device
+        module_dtype = self.neighbor_encoders['N'].weight.dtype
+        position = position.to(device=module_device, dtype=module_dtype)
+        boundary_constraints = boundary_constraints.to(
+            device=module_device,
+            dtype=module_dtype,
+        )
+        if boundary_constraints.dim() != 2 or int(boundary_constraints.shape[1]) != self.num_neighbors * 2:
+            raise ValueError(
+                f"boundary_constraints must be [B,{self.num_neighbors * 2}], "
+                f"got {tuple(boundary_constraints.shape)}."
+            )
+        boundary_batch = int(boundary_constraints.shape[0])
+        if boundary_batch == 1 and batch_size > 1:
+            boundary_constraints = boundary_constraints.expand(batch_size, -1)
+        elif boundary_batch != batch_size:
+            raise ValueError(
+                f"Boundary batch {boundary_batch} does not match position batch {batch_size}."
+            )
         
         # Encode each neighbor
         neighbor_features = []
@@ -250,6 +271,24 @@ class LocalStreamEncoder(nn.Module):
             # Pool the boundary-facing edge of spatial latents if needed.
             if latent.dim() > 2:
                 latent = self._pool_neighbor_latent(latent, direction)
+
+            if latent.dim() != 2 or int(latent.shape[-1]) != self.latent_dim:
+                raise ValueError(
+                    f"Neighbor {direction} must resolve to [B,{self.latent_dim}], "
+                    f"got {tuple(latent.shape)}."
+                )
+            latent_batch = int(latent.shape[0])
+            if latent_batch == 1 and batch_size > 1:
+                latent = latent.expand(batch_size, -1)
+            elif latent_batch != batch_size:
+                raise ValueError(
+                    f"Neighbor {direction} batch {latent_batch} does not match "
+                    f"position batch {batch_size}."
+                )
+            latent = latent.to(
+                device=module_device,
+                dtype=module_dtype,
+            )
             
             encoded = self.neighbor_encoders[direction](latent)
             neighbor_features.append(encoded)
@@ -1789,17 +1828,29 @@ class DualStreamConditionEncoder(nn.Module):
                 )
             global_mask = explicit_mask if global_mask is None else (global_mask & explicit_mask)
 
+        current_node_token = None
         if current_node_idx is not None:
             num_tokens = int(global_tokens.shape[1])
             if current_node_idx < 0 or current_node_idx >= num_tokens:
                 raise IndexError(
                     f"current_node_idx={current_node_idx} is out of range for {num_tokens} graph tokens"
                 )
-            c_global = global_tokens[:, current_node_idx:current_node_idx + 1, :]
             if global_mask is not None:
-                global_mask = global_mask[:, current_node_idx:current_node_idx + 1]
-        else:
-            c_global = global_tokens
+                current_valid = global_mask[:, current_node_idx]
+                if not torch.all(current_valid):
+                    invalid_batches = torch.nonzero(~current_valid, as_tuple=False).flatten().tolist()
+                    raise ValueError(
+                        f"current_node_idx={current_node_idx} selects a masked graph token "
+                        f"for batch items {invalid_batches}."
+                    )
+            current_node_token = global_tokens[:, current_node_idx, :]
+
+        # Condition the room query on its selected node while preserving the
+        # complete graph as attention keys/values. Slicing to the current token
+        # makes softmax attention degenerate to a constant weight of one.
+        c_global = global_tokens
+        if current_node_token is not None:
+            c_local = c_local + current_node_token
         
         # GLOBAL STYLE TOKEN: Inject theme consistency
         if style_id is not None:

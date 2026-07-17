@@ -236,6 +236,29 @@ def test_non_adjacent_bbox_connector_walls_off_relaxed_corridor():
     assert len(corridor_walls) > 0
 
 
+def test_non_adjacent_connector_rejects_corridor_touching_unrelated_occupancy():
+    void_id = int(SEMANTIC_PALETTE["VOID"])
+    wall_id = int(SEMANTIC_PALETTE["WALL"])
+    floor_id = int(SEMANTIC_PALETTE["FLOOR"])
+    grid = np.full((3, 11), void_id, dtype=np.int32)
+    grid[:, 0:3] = wall_id
+    grid[:, 8:11] = wall_id
+    # This belongs to neither endpoint room. A corridor on the only viable
+    # center row would have no wall separation from it.
+    grid[0, 5] = floor_id
+    before = grid.copy()
+
+    mode = carve_room_connection_between_bboxes(
+        grid,
+        (0, 0, 2, 2),
+        (8, 0, 10, 2),
+        fill_tile=void_id,
+    )
+
+    assert mode is None
+    assert np.array_equal(grid, before)
+
+
 def test_compute_graph_aware_room_slots_handles_duplicate_preferred_positions():
     graph = nx.Graph()
     graph.add_node(0, position=(0, 0, 0))
@@ -264,6 +287,36 @@ def test_compute_graph_aware_room_slots_handles_duplicate_preferred_positions():
     assert metrics["graph_edge_count_evaluated"] == 2.0
     assert metrics["graph_preferred_position_duplicate_rate"] is not None
     assert metrics["graph_preferred_position_duplicate_rate"] > 0.0
+
+
+def test_relaxed_fallback_is_scoped_to_the_failed_component(monkeypatch):
+    import src.pipeline.room_stitching as room_stitching
+
+    graph = nx.Graph()
+    graph.add_edges_from(((0, 1), (2, 3)))
+    relaxed_calls = []
+
+    def fake_strict(component, adjacency, explicit_pos, **kwargs):
+        _ = (adjacency, explicit_pos, kwargs)
+        component = list(component)
+        if set(component) == {2, 3}:
+            raise ValueError("synthetic non-planar component")
+        return {0: (0, 0), 1: (0, 1)}
+
+    def fake_relaxed(graph_arg, room_ids, **kwargs):
+        _ = (graph_arg, kwargs)
+        relaxed_calls.append(tuple(room_ids))
+        return {2: (10, 10), 3: (10, 11)}
+
+    monkeypatch.setattr(room_stitching, "solve_component_strict_adjacency", fake_strict)
+    monkeypatch.setattr(room_stitching, "compute_relaxed_room_placement", fake_relaxed)
+
+    positions = room_stitching.compute_graph_aware_room_slots(graph, [0, 1, 2, 3])
+
+    assert relaxed_calls == [(2, 3)]
+    assert positions[0] == (0, 0)
+    assert positions[1] == (0, 1)
+    assert abs(positions[2][0] - positions[3][0]) + abs(positions[2][1] - positions[3][1]) == 1
 
 
 def test_compute_graph_aware_room_slots_uses_tree_fallback_for_cyclic_progression_graph():
@@ -420,6 +473,7 @@ def test_fallback_corridor_does_not_claim_a_blocked_connection():
     dst_bbox = (11, 2, 13, 4)
     wall_id = int(SEMANTIC_PALETTE["WALL"])
     grid[:, 7] = wall_id
+    original = grid.copy()
 
     mode = carve_room_connection_between_bboxes(
         grid,
@@ -429,4 +483,4 @@ def test_fallback_corridor_does_not_claim_a_blocked_connection():
     )
 
     assert mode is None
-    assert np.all(grid[:, 7] == wall_id)
+    np.testing.assert_array_equal(grid, original)

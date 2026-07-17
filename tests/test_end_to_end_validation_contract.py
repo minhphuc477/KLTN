@@ -31,6 +31,7 @@ def test_end_to_end_contract_requires_all_applicable_exact_stages():
             "is_exact": True,
             "termination_status": "solved",
             "route_replay_status": "verified",
+            "graph_tile_context_applied": True,
         },
         logicnet_agreement=True,
     )
@@ -39,6 +40,29 @@ def test_end_to_end_contract_requires_all_applicable_exact_stages():
     assert report.failed_stages == []
     assert report.indeterminate_stages == []
     report.require_accepted()
+
+
+def test_end_to_end_contract_rejects_typed_graph_without_tile_mapping():
+    report = build_end_to_end_validation_report(
+        dungeon_grid=_valid_grid(),
+        graph_validation={
+            "solvable": True,
+            "all_rooms_reachable": True,
+            "termination_status": "solved",
+            "route_replay_status": "verified",
+        },
+        spatial_validation={"final_spatial_edge_records_broken": 0},
+        tile_validation={
+            "solvable": True,
+            "is_exact": True,
+            "termination_status": "solved",
+            "route_replay_status": "verified",
+            "graph_tile_context_applied": False,
+        },
+    )
+
+    assert report.accepted is False
+    assert report.failed_stages == ["graph_tile_semantics"]
 
 
 def test_end_to_end_contract_rejects_invalid_representation_and_indeterminate_oracle():

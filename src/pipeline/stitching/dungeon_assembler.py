@@ -19,8 +19,8 @@ from src.pipeline.generation.sampler import _stable_node_seed_offset
 from src.pipeline.evaluation import (
     _hard_oracle_verdict,
     _logicnet_hard_agreement,
-    _stitched_validation_context,
 )
+from src.pipeline.validation_context import build_stitched_validation_context
 from src.pipeline.room_stitching import (
     StitchedRoomLayout,
     build_stitched_room_layout,
@@ -1153,7 +1153,7 @@ def generate_dungeon(
             pipeline._validate_dungeon(
                 dungeon_grid,
                 room_puzzle_metadata=puzzle_metadata,
-                **_stitched_validation_context(
+                **build_stitched_validation_context(
                     prepared.mission_graph_physical,
                     stitched_layout,
                 ),
@@ -1210,7 +1210,7 @@ def generate_dungeon(
         },
     )
     validation_mode = str(
-        getattr(pipeline, "default_end_to_end_validation_mode", "report") or "report"
+        getattr(pipeline, "default_end_to_end_validation_mode", "reject") or "reject"
     ).strip().lower()
     if validation_mode == "reject":
         validation_report.require_accepted()
@@ -1227,6 +1227,9 @@ def generate_dungeon(
     num_rooms_generated = len(room_set.rooms)
     room_metric_dicts = [dict(r.metrics) for r in room_set.rooms.values()]
     alignment_metrics = pipeline._aggregate_room_alignment_metrics(room_metric_dicts)
+    puzzle_stage_semantics_metrics = pipeline._aggregate_puzzle_stage_semantics_metrics(
+        room_metric_dicts
+    )
     room_stage_times = _aggregate_room_stage_times(room_metric_dicts)
     masked_sampling_metrics = _aggregate_masked_sampling_metrics(room_metric_dicts)
     generation_telemetry = _generation_telemetry_summary(prepared.mission_graph)
@@ -1305,6 +1308,7 @@ def generate_dungeon(
         'logicnet_hard_agreement': logicnet_hard_agreement,
         **dict(getattr(stitched_layout, 'realization_metrics', {}) or {}),
         **alignment_metrics,
+        **puzzle_stage_semantics_metrics,
         **masked_sampling_metrics,
     }
 

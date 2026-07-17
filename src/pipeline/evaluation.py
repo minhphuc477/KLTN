@@ -13,6 +13,7 @@ from src.core import SEMANTIC_PALETTE
 from src.evaluation.tile_distribution import compare_tile_pattern_distributions
 from src.pipeline.spatial_utils import coerce_bool, fit_room_grid
 from src.pipeline.types import DungeonGenerationResult, MissingPipelineComponentError, RoomGenerationResult
+from src.pipeline.validation_context import build_stitched_validation_context
 from src.validation.end_to_end import build_end_to_end_validation_report
 from src.validation.global_state import validate_attached_global_state_contract
 from src.validation.pacing import evaluate_solution_path_pacing
@@ -20,35 +21,6 @@ from src.validation.topology import evaluate_graph_topology_characteristics
 from src.zelda_data.vglc_utils import get_physical_start_node
 
 logger = logging.getLogger(__name__)
-
-
-def _stitched_validation_context(
-    graph: Optional[nx.Graph],
-    stitched_layout: Optional[Any],
-) -> Dict[str, Any]:
-    """Build the exact graph/room mapping contract consumed by ZeldaLogicEnv."""
-    if graph is None or stitched_layout is None:
-        return {}
-    slot_positions = dict(getattr(stitched_layout, "slot_positions", {}) or {})
-    room_offsets = dict(getattr(stitched_layout, "room_offsets", {}) or {})
-    if not slot_positions or not room_offsets:
-        return {"graph": graph}
-    room_to_node = {
-        tuple(slot): node_id
-        for node_id, slot in slot_positions.items()
-        if node_id in graph and node_id in room_offsets
-    }
-    room_positions = {
-        tuple(slot_positions[node_id]): tuple(room_offsets[node_id])
-        for node_id in room_to_node.values()
-    }
-    node_to_room = {node_id: room for room, node_id in room_to_node.items()}
-    return {
-        "graph": graph,
-        "room_to_node": room_to_node,
-        "room_positions": room_positions,
-        "node_to_room": node_to_room,
-    }
 
 
 def _hard_oracle_verdict(validation: Dict[str, Any]) -> Optional[bool]:
@@ -159,7 +131,7 @@ def evaluate_generated_dungeon(
     if not map_elites_available and not reference_rooms:
         return None
     validator_fn = getattr(pipeline, "_validate_dungeon", None)
-    validation_context = _stitched_validation_context(
+    validation_context = build_stitched_validation_context(
         mission_graph_physical,
         stitched_layout,
     )
@@ -543,7 +515,7 @@ def repair_and_stitch_dungeon(
             pipeline._validate_dungeon(
                 dungeon_grid,
                 room_puzzle_metadata=puzzle_metadata,
-                **_stitched_validation_context(mission_graph, stitched_layout),
+                **build_stitched_validation_context(mission_graph, stitched_layout),
             )
             or {}
         )
@@ -594,7 +566,7 @@ def repair_and_stitch_dungeon(
         },
     )
     validation_mode = str(
-        getattr(pipeline, "default_end_to_end_validation_mode", "report") or "report"
+        getattr(pipeline, "default_end_to_end_validation_mode", "reject") or "reject"
     ).strip().lower()
     if validation_mode == "reject":
         validation_report.require_accepted()
@@ -605,6 +577,9 @@ def repair_and_stitch_dungeon(
     validation_contract_metrics = (
         {} if validation_mode == "off" else validation_report.to_metrics()
     )
+    puzzle_stage_semantics_metrics = pipeline._aggregate_puzzle_stage_semantics_metrics(
+        [dict(room.metrics) for room in normalized_rooms.values()]
+    )
     metrics = {
         "num_rooms": len(normalized_rooms),
         "total_tiles_repaired": sum(r.metrics.get("tiles_changed", 0) for r in normalized_rooms.values()),
@@ -614,6 +589,7 @@ def repair_and_stitch_dungeon(
         "dungeon_shape": dungeon_grid.shape,
         "symbolic_only": True,
         "puzzle_plan_count": int(len(dict(puzzle_metadata.get("plans", {}) or {}))),
+        **puzzle_stage_semantics_metrics,
         "logicnet_dungeon_solvability": float(logic_solvability.get("solvability_score", 0.0)),
         "logicnet_room_solvability": float(logic_solvability.get("room_solvability_score", 0.0)),
         "logicnet_graph_reach_loss": float(logic_solvability.get("graph_reach_loss", 0.0)),
@@ -663,6 +639,12 @@ def _validate_dungeon(
     Uses the project validator when available, with graceful fallback.
     """
     map_elites = getattr(pipeline, "map_elites", None)
+    graph_tile_context_applied = bool(
+        graph is not None
+        and room_to_node
+        and room_positions
+        and node_to_room
+    )
     floor_id = int(SEMANTIC_PALETTE.get('FLOOR', 1))
     enemy_id = int(SEMANTIC_PALETTE.get('ENEMY', 7))
     boss_id = int(SEMANTIC_PALETTE.get('BOSS', -1))
@@ -780,6 +762,7 @@ def _validate_dungeon(
             'solver_consistency_states_explored': int(
                 getattr(result, 'solver_consistency_states_explored', 0) or 0
             ),
+            'graph_tile_context_applied': graph_tile_context_applied,
             'is_exact': True,
         }
     except (AttributeError, RuntimeError, ValueError, TypeError) as e:
@@ -814,6 +797,7 @@ def _validate_dungeon(
             'solver_consistency_path_length': None,
             'solver_consistency_path_cost': None,
             'solver_consistency_states_explored': 0,
+            'graph_tile_context_applied': graph_tile_context_applied,
             'is_exact': False,
         }
 

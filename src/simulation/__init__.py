@@ -7,7 +7,7 @@ This module contains:
 - validator: External validation suite (ZeldaValidator, ZeldaLogicEnv, etc.)
 - cognitive_bounded_search: Human-like CBS solver with cognitive limitations
 - dstar_lite: D* Lite incremental replanning
-- multi_goal: Multi-goal pathfinding (TSP-style)
+- multi_goal: Bounded state-preserving multi-objective routing
 - parallel_astar: Parallel A* search
 - solver_comparison: Solver benchmarking
 - map_elites: Quality-Diversity evaluation
@@ -63,7 +63,7 @@ from .cognitive_bounded_search import (
 from .dstar_lite import DStarLiteSolver
 from .state_space_dfs import StateSpaceDFS
 from .bidirectional_astar import BidirectionalAStar
-from .multi_goal import MultiGoalPathfinder
+from .multi_goal import MultiGoalPathfinder, MultiGoalResult
 from .parallel_astar import ParallelAStarSolver
 from .solver_comparison import SolverComparison
 from .map_elites import MAPElitesEvaluator, run_map_elites_on_maps, plot_heatmap
@@ -120,6 +120,7 @@ __all__ = [
     'StateSpaceDFS',
     'BidirectionalAStar',
     'MultiGoalPathfinder',
+    'MultiGoalResult',
     'ParallelAStarSolver',
     'SolverComparison',
     'MAPElitesEvaluator',

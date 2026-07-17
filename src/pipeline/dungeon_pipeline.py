@@ -630,6 +630,12 @@ class NeuralSymbolicDungeonPipeline(metaclass=_PipelineFacadeMeta):
 
         return room_processing._aggregate_room_alignment_metrics(None, *args, **kwargs)
 
+    @staticmethod
+    def _aggregate_puzzle_stage_semantics_metrics(*args: Any, **kwargs: Any) -> Any:
+        from src.pipeline.generation import room_processing
+
+        return room_processing._aggregate_puzzle_stage_semantics_metrics(None, *args, **kwargs)
+
     def _build_latent_edit_mask(self, *args: Any, **kwargs: Any) -> Any:
         return self._room_processing_helper("_build_latent_edit_mask", *args, **kwargs)
 

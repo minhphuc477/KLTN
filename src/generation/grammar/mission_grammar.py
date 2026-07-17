@@ -647,95 +647,97 @@ class MissionGrammar:
             if log_failures:
                 logger.warning("Goal gauntlet validation failed: missing BOSS_DOOR node")
             return False
-        if boss_door_nodes:
-            if len(boss_door_nodes) != 1:
-                if log_failures:
-                    logger.warning(
-                        "Goal gauntlet validation failed: expected exactly one BOSS_DOOR node, found %s",
-                        len(boss_door_nodes),
-                    )
-                return False
+        if len(boss_door_nodes) != 1:
+            if log_failures:
+                logger.warning(
+                    "Goal gauntlet validation failed: expected exactly one BOSS_DOOR node, found %s",
+                    len(boss_door_nodes),
+                )
+            return False
 
-            boss_door = boss_door_nodes[0]
-            boss_incoming_edges = [edge for edge in graph.edges if edge.target == boss_id]
-            boss_predecessors = [edge.source for edge in boss_incoming_edges]
-            if (
-                boss_predecessors != [boss_door.id]
-                or boss_incoming_edges[0].edge_type != EdgeType.PATH
-            ):
-                if log_failures:
-                    logger.warning(
-                        "Goal gauntlet validation failed: BOSS %s has predecessors %s (expected only BOSS_DOOR %s)",
-                        boss_id,
-                        boss_predecessors,
-                        boss_door.id,
-                    )
-                return False
+        boss_door = boss_door_nodes[0]
+        boss_incoming_edges = [edge for edge in graph.edges if edge.target == boss_id]
+        boss_predecessors = [edge.source for edge in boss_incoming_edges]
+        if (
+            len(boss_incoming_edges) != 1
+            or boss_predecessors != [boss_door.id]
+            or boss_incoming_edges[0].edge_type != EdgeType.PATH
+        ):
+            if log_failures:
+                logger.warning(
+                    "Goal gauntlet validation failed: BOSS %s has predecessors %s (expected only BOSS_DOOR %s)",
+                    boss_id,
+                    boss_predecessors,
+                    boss_door.id,
+                )
+            return False
 
-            boss_outgoing_edges = [edge for edge in graph.edges if edge.source == boss_id]
-            boss_successors = [edge.target for edge in boss_outgoing_edges]
-            if (
-                boss_successors != [goal.id]
-                or boss_outgoing_edges[0].edge_type != EdgeType.PATH
-            ):
-                if log_failures:
-                    logger.warning(
-                        "Goal gauntlet validation failed: BOSS %s has successors %s (expected only GOAL %s)",
-                        boss_id,
-                        boss_successors,
-                        goal.id,
-                    )
-                return False
+        boss_outgoing_edges = [edge for edge in graph.edges if edge.source == boss_id]
+        boss_successors = [edge.target for edge in boss_outgoing_edges]
+        if (
+            len(boss_outgoing_edges) != 1
+            or boss_successors != [goal.id]
+            or boss_outgoing_edges[0].edge_type != EdgeType.PATH
+        ):
+            if log_failures:
+                logger.warning(
+                    "Goal gauntlet validation failed: BOSS %s has successors %s (expected only GOAL %s)",
+                    boss_id,
+                    boss_successors,
+                    goal.id,
+                )
+            return False
 
-            boss_door_outgoing_edges = [edge for edge in graph.edges if edge.source == boss_door.id]
-            boss_door_successors = [edge.target for edge in boss_door_outgoing_edges]
-            if (
-                boss_door_successors != [boss_id]
-                or boss_door_outgoing_edges[0].edge_type != EdgeType.PATH
-            ):
-                if log_failures:
-                    logger.warning(
-                        "Goal gauntlet validation failed: BOSS_DOOR %s has successors %s (expected only BOSS %s)",
-                        boss_door.id,
-                        boss_door_successors,
-                        boss_id,
-                    )
-                return False
+        boss_door_outgoing_edges = [edge for edge in graph.edges if edge.source == boss_door.id]
+        boss_door_successors = [edge.target for edge in boss_door_outgoing_edges]
+        if (
+            len(boss_door_outgoing_edges) != 1
+            or boss_door_successors != [boss_id]
+            or boss_door_outgoing_edges[0].edge_type != EdgeType.PATH
+        ):
+            if log_failures:
+                logger.warning(
+                    "Goal gauntlet validation failed: BOSS_DOOR %s has successors %s (expected only BOSS %s)",
+                    boss_door.id,
+                    boss_door_successors,
+                    boss_id,
+                )
+            return False
 
-            boss_door_incoming_edges = [edge for edge in graph.edges if edge.target == boss_door.id]
-            boss_door_predecessors = [edge.source for edge in boss_door_incoming_edges]
-            if (
-                len(boss_door_incoming_edges) != 1
-                or boss_door_predecessors[0] in {boss_door.id, boss_id, goal.id}
-                or boss_door_incoming_edges[0].edge_type != EdgeType.BOSS_LOCKED
-                or boss_door_incoming_edges[0].key_required != boss_door.key_id
-            ):
-                if log_failures:
-                    logger.warning(
-                        "Goal gauntlet validation failed: BOSS_DOOR %s has invalid predecessors %s",
-                        boss_door.id,
-                        boss_door_predecessors,
-                    )
-                return False
+        boss_door_incoming_edges = [edge for edge in graph.edges if edge.target == boss_door.id]
+        boss_door_predecessors = [edge.source for edge in boss_door_incoming_edges]
+        if (
+            len(boss_door_incoming_edges) != 1
+            or boss_door_predecessors[0] in {boss_door.id, boss_id, goal.id}
+            or boss_door_incoming_edges[0].edge_type != EdgeType.BOSS_LOCKED
+            or boss_door_incoming_edges[0].key_required != boss_door.key_id
+        ):
+            if log_failures:
+                logger.warning(
+                    "Goal gauntlet validation failed: BOSS_DOOR %s has invalid predecessors %s",
+                    boss_door.id,
+                    boss_door_predecessors,
+                )
+            return False
 
-            if boss_door.key_id is None:
-                if log_failures:
-                    logger.warning(
-                        "Goal gauntlet validation failed: BOSS_DOOR %s is missing key_id",
-                        boss_door.id,
-                    )
-                return False
-            has_big_key = any(
-                node.node_type == NodeType.BIG_KEY and node.key_id == boss_door.key_id
-                for node in graph.nodes.values()
-            )
-            if not has_big_key:
-                if log_failures:
-                    logger.warning(
-                        "Goal gauntlet validation failed: no BIG_KEY provider found for BOSS_DOOR %s",
-                        boss_door.id,
-                    )
-                return False
+        if boss_door.key_id is None:
+            if log_failures:
+                logger.warning(
+                    "Goal gauntlet validation failed: BOSS_DOOR %s is missing key_id",
+                    boss_door.id,
+                )
+            return False
+        has_big_key = any(
+            node.node_type == NodeType.BIG_KEY and node.key_id == boss_door.key_id
+            for node in graph.nodes.values()
+        )
+        if not has_big_key:
+            if log_failures:
+                logger.warning(
+                    "Goal gauntlet validation failed: no BIG_KEY provider found for BOSS_DOOR %s",
+                    boss_door.id,
+                )
+            return False
 
         start = graph.get_start_node()
         if start is None:
@@ -978,9 +980,6 @@ class MissionGrammar:
         graph.edges = retained_edges
         graph.rebuild_adjacency()
 
-        def _edge_exists(source: int, target: int) -> bool:
-            return any(edge.source == source and edge.target == target for edge in graph.edges)
-
         graph.add_edge(
             primary_approach,
             boss_door.id,
@@ -989,13 +988,11 @@ class MissionGrammar:
         )
         repairs += 1
 
-        if not _edge_exists(boss_door.id, boss_node.id):
-            graph.add_edge(boss_door.id, boss_node.id, EdgeType.PATH)
-            repairs += 1
+        graph.add_edge(boss_door.id, boss_node.id, EdgeType.PATH)
+        repairs += 1
 
-        if not _edge_exists(boss_node.id, goal.id):
-            graph.add_edge(boss_node.id, goal.id, EdgeType.PATH)
-            repairs += 1
+        graph.add_edge(boss_node.id, goal.id, EdgeType.PATH)
+        repairs += 1
 
         key_anchor_id = None
         if start is not None and start.id not in {goal.id, boss_node.id, boss_door.id}:
@@ -1716,11 +1713,11 @@ class MissionGrammar:
 
         # Normalize tutorial progression by nearest pedagogical successors.
         tutorial_nodes = [n for n in graph.nodes.values() if n.is_tutorial]
-        pedagogical_types = {NodeType.COMBAT_PUZZLE, NodeType.COMPLEX_PUZZLE}
+        progression_types = {NodeType.COMBAT_PUZZLE, NodeType.COMPLEX_PUZZLE}
         for tutorial in tutorial_nodes:
             successors = [
                 n for n in graph.get_forward_successors(tutorial.id, depth=3)
-                if n.node_type in pedagogical_types
+                if n.node_type in progression_types
             ]
             if len(successors) < 2:
                 continue
@@ -1798,6 +1795,30 @@ class MissionGrammar:
                 if neighbor not in layers:
                     layers[neighbor] = current_layer + 1
                     queue.append(neighbor)
+
+        # Invalid/raw candidates can still contain weakly disconnected nodes.
+        # Give every such component a deterministic, non-overlapping layout so
+        # stale rule-time coordinates cannot collide in diagnostics/rendering.
+        undirected_neighbors: Dict[int, Set[int]] = defaultdict(set)
+        for edge in graph.edges:
+            if edge.source in graph.nodes and edge.target in graph.nodes:
+                undirected_neighbors[edge.source].add(edge.target)
+                undirected_neighbors[edge.target].add(edge.source)
+        for root_id in sorted(graph.nodes):
+            if root_id in layers:
+                continue
+            component_base = max(layers.values(), default=-2) + 2
+            local_layers = {root_id: 0}
+            component_queue = deque([root_id])
+            while component_queue:
+                current = component_queue.popleft()
+                for neighbor in sorted(undirected_neighbors.get(current, set())):
+                    if neighbor in layers or neighbor in local_layers:
+                        continue
+                    local_layers[neighbor] = local_layers[current] + 1
+                    component_queue.append(neighbor)
+            for node_id, local_layer in local_layers.items():
+                layers[node_id] = component_base + local_layer
         
         # Group by layer
         layer_nodes = defaultdict(list)

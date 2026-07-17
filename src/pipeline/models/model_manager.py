@@ -32,6 +32,23 @@ from src.pipeline.room_topology_conditioning import ROOM_TOPOLOGY_CHANNEL_COUNT
 logger = logging.getLogger(__name__)
 
 
+def _checkpoint_nonnegative_float(
+    checkpoint_config: Dict[str, Any],
+    fallback_config: Dict[str, Any],
+    key: str,
+    default: float,
+) -> float:
+    """Read a finite non-negative checkpoint scalar without silent coercion."""
+    raw = checkpoint_config.get(key, fallback_config.get(key, default))
+    try:
+        value = float(raw)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"Checkpoint field {key!r} must be a finite non-negative float.") from exc
+    if not np.isfinite(value) or value < 0.0:
+        raise ValueError(f"Checkpoint field {key!r} must be a finite non-negative float, got {raw!r}.")
+    return value
+
+
 def _bind_puzzle_stage_semantics_head(
     pipeline: Any,
     checkpoint: Optional[Dict[str, Any]],
@@ -40,13 +57,9 @@ def _bind_puzzle_stage_semantics_head(
     source: str,
 ) -> None:
     """Load a bundled auxiliary semantics head for runtime reporting/rejection."""
-    active_source = (
-        "masked_room"
-        if str(getattr(pipeline, "room_generator_mode", "latent_diffusion")).strip().lower()
-        == "discrete_masked"
-        else "diffusion"
-    )
-    if source != active_source or not isinstance(checkpoint, dict):
+    if source not in {"diffusion", "masked_room"}:
+        raise ValueError(f"Unsupported puzzle-stage semantics head source: {source!r}.")
+    if not isinstance(checkpoint, dict):
         return
     state = checkpoint.get("puzzle_stage_semantics_head_state_dict")
     if not isinstance(state, dict):
@@ -95,8 +108,20 @@ def _bind_puzzle_stage_semantics_head(
     head.load_state_dict(state, strict=True)
     head.eval()
     head.requires_grad_(False)
-    pipeline.puzzle_stage_semantics_head = head
-    pipeline.puzzle_stage_semantics_head_source = source
+    # Keep one head per room generator. A MaskGIT candidate may be retried by
+    # the diffusion teacher, and those heads are trained against different
+    # logits distributions. Reusing the active generator's head would make the
+    # fallback score uninterpretable.
+    setattr(pipeline, f"{source}_puzzle_stage_semantics_head", head)
+    active_source = (
+        "masked_room"
+        if str(getattr(pipeline, "room_generator_mode", "latent_diffusion")).strip().lower()
+        == "discrete_masked"
+        else "diffusion"
+    )
+    if source == active_source:
+        pipeline.puzzle_stage_semantics_head = head
+        pipeline.puzzle_stage_semantics_head_source = source
 
 
 def _require_all_learned_parameters(
@@ -565,6 +590,18 @@ def load_diffusion(pipeline, checkpoint_path: Optional[str]) -> LatentDiffusionM
     pipeline.diffusion_puzzle_structure_condition_enabled = bool(
         float(checkpoint_config.get("puzzle_structure_dropout_prob", fallback_config.get("puzzle_structure_dropout_prob", 0.0))) > 0.0
     )
+    pipeline.diffusion_puzzle_stage_conditioning_enabled = bool(
+        checkpoint_config.get(
+            "puzzle_stage_conditioning_enabled",
+            fallback_config.get("puzzle_stage_conditioning_enabled", False),
+        )
+    )
+    pipeline.diffusion_puzzle_stage_token_scale = _checkpoint_nonnegative_float(
+        checkpoint_config,
+        fallback_config,
+        "puzzle_stage_token_scale",
+        0.20,
+    )
 
     if checkpoint_path and Path(checkpoint_path).exists():
         if not isinstance(checkpoint_state, dict):
@@ -889,6 +926,18 @@ def load_masked_room_model(
     pipeline.masked_room_puzzle_structure_condition_enabled = bool(
         float(checkpoint_config.get("puzzle_structure_dropout_prob", fallback_config.get("puzzle_structure_dropout_prob", 0.0))) > 0.0
     )
+    pipeline.masked_room_puzzle_stage_conditioning_enabled = bool(
+        checkpoint_config.get(
+            "puzzle_stage_conditioning_enabled",
+            fallback_config.get("puzzle_stage_conditioning_enabled", False),
+        )
+    )
+    pipeline.masked_room_puzzle_stage_token_scale = _checkpoint_nonnegative_float(
+        checkpoint_config,
+        fallback_config,
+        "puzzle_stage_token_scale",
+        0.20,
+    )
 
     if checkpoint_path and Path(checkpoint_path).exists():
         assert checkpoint is not None
@@ -1011,6 +1060,8 @@ class ModelManager:
         "diffusion",
         "logic_net",
         "masked_room_model",
+        "diffusion_puzzle_stage_semantics_head",
+        "masked_room_puzzle_stage_semantics_head",
     )
 
     def __init__(self, engine: Any):
@@ -1045,10 +1096,13 @@ class ModelManager:
         mode = str(getattr(self.engine, "room_generator_mode", "latent_diffusion")).strip().lower()
         if mode == "discrete_masked":
             active.add("masked_room_model")
+            active.add("masked_room_puzzle_stage_semantics_head")
             if bool(getattr(self.engine, "default_masked_room_teacher_fallback_enabled", False)):
                 active.add("diffusion")
+                active.add("diffusion_puzzle_stage_semantics_head")
         else:
             active.add("diffusion")
+            active.add("diffusion_puzzle_stage_semantics_head")
         return active
 
     def offload_inactive(

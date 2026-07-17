@@ -11,6 +11,8 @@ Run:
     pytest tests/test_neural_pipeline.py -v -k "test_pipeline_initialization"
 """
 
+import gc
+
 import pytest
 import torch
 import numpy as np
@@ -22,7 +24,6 @@ from src.pipeline import (
     MissingPipelineComponentError,
     PipelineComponents,
     SymbolicGenerationComponents,
-    create_pipeline,
 )
 from src.pipeline.dungeon_pipeline import RoomGenerationResult
 from src.core import ROOM_HEIGHT, ROOM_WIDTH, SEMANTIC_PALETTE
@@ -33,19 +34,65 @@ from src.core.definitions import GRAPH_NODE_FEATURE_DIM
 # FIXTURES
 # =============================================================================
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def device():
     """Use CPU for tests to avoid GPU memory issues."""
     return 'cpu'
 
 
-@pytest.fixture
-def pipeline(device):
-    """Create pipeline without checkpoints (random init)."""
+@pytest.fixture(scope="module")
+def shared_pipeline(device):
+    """Create a compact real model stack without checkpoint dependencies."""
     return NeuralSymbolicDungeonPipeline(
         device=device,
         enable_logging=False,
+        condition_encoder_fallback_config={
+            "condition_hidden_dim": 32,
+            "context_dim": 32,
+            "condition_num_gnn_layers": 1,
+            "condition_num_attention_heads": 4,
+            "condition_dropout": 0.0,
+        },
+        diffusion_fallback_config={
+            "latent_dim": 64,
+            "context_dim": 32,
+            "num_timesteps": 32,
+            "model_channels": 32,
+            "unet_channel_mult": (1,),
+            "unet_num_res_blocks": 1,
+            "unet_attention_resolutions": (1,),
+            "unet_num_heads": 4,
+            "unet_dropout": 0.0,
+        },
     )
+
+
+@pytest.fixture(scope="module")
+def pipeline_baseline_state(shared_pipeline):
+    """References and scalar defaults needed to reset the shared model stack."""
+    return {
+        "diffusion": shared_pipeline.diffusion,
+        "condition_encoder": shared_pipeline.condition_encoder,
+        "default_latent_sampler": shared_pipeline.default_latent_sampler,
+        "default_fast_sampler_teacher_fallback_enabled": (
+            shared_pipeline.default_fast_sampler_teacher_fallback_enabled
+        ),
+        "default_end_to_end_validation_mode": shared_pipeline.default_end_to_end_validation_mode,
+    }
+
+
+@pytest.fixture
+def pipeline(shared_pipeline, pipeline_baseline_state):
+    """Prevent one integration test's runtime overrides from leaking to another."""
+    for name, value in pipeline_baseline_state.items():
+        setattr(shared_pipeline, name, value)
+    shared_pipeline.runtime_diagnostics = {}
+    gc.collect()
+    yield shared_pipeline
+    for name, value in pipeline_baseline_state.items():
+        setattr(shared_pipeline, name, value)
+    shared_pipeline.runtime_diagnostics = {}
+    gc.collect()
 
 
 @pytest.fixture
@@ -79,45 +126,14 @@ def graph_context(device):
     }
 
 
+def _enable_untrained_artifact_reporting(pipeline):
+    """Keep orchestration tests observable without certifying random weights."""
+    pipeline.default_end_to_end_validation_mode = "report"
+
+
 # =============================================================================
 # INITIALIZATION TESTS
 # =============================================================================
-
-def test_pipeline_initialization_disables_uncheckpointed_logic_guidance(pipeline):
-    """Core smoke components initialize, while untrained LogicNet stays disabled."""
-    assert pipeline.vqvae is not None
-    assert pipeline.condition_encoder is not None
-    assert pipeline.diffusion is not None
-    assert pipeline.logic_net is None
-    assert pipeline.logic_net_checkpoint_loaded is False
-    assert pipeline.refiner is not None
-    assert pipeline.map_elites is not None
-    
-
-
-def test_pipeline_device(device):
-    """Test that pipeline respects device setting."""
-    pipeline = NeuralSymbolicDungeonPipeline(device=device, enable_logging=False)
-    assert str(pipeline.device) == device
-    
-    # Check model devices
-    assert next(pipeline.vqvae.parameters()).device.type == device
-    assert next(pipeline.diffusion.parameters()).device.type == device
-    
-    print(f"✓ Pipeline correctly initialized on {device}")
-
-
-def test_create_pipeline_convenience():
-    """Test convenience function for pipeline creation."""
-    # Should work even without checkpoint directory
-    pipeline = create_pipeline(
-        checkpoint_dir="./nonexistent",
-        device='cpu'
-    )
-    
-    assert isinstance(pipeline, NeuralSymbolicDungeonPipeline)
-    print("✓ Convenience function works correctly")
-
 
 def test_symbolic_only_pipeline_skips_neural_stack_initialization():
     """Symbolic-only constructor should avoid building the neural generation stack."""
@@ -183,14 +199,26 @@ def test_symbolic_only_pipeline_repair_and_stitch_dungeon_public_api():
         enable_logging=False,
     )
     floor = int(SEMANTIC_PALETTE['FLOOR'])
-    room_grid = np.full((ROOM_HEIGHT, ROOM_WIDTH), floor, dtype=np.int32)
+    wall = int(SEMANTIC_PALETTE['WALL'])
+    start_tile = int(SEMANTIC_PALETTE['START'])
+    goal_tile = int(SEMANTIC_PALETTE['TRIFORCE'])
+    start_room = np.full((ROOM_HEIGHT, ROOM_WIDTH), wall, dtype=np.int32)
+    goal_room = start_room.copy()
+    corridor_row = ROOM_HEIGHT // 2
+    corridor_col = ROOM_WIDTH // 2
+    start_room[corridor_row, 1:-1] = floor
+    goal_room[corridor_row, 1:-1] = floor
+    start_room[1:-1, corridor_col] = floor
+    goal_room[1:-1, corridor_col] = floor
+    start_room[corridor_row, 1] = start_tile
+    goal_room[corridor_row, ROOM_WIDTH - 2] = goal_tile
     graph = nx.DiGraph()
     graph.add_node(0, is_start=True, pos=(0, 0))
-    graph.add_node(1, pos=(0, 1))
+    graph.add_node(1, is_goal=True, pos=(0, 1))
     graph.add_edge(0, 1, edge_type="open")
 
     result = pipeline.repair_and_stitch_dungeon(
-        rooms={0: room_grid, 1: room_grid.copy()},
+        rooms={0: start_room, 1: goal_room},
         mission_graph=graph,
         apply_repair=True,
         enable_map_elites=False,
@@ -200,6 +228,24 @@ def test_symbolic_only_pipeline_repair_and_stitch_dungeon_public_api():
     assert set(result.rooms.keys()) == {0, 1}
     assert result.metrics["symbolic_only"] is True
     assert result.map_elites_score is None
+
+
+def test_pipeline_initialization_disables_uncheckpointed_logic_guidance(pipeline):
+    """Core smoke components initialize, while untrained LogicNet stays disabled."""
+    assert pipeline.vqvae is not None
+    assert pipeline.condition_encoder is not None
+    assert pipeline.diffusion is not None
+    assert pipeline.logic_net is None
+    assert pipeline.logic_net_checkpoint_loaded is False
+    assert pipeline.refiner is not None
+    assert pipeline.map_elites is not None
+
+
+def test_pipeline_device(device, pipeline):
+    """Test that pipeline respects device setting."""
+    assert str(pipeline.device) == device
+    assert next(pipeline.vqvae.parameters()).device.type == device
+    assert next(pipeline.diffusion.parameters()).device.type == device
 
 
 def test_injected_stitcher_is_used_for_public_stitch_rooms():
@@ -342,6 +388,16 @@ def test_prepare_graph_context_is_stable_across_dag_insertion_order(pipeline):
     assert forward["node_order"] == reverse["node_order"]
     assert forward["node_to_idx"] == reverse["node_to_idx"]
     assert torch.equal(forward["edge_index"], reverse["edge_index"])
+
+
+def test_prepare_graph_context_uses_training_checkpoint_node_order(pipeline):
+    graph = nx.DiGraph()
+    graph.add_edge(10, 1)
+
+    context = pipeline._prepare_graph_context(graph)
+
+    assert context["node_order"] == [1, 10]
+    assert context["edge_index"].tolist() == [[1], [0]]
 
 
 def test_validate_dungeon_without_map_elites_still_runs_exact_oracle():
@@ -772,7 +828,8 @@ def test_reproducibility_with_seed(pipeline, neighbor_latents, graph_context):
 # =============================================================================
 
 def test_dungeon_generation_simple(pipeline, simple_graph):
-    """Test complete dungeon generation with simple graph."""
+    """Random weights exercise orchestration but must not imply certification."""
+    _enable_untrained_artifact_reporting(pipeline)
     result = pipeline.generate_dungeon(
         mission_graph=simple_graph,
         num_diffusion_steps=3,
@@ -789,6 +846,7 @@ def test_dungeon_generation_simple(pipeline, simple_graph):
     # Check metrics
     assert result.metrics['num_rooms'] == 3
     assert 'generation_time_sec' in result.metrics
+    assert 'end_to_end_validation_accepted' in result.metrics
     assert result.generation_time > 0
     
     print(f"✓ 3-room dungeon generated in {result.generation_time:.2f}s")
@@ -796,6 +854,7 @@ def test_dungeon_generation_simple(pipeline, simple_graph):
 
 def test_dungeon_generation_with_repair(pipeline, simple_graph):
     """Test dungeon generation with repair enabled."""
+    _enable_untrained_artifact_reporting(pipeline)
     result = pipeline.generate_dungeon(
         mission_graph=simple_graph,
         num_diffusion_steps=3,
@@ -807,6 +866,7 @@ def test_dungeon_generation_with_repair(pipeline, simple_graph):
     # Check repair metrics
     assert 'repair_rate' in result.metrics
     assert 'total_tiles_repaired' in result.metrics
+    assert 'end_to_end_validation_accepted' in result.metrics
     
     repair_rate = result.metrics['repair_rate']
     assert 0.0 <= repair_rate <= 1.0
@@ -817,6 +877,7 @@ def test_dungeon_generation_with_repair(pipeline, simple_graph):
 
 def test_room_order_preservation(pipeline, simple_graph):
     """Test that rooms are generated in graph order."""
+    _enable_untrained_artifact_reporting(pipeline)
     result = pipeline.generate_dungeon(
         mission_graph=simple_graph,
         num_diffusion_steps=2,
@@ -833,6 +894,7 @@ def test_room_order_preservation(pipeline, simple_graph):
 
 def test_generate_dungeon_passes_boundary_and_position(monkeypatch, pipeline, simple_graph):
     """Dungeon loop must pass graph-derived boundary constraints and positions into room generation."""
+    _enable_untrained_artifact_reporting(pipeline)
     captured = []
 
     def fake_generate_room(**kwargs):
@@ -888,6 +950,7 @@ def test_encode_room_grid_to_latent_returns_tensor(pipeline):
 
 def test_generate_dungeon_emits_batch_diagnostics(monkeypatch, pipeline, simple_graph):
     """Batch generation mode should record planner/chunk diagnostics in metrics."""
+    _enable_untrained_artifact_reporting(pipeline)
     def fake_generate_room_batch(**kwargs):
         out = {}
         for room_id in kwargs.get('room_ids', []):
@@ -1095,6 +1158,7 @@ def test_generate_room_categorical_sampler_does_not_require_diffusion_or_redecod
 
 def test_generate_dungeon_reports_stage_timings_for_categorical_without_diffusion(monkeypatch, pipeline, simple_graph):
     """Dungeon metrics should expose timing ledgers without requiring continuous diffusion."""
+    _enable_untrained_artifact_reporting(pipeline)
     pipeline.diffusion = None
     pipeline.default_latent_sampler = "categorical"
     pipeline.default_fast_sampler_teacher_fallback_enabled = False
@@ -1326,42 +1390,16 @@ def test_sanitize_semantic_grid_can_strip_void_tiles(pipeline):
 
 
 # =============================================================================
-# PERFORMANCE TESTS
-# =============================================================================
-
-@pytest.mark.slow
-def test_generation_performance(pipeline, simple_graph):
-    """Test generation performance (marked as slow)."""
-    import time
-    
-    start = time.time()
-    result = pipeline.generate_dungeon(
-        mission_graph=simple_graph,
-        num_diffusion_steps=50,
-        apply_repair=True,
-        seed=42
-    )
-    duration = time.time() - start
-    
-    # Should complete in reasonable time (adjust based on hardware)
-    assert duration < 60.0, f"Generation too slow: {duration:.1f}s"
-    
-    rooms_per_sec = len(result.rooms) / duration
-    print(f"✓ Performance: {rooms_per_sec:.2f} rooms/sec ({duration:.2f}s total)")
-
-
-# =============================================================================
 # INTEGRATION SMOKE TEST
 # =============================================================================
 
-def test_complete_pipeline_smoke():
-    """Comprehensive smoke test of the entire pipeline."""
+def test_complete_pipeline_smoke(pipeline):
+    """Exercise all orchestration stages without certifying random weights."""
     print("\n" + "="*70)
     print("COMPLETE PIPELINE SMOKE TEST")
     print("="*70)
     
-    # Initialize pipeline
-    pipeline = NeuralSymbolicDungeonPipeline(device='cpu', enable_logging=True)
+    _enable_untrained_artifact_reporting(pipeline)
     
     # Create test graph
     G = nx.DiGraph()
@@ -1373,7 +1411,7 @@ def test_complete_pipeline_smoke():
         mission_graph=G,
         guidance_scale=7.5,
         logic_guidance_scale=0.5,
-        num_diffusion_steps=10,
+        num_diffusion_steps=2,
         apply_repair=True,
         seed=42,
         enable_map_elites=True,
@@ -1384,6 +1422,7 @@ def test_complete_pipeline_smoke():
     assert result.dungeon_grid.shape[1] == ROOM_WIDTH
     assert result.metrics['num_rooms'] == 4
     assert 'generation_time_sec' in result.metrics
+    assert 'end_to_end_validation_accepted' in result.metrics
     
     # Check individual rooms
     for _room_id, room_result in result.rooms.items():

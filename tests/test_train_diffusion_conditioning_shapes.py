@@ -2119,7 +2119,7 @@ def test_state_dict_is_finite_rejects_nan_weights():
     assert DiffusionTrainer._state_dict_is_finite(state_dict) is False
 
 
-def test_load_checkpoint_strips_legacy_embedded_guidance_logicnet_state(tmp_path):
+def test_warm_start_strips_legacy_embedded_guidance_logicnet_state(tmp_path):
     class _TinyDiffusion(torch.nn.Module):
         def __init__(self):
             super().__init__()
@@ -2155,20 +2155,23 @@ def test_load_checkpoint_strips_legacy_embedded_guidance_logicnet_state(tmp_path
             "ema_diffusion_state_dict": ema_state,
             "condition_encoder_state_dict": trainer.condition_encoder.state_dict(),
             "logic_net_state_dict": trainer.logic_net.state_dict(),
+            "metrics": {"val_solvability": 0.75},
         },
         path,
     )
 
-    DiffusionTrainer.load_checkpoint(trainer, str(path))
+    loaded_metrics = DiffusionTrainer.warm_start_from_checkpoint(trainer, str(path))
 
-    assert trainer.epoch == 2
-    assert trainer.global_step == 17
+    assert trainer.epoch == 0
+    assert trainer.global_step == 0
     assert trainer.diffusion.guidance.logic_net is trainer.logic_net
     assert trainer.ema_diffusion.guidance.logic_net is trainer.logic_net
     assert "logic_net" not in trainer.diffusion.guidance._modules
+    assert loaded_metrics == {}
+    assert trainer._scheduler_state_restored is False
 
 
-def test_load_checkpoint_without_ema_state_initializes_ema_from_diffusion(tmp_path):
+def test_warm_start_without_ema_state_initializes_ema_from_diffusion(tmp_path):
     class _TinyDiffusion(torch.nn.Module):
         def __init__(self, value: float):
             super().__init__()
@@ -2205,7 +2208,7 @@ def test_load_checkpoint_without_ema_state_initializes_ema_from_diffusion(tmp_pa
         path,
     )
 
-    DiffusionTrainer.load_checkpoint(trainer, str(path))
+    DiffusionTrainer.warm_start_from_checkpoint(trainer, str(path))
 
     for ema_param, diffusion_param in zip(trainer.ema_diffusion.parameters(), trainer.diffusion.parameters()):
         assert torch.allclose(ema_param, diffusion_param)
@@ -2295,14 +2298,252 @@ def test_safetensors_sidecar_round_trips_inference_weights_without_optimizer(tmp
     )
     loaded.scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(loaded.optimizer, T_0=1)
 
-    DiffusionTrainer.load_checkpoint(loaded, str(safetensors_path))
+    DiffusionTrainer.warm_start_from_checkpoint(loaded, str(safetensors_path))
 
     assert float(loaded.diffusion.weight.item()) == pytest.approx(2.0)
     assert float(loaded.ema_diffusion.weight.item()) == pytest.approx(3.0)
     assert float(loaded.condition_encoder.weight.item()) == pytest.approx(4.0)
     assert float(loaded.logic_net.weight.item()) == pytest.approx(5.0)
     assert float(loaded.puzzle_stage_semantics_head.weight.item()) == pytest.approx(6.0)
-    assert loaded.epoch == 7
-    assert loaded.global_step == 11
+    assert loaded.epoch == 0
+    assert loaded.global_step == 0
     assert loaded._accumulation_micro_steps == 0
     assert loaded.diffusion.guidance.logic_net is loaded.logic_net
+
+    with pytest.raises(ValueError, match="cannot be used for stateful resume"):
+        DiffusionTrainer.load_checkpoint(loaded, str(safetensors_path))
+
+
+def test_stateful_resume_rejects_weights_only_torch_checkpoint(tmp_path):
+    trainer = DiffusionTrainer.__new__(DiffusionTrainer)
+    trainer.device = torch.device("cpu")
+    trainer.config = SimpleNamespace(use_amp=False)
+    trainer.diffusion = _TinyCheckpointModule(0.0)
+    trainer.ema_diffusion = _TinyCheckpointModule(0.0)
+    trainer.condition_encoder = _TinyCheckpointModule(0.0)
+    trainer.logic_net = _TinyCheckpointModule(0.0)
+    trainer.optimizer = torch.optim.SGD(
+        list(trainer.diffusion.parameters()) + list(trainer.condition_encoder.parameters()),
+        lr=1e-3,
+    )
+    trainer.scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+        trainer.optimizer,
+        T_0=1,
+    )
+
+    path = tmp_path / "weights_only.pth"
+    torch.save(
+        {
+            "epoch": 4,
+            "global_step": 12,
+            "diffusion_state_dict": trainer.diffusion.state_dict(),
+            "condition_encoder_state_dict": trainer.condition_encoder.state_dict(),
+        },
+        path,
+    )
+
+    with pytest.raises(ValueError, match="not a complete resume artifact"):
+        DiffusionTrainer.load_checkpoint(trainer, str(path))
+
+
+def test_stateful_resume_restores_complete_training_state(tmp_path):
+    source = DiffusionTrainer.__new__(DiffusionTrainer)
+    source.device = torch.device("cpu")
+    source.config = SimpleNamespace(use_amp=False)
+    source.diffusion = _TinyCheckpointModule(2.0)
+    source.ema_diffusion = _TinyCheckpointModule(3.0)
+    source.condition_encoder = _TinyCheckpointModule(4.0)
+    source.logic_net = _TinyCheckpointModule(5.0)
+    source.puzzle_stage_semantics_head = None
+    source.optimizer = torch.optim.AdamW(
+        list(source.diffusion.parameters())
+        + list(source.condition_encoder.parameters())
+        + list(source.logic_net.parameters()),
+        lr=2e-4,
+    )
+    source.scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+        source.optimizer,
+        T_0=7,
+    )
+    source.epoch = 6
+    source.global_step = 23
+
+    path = tmp_path / "complete_resume.pth"
+    torch.save(
+        {
+            "epoch": source.epoch,
+            "global_step": source.global_step,
+            "diffusion_state_dict": source.diffusion.state_dict(),
+            "ema_diffusion_state_dict": source.ema_diffusion.state_dict(),
+            "condition_encoder_state_dict": source.condition_encoder.state_dict(),
+            "logic_net_state_dict": source.logic_net.state_dict(),
+            "optimizer_state_dict": source.optimizer.state_dict(),
+            "scheduler_state_dict": source.scheduler.state_dict(),
+            "metrics": {"best_solvability": 0.8},
+        },
+        path,
+    )
+
+    loaded = DiffusionTrainer.__new__(DiffusionTrainer)
+    loaded.device = torch.device("cpu")
+    loaded.config = SimpleNamespace(use_amp=False)
+    loaded.diffusion = _TinyCheckpointModule(0.0)
+    loaded.ema_diffusion = _TinyCheckpointModule(0.0)
+    loaded.condition_encoder = _TinyCheckpointModule(0.0)
+    loaded.logic_net = _TinyCheckpointModule(0.0)
+    loaded.puzzle_stage_semantics_head = None
+    loaded.optimizer = torch.optim.AdamW(
+        list(loaded.diffusion.parameters())
+        + list(loaded.condition_encoder.parameters())
+        + list(loaded.logic_net.parameters()),
+        lr=1e-3,
+    )
+    loaded.scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+        loaded.optimizer,
+        T_0=1,
+    )
+
+    metrics = DiffusionTrainer.load_checkpoint(loaded, str(path))
+
+    assert loaded.epoch == 6
+    assert loaded.global_step == 23
+    assert loaded.scheduler.T_0 == 7
+    assert loaded._scheduler_state_restored is True
+    assert float(loaded.diffusion.weight.item()) == pytest.approx(2.0)
+    assert metrics == {"best_solvability": 0.8}
+
+
+def test_stateful_resume_rejects_missing_enabled_puzzle_semantics_head(tmp_path):
+    trainer = DiffusionTrainer.__new__(DiffusionTrainer)
+    trainer.device = torch.device("cpu")
+    trainer.config = SimpleNamespace(use_amp=False)
+    trainer.diffusion = _TinyCheckpointModule(0.0)
+    trainer.ema_diffusion = _TinyCheckpointModule(0.0)
+    trainer.condition_encoder = _TinyCheckpointModule(0.0)
+    trainer.logic_net = _TinyCheckpointModule(0.0)
+    trainer.puzzle_stage_semantics_head = _TinyCheckpointModule(0.0)
+    trainer.optimizer = torch.optim.SGD(
+        list(trainer.diffusion.parameters()) + list(trainer.condition_encoder.parameters()),
+        lr=1e-3,
+    )
+    trainer.scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+        trainer.optimizer,
+        T_0=1,
+    )
+    path = tmp_path / "missing_stage_head_resume.pth"
+    torch.save(
+        {
+            "epoch": 1,
+            "global_step": 2,
+            "diffusion_state_dict": trainer.diffusion.state_dict(),
+            "ema_diffusion_state_dict": trainer.ema_diffusion.state_dict(),
+            "condition_encoder_state_dict": trainer.condition_encoder.state_dict(),
+            "logic_net_state_dict": trainer.logic_net.state_dict(),
+            "optimizer_state_dict": trainer.optimizer.state_dict(),
+            "scheduler_state_dict": trainer.scheduler.state_dict(),
+        },
+        path,
+    )
+
+    with pytest.raises(ValueError, match="missing puzzle_stage_semantics_head_state_dict"):
+        DiffusionTrainer.load_checkpoint(trainer, str(path))
+
+
+def test_joint_gradient_clipping_uses_one_optimizer_wide_norm():
+    trainer = DiffusionTrainer.__new__(DiffusionTrainer)
+    trainer.device = torch.device("cpu")
+    trainer._accelerator = None
+    first = torch.nn.Parameter(torch.tensor(0.0))
+    second = torch.nn.Parameter(torch.tensor(0.0))
+    first.grad = torch.tensor(3.0)
+    second.grad = torch.tensor(4.0)
+    trainer.optimizer = torch.optim.SGD(
+        [{"params": [first]}, {"params": [second]}],
+        lr=1e-3,
+    )
+
+    unclipped_norm = DiffusionTrainer._clip_joint_optimizer_gradients(trainer, 1.0)
+
+    clipped_norm = torch.linalg.vector_norm(torch.stack([first.grad, second.grad]))
+    assert float(unclipped_norm) == pytest.approx(5.0)
+    assert float(clipped_norm) == pytest.approx(1.0, rel=1e-5)
+
+
+def test_partial_resume_reconstructs_scheduler_from_real_loader_period():
+    trainer = DiffusionTrainer.__new__(DiffusionTrainer)
+    parameter = torch.nn.Parameter(torch.tensor(0.0))
+    trainer.optimizer = torch.optim.SGD([parameter], lr=1e-3)
+    trainer.scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+        trainer.optimizer,
+        T_0=10,
+        T_mult=1,
+    )
+    trainer.config = SimpleNamespace(epochs=10, scheduler_t0=2)
+    trainer.global_step = 150
+    trainer._scheduler_state_restored = False
+    trainer._scheduler_period_configured = False
+
+    DiffusionTrainer._configure_scheduler_period_from_steps_per_epoch(trainer, 50)
+
+    assert trainer.scheduler.T_0 == 100
+    assert trainer.scheduler.T_i == 100
+    assert trainer.scheduler.T_cur == 50
+    assert trainer._scheduler_period_configured is True
+
+
+def test_nonfinite_microbatch_preserves_prior_valid_accumulated_gradient():
+    trainer = DiffusionTrainer.__new__(DiffusionTrainer)
+    trainer.device = torch.device("cpu")
+    trainer.config = SimpleNamespace(
+        alpha_visual=1.0,
+        alpha_logic=0.0,
+        alpha_logic_tile=0.0,
+        alpha_wfc_pseudo=0.0,
+        logic_loss_mode="predicted_latent",
+        logic_net_enabled=False,
+        logic_net_trainable=False,
+        grad_clip_norm=0.0,
+        gradient_accumulation_steps=2,
+        epochs=1,
+        learning_rate=1e-3,
+        global_lr_warmup_epochs=0,
+        logic_lr_warmup_epochs=0,
+    )
+    trainer.diffusion = _FiniteDifferentiableTrainingLossModule()
+    trainer.condition_encoder = _TinyModule()
+    trainer.logic_net = _DummyLogicNet()
+    trainer.ema_diffusion = _DummyEvalModel()
+    trainer.optimizer = torch.optim.SGD(
+        list(trainer.diffusion.parameters()) + list(trainer.condition_encoder.parameters()),
+        lr=1e-3,
+    )
+    trainer._accelerator = None
+    trainer.global_step = 0
+    trainer._accumulation_micro_steps = 0
+    trainer._nonfinite_warning_counts = {}
+    trainer.encode_to_latent = lambda real_maps: torch.zeros(
+        (real_maps.shape[0], 4, 2, 2), dtype=torch.float32
+    )
+    trainer.get_dummy_conditioning = lambda batch_size: torch.zeros(
+        (batch_size, 1, 8), dtype=torch.float32
+    )
+    trainer._gradients_are_finite = lambda: True
+
+    first_metrics = DiffusionTrainer.train_step(
+        trainer,
+        torch.zeros((2, 1, ROOM_HEIGHT, ROOM_WIDTH), dtype=torch.float32),
+        include_logic_loss=False,
+    )
+    prior_grad = trainer.diffusion.weight.grad.detach().clone()
+    trainer.diffusion.training_loss = lambda *args, **kwargs: torch.tensor(float("nan"))
+
+    second_metrics = DiffusionTrainer.train_step(
+        trainer,
+        torch.zeros((2, 1, ROOM_HEIGHT, ROOM_WIDTH), dtype=torch.float32),
+        include_logic_loss=False,
+    )
+
+    assert first_metrics["gradient_accumulation_micro_steps"] == pytest.approx(1.0)
+    assert second_metrics["skipped_nonfinite_batch"] == pytest.approx(1.0)
+    assert trainer._accumulation_micro_steps == 1
+    assert torch.equal(trainer.diffusion.weight.grad, prior_grad)

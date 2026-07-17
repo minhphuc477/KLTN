@@ -22,12 +22,17 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.generation.grammar import (
+    AddFungibleLockRule,
     AddBossGauntlet,
     AddCollectionChallengeRule,
+    AddMultiLockRule,
     AddSecretRule,
+    AddSectorRule,
     AddValveRule,
     CreateHubRule,
+    FormBigRoomRule,
     InsertChallengeRule,
+    InsertLockKeyRule,
     InsertSwitchRule,
     MissionEdge,
     MissionGraph,
@@ -39,12 +44,150 @@ from src.generation.grammar import (
 )
 
 
+class _FirstChoiceRng:
+    @staticmethod
+    def choice(values):
+        return values[0]
+
+
 def _positions_are_unique(graph: MissionGraph) -> bool:
     positions = [
         (int(node.position[0]), int(node.position[1]), int(node.position[2]) if len(node.position) > 2 else 0)
         for node in graph.nodes.values()
     ]
     return len(positions) == len(set(positions))
+
+
+def test_fungible_lock_rollback_restores_exact_original_edge():
+    graph = MissionGraph()
+    for node_id, position in enumerate(((0, 0, 0), (0, 2, 0), (2, 0, 0), (2, 2, 0))):
+        graph.add_node(MissionNode(node_id, NodeType.EMPTY, position=position))
+    original = MissionEdge(
+        0,
+        1,
+        EdgeType.PATH,
+        metadata={"semantic": "preserve"},
+        preferred_direction="forward",
+        path_savings=7,
+    )
+    graph.edges.append(original)
+    graph.add_edge(2, 3, EdgeType.PATH)
+    graph.sanitize()
+    original_metadata = original.metadata
+
+    result = AddFungibleLockRule().apply(graph, {"rng": _FirstChoiceRng()})
+
+    restored = next(edge for edge in result.edges if edge.source == 0 and edge.target == 1)
+    assert restored is original
+    assert restored.metadata is original_metadata
+    assert restored.metadata == {"semantic": "preserve"}
+    assert restored.preferred_direction == "forward"
+    assert restored.path_savings == 7
+    assert len(result.nodes) == 4
+
+
+def test_sector_rule_rolls_back_when_bounded_floor_has_no_free_position():
+    graph = MissionGraph()
+    positions = ((0, 0), (0, 1), (1, 0), (1, 1), (0, 0, 1), (0, 1, 1))
+    for node_id, position in enumerate(positions):
+        graph.add_node(MissionNode(node_id, NodeType.EMPTY, position=position))
+    for node_id in range(1, len(positions)):
+        graph.add_edge(0, node_id, EdgeType.PATH)
+    original_nodes = dict(graph.nodes)
+    original_edges = list(graph.edges)
+
+    result = AddSectorRule().apply(
+        graph,
+        {"rng": random.Random(4), "layout_bounds": (0, 1, 0, 1)},
+    )
+
+    assert result is graph
+    assert graph.nodes == original_nodes
+    assert graph.edges == original_edges
+    assert _positions_are_unique(graph)
+
+
+def test_sector_rule_keeps_every_added_node_unique_and_inside_layout_bounds():
+    graph = MissionGraph()
+    positions = ((5, 5, 0), (4, 5, 0), (5, 4, 0), (5, 6, 0), (6, 5, 0), (4, 4, 0))
+    for node_id, position in enumerate(positions):
+        graph.add_node(MissionNode(node_id, NodeType.EMPTY, position=position))
+    for node_id in range(1, len(positions)):
+        graph.add_edge(0, node_id, EdgeType.PATH)
+
+    result = AddSectorRule().apply(
+        graph,
+        {"rng": random.Random(4), "layout_bounds": (0, 12, 0, 12)},
+    )
+
+    assert len(result.nodes) > len(positions)
+    assert _positions_are_unique(result)
+    assert all(
+        0 <= int(node.position[0]) <= 12 and 0 <= int(node.position[1]) <= 12
+        for node in result.nodes.values()
+    )
+
+
+def test_layout_assigns_disconnected_components_non_overlapping_positions():
+    graph = MissionGraph()
+    graph.add_node(MissionNode(0, NodeType.START, position=(0, 0, 0)))
+    graph.add_node(MissionNode(1, NodeType.EMPTY, position=(0, 0, 0)))
+    graph.add_node(MissionNode(2, NodeType.EMPTY, position=(0, 0, 0)))
+    graph.add_edge(0, 1, EdgeType.PATH)
+
+    laid_out = MissionGrammar(seed=3)._layout_graph(graph)
+
+    assert _positions_are_unique(laid_out)
+    assert laid_out.nodes[2].position != (0, 0, 0)
+
+
+def test_insert_lock_key_failure_returns_untouched_caller_graph():
+    graph = MissionGraph()
+    for node_id in range(2):
+        graph.add_node(MissionNode(node_id, NodeType.EMPTY, position=(node_id, 0, 0)))
+    original_edge = MissionEdge(0, 1, EdgeType.STATE_BLOCK, switch_id=91)
+    graph.edges.append(original_edge)
+    graph.sanitize()
+    original_nodes = dict(graph.nodes)
+    original_edges = list(graph.edges)
+    original_stats = dict(graph.generation_stats)
+
+    result = InsertLockKeyRule().apply(graph, {"rng": random.Random(3)})
+
+    assert result is graph
+    assert graph.nodes == original_nodes
+    assert graph.edges == original_edges
+    assert graph.edges[0] is original_edge
+    assert graph.generation_stats == original_stats
+
+
+def test_multi_lock_failure_returns_untouched_caller_graph():
+    graph = MissionGraph()
+    graph.add_node(MissionNode(0, NodeType.START, position=(0, 0, 0), is_hub=True))
+    next_node_id = 1
+    for branch_col in range(3):
+        previous = 0
+        branch_length = 3 if branch_col == 0 else 2
+        for branch_depth in range(branch_length):
+            node_id = next_node_id
+            next_node_id += 1
+            graph.add_node(
+                MissionNode(node_id, NodeType.EMPTY, position=(branch_depth + 1, branch_col, 0))
+            )
+            graph.add_edge(previous, node_id, EdgeType.PATH)
+            previous = node_id
+    graph.sanitize()
+    original_nodes = dict(graph.nodes)
+    original_edges = list(graph.edges)
+    original_stats = dict(graph.generation_stats)
+
+    result = AddMultiLockRule().apply(graph, {"rng": random.Random(3)})
+
+    assert result is graph
+    assert graph.nodes == original_nodes
+    assert graph.edges == original_edges
+    assert all(current is original for current, original in zip(graph.edges, original_edges))
+    assert graph.generation_stats == original_stats
 
 
 class TestAdvancedRulesIntegration:
@@ -76,6 +219,25 @@ class TestAdvancedRulesIntegration:
         for rule_name in advanced_rules:
             assert any(rule_name in name for name in rule_names), \
                 f"Advanced rule '{rule_name}' not found in grammar"
+
+    def test_form_big_room_accepts_legacy_2d_positions_without_cross_floor_merge(self):
+        graph = MissionGraph()
+        graph.add_node(MissionNode(id=0, node_type=NodeType.START, position=(0, 0)))
+        graph.add_node(MissionNode(id=1, node_type=NodeType.EMPTY, position=(1, 0)))
+        graph.add_node(MissionNode(id=2, node_type=NodeType.EMPTY, position=(2, 0)))
+        graph.add_node(MissionNode(id=3, node_type=NodeType.GOAL, position=(3, 0)))
+        graph.add_edge(0, 1, EdgeType.PATH)
+        graph.add_edge(1, 2, EdgeType.PATH)
+        graph.add_edge(2, 3, EdgeType.PATH)
+
+        rule = FormBigRoomRule()
+        assert rule.can_apply(graph, {"rng": random.Random(3)})
+        updated = rule.apply(graph, {"rng": random.Random(3)})
+
+        big_rooms = [node for node in updated.nodes.values() if node.is_big_room]
+        assert len(big_rooms) == 1
+        assert len(big_rooms[0].position) == 3
+        assert big_rooms[0].position[2] == 0
 
     def test_add_boss_gauntlet_creates_strict_boss_chain(self):
         """Boss gauntlet should build BOSS_DOOR -> BOSS -> GOAL, not door -> goal directly."""
@@ -570,6 +732,44 @@ class TestAdvancedRulesIntegration:
         graph.add_edge(2, 3, EdgeType.PATH)
         graph.edges.append(MissionEdge(3, 4, EdgeType.LOCKED, requires_key_count=1))
         graph.add_edge(4, 5, EdgeType.PATH)
+        graph.sanitize()
+
+        assert grammar.validate_progression_constraints(graph, log_failures=False)
+
+    def test_named_small_key_is_consumed_by_its_matching_lock(self):
+        """One named small key cannot unlock two sequential matching doors."""
+        grammar = MissionGrammar(seed=42)
+        graph = MissionGraph()
+        for node in [
+            MissionNode(id=0, node_type=NodeType.START),
+            MissionNode(id=1, node_type=NodeType.KEY, key_id=7),
+            MissionNode(id=2, node_type=NodeType.EMPTY),
+            MissionNode(id=3, node_type=NodeType.EMPTY),
+            MissionNode(id=4, node_type=NodeType.GOAL),
+        ]:
+            graph.add_node(node)
+        graph.add_edge(0, 1, EdgeType.PATH)
+        graph.add_edge(1, 2, EdgeType.LOCKED, key_required=7)
+        graph.add_edge(2, 3, EdgeType.LOCKED, key_required=7)
+        graph.add_edge(3, 4, EdgeType.PATH)
+        graph.sanitize()
+
+        assert not grammar.validate_progression_constraints(graph, log_failures=False)
+
+    def test_second_named_small_key_replenishes_a_matching_lock_key(self):
+        """A matching key discovered behind the first lock enables the next one."""
+        grammar = MissionGrammar(seed=42)
+        graph = MissionGraph()
+        for node in [
+            MissionNode(id=0, node_type=NodeType.START),
+            MissionNode(id=1, node_type=NodeType.KEY, key_id=7),
+            MissionNode(id=2, node_type=NodeType.KEY, key_id=7),
+            MissionNode(id=3, node_type=NodeType.GOAL),
+        ]:
+            graph.add_node(node)
+        graph.add_edge(0, 1, EdgeType.PATH)
+        graph.add_edge(1, 2, EdgeType.LOCKED, key_required=7)
+        graph.add_edge(2, 3, EdgeType.LOCKED, key_required=7)
         graph.sanitize()
 
         assert grammar.validate_progression_constraints(graph, log_failures=False)

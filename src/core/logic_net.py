@@ -51,6 +51,40 @@ from src.core.perturb_and_map import perturb_and_map_distance
 
 logger = logging.getLogger(__name__)
 
+
+# Canonical graph-feature channel positions emitted by
+# ``src.pipeline.graph_features.encode_*_feature_vector``. These names keep
+# logic semantics explicit without changing the checkpoint feature widths.
+GRAPH_NODE_KEY_FEATURE_INDEX = 1
+GRAPH_NODE_GOAL_FEATURE_INDEX = 3
+
+GRAPH_EDGE_OPEN_FEATURE_INDEX = 0
+GRAPH_EDGE_KEY_LOCK_FEATURE_INDEX = 1
+GRAPH_EDGE_BOMBABLE_FEATURE_INDEX = 2
+GRAPH_EDGE_SOFT_LOCK_FEATURE_INDEX = 3
+GRAPH_EDGE_BOSS_LOCK_FEATURE_INDEX = 4
+GRAPH_EDGE_ITEM_LOCK_FEATURE_INDEX = 5
+GRAPH_EDGE_STAIR_FEATURE_INDEX = 6
+GRAPH_EDGE_SWITCH_FEATURE_INDEX = 7
+
+GRAPH_EDGE_LOCK_FEATURE_INDICES = (
+    GRAPH_EDGE_KEY_LOCK_FEATURE_INDEX,
+    GRAPH_EDGE_BOSS_LOCK_FEATURE_INDEX,
+    GRAPH_EDGE_ITEM_LOCK_FEATURE_INDEX,
+)
+GRAPH_EDGE_TRAVERSAL_PENALTIES = {
+    GRAPH_EDGE_KEY_LOCK_FEATURE_INDEX: 1.0,
+    GRAPH_EDGE_BOMBABLE_FEATURE_INDEX: 0.5,
+    GRAPH_EDGE_SOFT_LOCK_FEATURE_INDEX: 0.25,
+    GRAPH_EDGE_BOSS_LOCK_FEATURE_INDEX: 2.0,
+    GRAPH_EDGE_ITEM_LOCK_FEATURE_INDEX: 1.0,
+    GRAPH_EDGE_SWITCH_FEATURE_INDEX: 0.5,
+}
+
+
+class LogicGraphContractError(Exception):
+    """Raised when graph metadata cannot define the requested logic objective."""
+
 CANONICAL_LOGIC_WALKABLE_IDS = sorted(
     {
         int(SEMANTIC_PALETTE[name])
@@ -276,6 +310,19 @@ class DifferentiablePathfinder(nn.Module):
         dist = torch.where(start > 0.5, torch.zeros_like(dist), dist)
         return dist.clamp(-inf, inf)
 
+    def _grid_relax_chunk(
+        self,
+        dist: Tensor,
+        walkability: Tensor,
+        traversal_cost: Tensor,
+        start: Tensor,
+        steps: int,
+    ) -> Tensor:
+        """Run an exact sequence of local relaxations inside one checkpoint."""
+        for _ in range(int(max(1, steps))):
+            dist = self._grid_relax_step(dist, walkability, traversal_cost, start)
+        return dist
+
     def _graph_relax_step(
         self,
         distances: Tensor,
@@ -393,22 +440,33 @@ class DifferentiablePathfinder(nn.Module):
             # in the third. The current contract uses the third tensor as the
             # source mask; this still computes a valid distance field from the
             # requested source while avoiding ambiguous argument inversion.
+            iteration_limit = self._iteration_limit(H * W)
             use_checkpoint = self._should_checkpoint_relaxation(walkability, traversal_cost, start)
-            for _ in range(self._iteration_limit(H * W)):
-                previous = dist
-                if use_checkpoint:
+            if use_checkpoint:
+                # Segmenting K relaxations into about sqrt(K) checkpoints keeps
+                # the exact K-step result while reducing checkpoint-node depth
+                # from O(K) to O(sqrt(K)).
+                chunk_size = int(max(1, math.ceil(math.sqrt(iteration_limit))))
+                completed = 0
+                while completed < iteration_limit:
+                    steps = min(chunk_size, iteration_limit - completed)
                     dist = checkpoint(
-                        self._grid_relax_step,
+                        lambda d, w, c, s, step_count=steps: self._grid_relax_chunk(
+                            d, w, c, s, step_count
+                        ),
                         dist,
                         walkability,
                         traversal_cost,
                         start,
                         use_reentrant=False,
                     )
-                else:
+                    completed += steps
+            else:
+                for _ in range(iteration_limit):
+                    previous = dist
                     dist = self._grid_relax_step(dist, walkability, traversal_cost, start)
-                if self._has_converged(previous, dist):
-                    break
+                    if self._has_converged(previous, dist):
+                        break
 
             return dist
 
@@ -1063,7 +1121,7 @@ class ReachabilityScorer(nn.Module):
         # Use exponential decay for the primary score (always has gradient).
         # Temperature controls the sharpness: high temp = smooth gradients early,
         # annealed low temp = sharp scores at convergence.
-        effective_temp = max(self.temperature, 0.1)
+        effective_temp = max(float(self.temperature), 1e-4)
         scores = torch.exp(-distances / (effective_temp * self.max_distance + 1e-8))
         
         # Mix with a linear component for stable early-training gradients.
@@ -1204,15 +1262,7 @@ class SemanticEdgeEncoder(nn.Module):
     def __init__(self, num_edge_types: int = 16):
         super().__init__()
         base = torch.zeros(num_edge_types, dtype=torch.float32)
-        defaults = {
-            1: 1.0,   # key lock
-            2: 0.5,   # bomb
-            3: 0.25,  # soft/one-way
-            4: 2.0,   # boss lock
-            5: 1.0,   # item lock
-            7: 0.5,   # switch/state
-        }
-        for idx, value in defaults.items():
+        for idx, value in GRAPH_EDGE_TRAVERSAL_PENALTIES.items():
             if idx < num_edge_types:
                 base[idx] = float(value)
         self.register_buffer("base_penalty", base)
@@ -1475,7 +1525,7 @@ class LogicNet(nn.Module):
         )
         self.register_buffer(
             "locked_edge_role_ids",
-            torch.tensor([1, 4, 5], dtype=torch.long),
+            torch.tensor(GRAPH_EDGE_LOCK_FEATURE_INDICES, dtype=torch.long),
             persistent=False,
         )
         
@@ -1869,8 +1919,15 @@ class LogicNet(nn.Module):
         target_idx = LogicNet._coerce_optional_int(explicit_target_idx)
         if target_idx is not None and 0 <= target_idx < node_count:
             return target_idx
-        if isinstance(node_features, torch.Tensor) and node_features.dim() == 2 and node_features.shape[1] > 3:
-            hits = torch.nonzero(node_features[:, 3] > 0.5, as_tuple=False).flatten()
+        if (
+            isinstance(node_features, torch.Tensor)
+            and node_features.dim() == 2
+            and node_features.shape[1] > GRAPH_NODE_GOAL_FEATURE_INDEX
+        ):
+            hits = torch.nonzero(
+                node_features[:, GRAPH_NODE_GOAL_FEATURE_INDEX] > 0.5,
+                as_tuple=False,
+            ).flatten()
             if hits.numel() > 0:
                 return int(hits[0].item())
         return None
@@ -1888,18 +1945,9 @@ class LogicNet(nn.Module):
                 ef = ef.unsqueeze(-1)
             ef = ef[:num_edges].float()
             penalty = torch.zeros(num_edges, device=ef.device, dtype=ef.dtype)
-            if ef.shape[1] > 1:
-                penalty = penalty + ef[:, 1].clamp(0.0, 1.0) * 1.0  # key lock
-            if ef.shape[1] > 2:
-                penalty = penalty + ef[:, 2].clamp(0.0, 1.0) * 0.5  # bomb
-            if ef.shape[1] > 3:
-                penalty = penalty + ef[:, 3].clamp(0.0, 1.0) * 0.25  # soft/one-way
-            if ef.shape[1] > 4:
-                penalty = penalty + ef[:, 4].clamp(0.0, 1.0) * 2.0  # boss lock
-            if ef.shape[1] > 5:
-                penalty = penalty + ef[:, 5].clamp(0.0, 1.0) * 1.0  # item lock
-            if ef.shape[1] > 7:
-                penalty = penalty + ef[:, 7].clamp(0.0, 1.0) * 0.5  # switch/state
+            for feature_index, scale in GRAPH_EDGE_TRAVERSAL_PENALTIES.items():
+                if ef.shape[1] > feature_index:
+                    penalty = penalty + ef[:, feature_index].clamp(0.0, 1.0) * scale
 
         if isinstance(edge_attr, torch.Tensor) and edge_attr.numel() > 0:
             attr = edge_attr[:num_edges].to(dtype=torch.long)
@@ -1928,13 +1976,12 @@ class LogicNet(nn.Module):
             ef = features
             if ef.dim() == 1:
                 ef = ef.unsqueeze(-1)
-            if ef.shape[-1] <= 1:
+            if ef.shape[-1] <= min(GRAPH_EDGE_LOCK_FEATURE_INDICES):
                 return torch.zeros(ef.shape[:-1], device=ef.device, dtype=torch.bool)
-            mask = ef[..., 1] > 0.5
-            if ef.shape[-1] > 4:
-                mask = mask | (ef[..., 4] > 0.5)
-            if ef.shape[-1] > 5:
-                mask = mask | (ef[..., 5] > 0.5)
+            mask = torch.zeros(ef.shape[:-1], device=ef.device, dtype=torch.bool)
+            for feature_index in GRAPH_EDGE_LOCK_FEATURE_INDICES:
+                if ef.shape[-1] > feature_index:
+                    mask = mask | (ef[..., feature_index] > 0.5)
             return mask
 
         if isinstance(adjacency, torch.Tensor):
@@ -2017,18 +2064,12 @@ class LogicNet(nn.Module):
                 if ef.dim() == 3 and int(ef.shape[0]) >= n and int(ef.shape[1]) >= n:
                     ef = ef[:n, :n].to(dtype=dtype)
                     dense_penalty = torch.zeros(n, n, device=device, dtype=dtype)
-                    if ef.shape[2] > 1:
-                        dense_penalty = dense_penalty + ef[:, :, 1].clamp(0.0, 1.0) * 1.0
-                    if ef.shape[2] > 2:
-                        dense_penalty = dense_penalty + ef[:, :, 2].clamp(0.0, 1.0) * 0.5
-                    if ef.shape[2] > 3:
-                        dense_penalty = dense_penalty + ef[:, :, 3].clamp(0.0, 1.0) * 0.25
-                    if ef.shape[2] > 4:
-                        dense_penalty = dense_penalty + ef[:, :, 4].clamp(0.0, 1.0) * 2.0
-                    if ef.shape[2] > 5:
-                        dense_penalty = dense_penalty + ef[:, :, 5].clamp(0.0, 1.0) * 1.0
-                    if ef.shape[2] > 7:
-                        dense_penalty = dense_penalty + ef[:, :, 7].clamp(0.0, 1.0) * 0.5
+                    for feature_index, scale in GRAPH_EDGE_TRAVERSAL_PENALTIES.items():
+                        if ef.shape[2] > feature_index:
+                            dense_penalty = (
+                                dense_penalty
+                                + ef[:, :, feature_index].clamp(0.0, 1.0) * scale
+                            )
                 elif ef.dim() == 2 and int(ef.shape[0]) >= n and int(ef.shape[1]) >= n:
                     dense_penalty = ef[:n, :n].to(dtype=dtype).clamp_min(0.0)
             if isinstance(edge_attr, torch.Tensor) and edge_attr.numel() > 0:
@@ -2447,16 +2488,22 @@ class LogicNet(nn.Module):
             and not pairs
             and isinstance(node_features, torch.Tensor)
             and node_features.dim() == 2
-            and node_features.shape[1] > 1
+            and node_features.shape[1] > GRAPH_NODE_KEY_FEATURE_INDEX
         ):
-            key_nodes = torch.nonzero(node_features[:n, 1] > 0.5, as_tuple=False).flatten().tolist()
+            key_nodes = torch.nonzero(
+                node_features[:n, GRAPH_NODE_KEY_FEATURE_INDEX] > 0.5,
+                as_tuple=False,
+            ).flatten().tolist()
             locked_targets: List[int] = []
             if isinstance(edge_features, torch.Tensor) and isinstance(edge_index, torch.Tensor) and edge_index.numel() > 0:
                 ef = edge_features
                 if ef.dim() == 1:
                     ef = ef.unsqueeze(-1)
-                if ef.shape[1] > 1:
-                    locked = torch.nonzero(ef[:, 1] > 0.5, as_tuple=False).flatten()
+                if ef.shape[1] > GRAPH_EDGE_KEY_LOCK_FEATURE_INDEX:
+                    locked = torch.nonzero(
+                        ef[:, GRAPH_EDGE_KEY_LOCK_FEATURE_INDEX] > 0.5,
+                        as_tuple=False,
+                    ).flatten()
                     for edge_i in locked.tolist():
                         if edge_i < edge_index.shape[1]:
                             dst = int(edge_index[1, edge_i].item())
@@ -2474,6 +2521,16 @@ class LogicNet(nn.Module):
         lock_loss = zero
         lock_info: Dict[str, Any] = {}
         if torch.any(locked_edges):
+            if not pairs:
+                reason = (
+                    "ambiguous provider-to-lock assignment"
+                    if resource_pair_inference_ambiguous
+                    else "missing provider-to-lock assignment"
+                )
+                raise LogicGraphContractError(
+                    "LogicNet cannot supervise a graph with locked edges and "
+                    f"{reason}. Supply explicit key_lock_pairs from the mission graph."
+                )
             distances, lock_loss, lock_info = self._resource_gated_rollout(
                 adjacency=adj,
                 weights=weights,
@@ -2482,16 +2539,6 @@ class LogicNet(nn.Module):
                 key_lock_pairs=pairs,
                 dtype=dtype,
             )
-            if not pairs:
-                # A locked graph with no provider assignment is structurally
-                # invalid even when the selected goal happens to avoid that
-                # optional branch. Keep this explicit in the objective instead
-                # of silently assigning zero key-economy loss.
-                missing_pair_loss = torch.ones((), device=device, dtype=dtype)
-                lock_loss = lock_loss + missing_pair_loss
-                lock_info["missing_resource_pair_loss"] = missing_pair_loss
-                lock_info["num_violations"] = int(lock_info.get("num_violations", 0)) + 1
-                lock_info["total_violation"] = lock_loss
         elif pairs:
             key_mask = torch.zeros(n, device=device, dtype=dtype)
             lock_mask = torch.zeros(n, device=device, dtype=dtype)

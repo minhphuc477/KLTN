@@ -17,6 +17,7 @@ from src.pipeline.block_contracts import BlockShapeContract, validate_feature_di
 from src.pipeline.repair_feedback import build_latent_edit_mask, logicnet_guided_inpaint_room
 from src.pipeline.room_stitching import StitchedRoomLayout
 from src.pipeline.room_topology_conditioning import (
+    apply_puzzle_stage_control_to_conditioning,
     apply_puzzle_structure_control_to_conditioning,
     build_room_semantic_anchor_points,
 )
@@ -4071,6 +4072,59 @@ def _aggregate_room_alignment_metrics(pipeline, room_metric_dicts: List[Dict[str
     }
 
 
+def _aggregate_puzzle_stage_semantics_metrics(
+    pipeline,
+    room_metric_dicts: List[Dict[str, Any]],
+) -> Dict[str, float]:
+    """Aggregate model-stage scores without conflating them with constraints.
+
+    A room can be structurally repaired after decoding.  Reporting only the
+    repaired result would make an ablation appear to measure neural capability
+    when it actually measures the combined neural-plus-symbolic system.  Keep
+    raw and constrained scores separate, and make missing heads/conditions
+    explicit through coverage fields rather than treating them as failures.
+    """
+    metric_keys = (
+        "puzzle_stage_semantics_raw_joint_confidence",
+        "puzzle_stage_semantics_constrained_joint_confidence",
+        "puzzle_stage_semantics_constraint_confidence_delta",
+        "puzzle_stage_semantics_raw_condition_available",
+        "puzzle_stage_semantics_raw_head_loaded",
+        "puzzle_stage_semantics_constrained_condition_available",
+        "puzzle_stage_semantics_constrained_head_loaded",
+    )
+    output: Dict[str, float] = {
+        "puzzle_stage_semantics_rooms_total": float(len(room_metric_dicts)),
+        "puzzle_stage_semantics_rooms_scored": 0.0,
+        "puzzle_stage_semantics_score_coverage": 0.0,
+    }
+    scored = [
+        metrics
+        for metrics in room_metric_dicts
+        if "puzzle_stage_semantics_raw_joint_confidence" in metrics
+    ]
+    output["puzzle_stage_semantics_rooms_scored"] = float(len(scored))
+    if room_metric_dicts:
+        output["puzzle_stage_semantics_score_coverage"] = float(
+            len(scored) / len(room_metric_dicts)
+        )
+
+    for key in metric_keys:
+        values: List[float] = []
+        for metrics in room_metric_dicts:
+            if key not in metrics:
+                continue
+            try:
+                value = float(metrics[key])
+            except (TypeError, ValueError):
+                continue
+            if np.isfinite(value):
+                values.append(value)
+        if values:
+            output[f"avg_{key}"] = float(np.mean(values))
+    return output
+
+
 def _build_latent_edit_mask(
     pipeline,
     room_mask: np.ndarray,
@@ -4132,6 +4186,7 @@ def _compute_room_condition(
     graph_context: Dict[str, Any],
     boundary_constraints: Optional[torch.Tensor],
     position: Optional[torch.Tensor],
+    room_generator_mode: Optional[str] = None,
 ) -> torch.Tensor:
     """Build Block-III conditioning tensor for a room."""
     if boundary_constraints is None:
@@ -4206,9 +4261,12 @@ def _compute_room_condition(
             pipeline._bump_diagnostic("graph_node_cross_attention_fallback")
             logger.debug("Falling back to single conditioning vector: %s", e)
 
+    active_generator_mode = str(
+        room_generator_mode or getattr(pipeline, "room_generator_mode", "latent_diffusion")
+    ).strip().lower()
     puzzle_structure_condition_enabled = (
         pipeline.masked_room_puzzle_structure_condition_enabled
-        if pipeline.room_generator_mode == "discrete_masked"
+        if active_generator_mode == "discrete_masked"
         else pipeline.diffusion_puzzle_structure_condition_enabled
     )
     if puzzle_structure_condition_enabled and isinstance(condition, torch.Tensor):
@@ -4230,6 +4288,43 @@ def _compute_room_condition(
                     condition,
                     puzzle_structure_enabled=bool(graph_context.get("puzzle_room_structure_enabled", True)),
                     graph_conditioning_mode="pooled",
+                )
+
+    puzzle_stage_condition_enabled = (
+        bool(getattr(pipeline, "masked_room_puzzle_stage_conditioning_enabled", False))
+        if active_generator_mode == "discrete_masked"
+        else bool(getattr(pipeline, "diffusion_puzzle_stage_conditioning_enabled", False))
+    )
+    puzzle_stage_token_scale = (
+        float(getattr(pipeline, "masked_room_puzzle_stage_token_scale", 0.20))
+        if active_generator_mode == "discrete_masked"
+        else float(getattr(pipeline, "diffusion_puzzle_stage_token_scale", 0.20))
+    )
+    if puzzle_stage_condition_enabled and isinstance(condition, torch.Tensor):
+        # Training adds these tokens after structural controls. Preserve that
+        # exact order at inference so stage-conditioned checkpoints see the
+        # same conditioning distribution they optimized against.
+        if condition.dim() == 3 and int(condition.shape[0]) == 1:
+            condition = apply_puzzle_stage_control_to_conditioning(
+                condition.squeeze(0),
+                puzzle_stage_condition=graph_context.get("puzzle_stage_condition"),
+                graph_conditioning_mode="node_sequence",
+                scale=puzzle_stage_token_scale,
+            ).unsqueeze(0)
+        elif condition.dim() == 2:
+            if bool(pipeline.use_graph_node_cross_attention):
+                condition = apply_puzzle_stage_control_to_conditioning(
+                    condition,
+                    puzzle_stage_condition=graph_context.get("puzzle_stage_condition"),
+                    graph_conditioning_mode="node_sequence",
+                    scale=puzzle_stage_token_scale,
+                ).unsqueeze(0)
+            else:
+                condition = apply_puzzle_stage_control_to_conditioning(
+                    condition,
+                    puzzle_stage_condition=graph_context.get("puzzle_stage_condition"),
+                    graph_conditioning_mode="pooled",
+                    scale=puzzle_stage_token_scale,
                 )
 
     return condition

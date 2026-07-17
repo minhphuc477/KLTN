@@ -1,6 +1,6 @@
 # Training Commands In Execution Order
 
-Last verified against the live CLI parsers: 2026-07-13
+Last verified against the live CLI parsers: 2026-07-17
 
 This is the canonical PowerShell runbook for training the repository from a
 clean checkout. Run commands from the repository root. Commands under
@@ -27,6 +27,16 @@ diffusion checkpoint. It is kept fifth so `main.py train --stage all` and the
 explicit sequence have the same stage order.
 
 ## 2. Shell Setup
+
+Create or activate the Python environment first. The project dependency file
+contains the training stack; visualization dependencies are only required for
+the optional visual audits and GUI.
+
+```powershell
+python -m pip install -r requirements-hmolqd.txt
+# Optional:
+python -m pip install -r requirements-visual.txt
+```
 
 ```powershell
 Set-Location F:\KLTN
@@ -67,6 +77,7 @@ Optional two-batch smoke test of the complete stage wiring:
 ```powershell
 python main.py train `
   --config $Config `
+  --data-dir $Data `
   --stage all `
   --output-dir "outputs\smoke_full_stack_seed_$Seed" `
   --seed $Seed `
@@ -84,6 +95,7 @@ Smoke checkpoints are not evidence and must not be used for evaluation.
 ```powershell
 python main.py train `
   --config $Config `
+  --data-dir $Data `
   --stage vqvae `
   --output-dir $Run `
   --seed $Seed `
@@ -102,6 +114,7 @@ Expected artifact: `checkpoints\vqvae\vqvae_pretrained.pth`.
 ```powershell
 python main.py train `
   --config $Config `
+  --data-dir $Data `
   --stage diffusion `
   --output-dir $Run `
   --diffusion-vqvae-checkpoint $VqCheckpoint `
@@ -123,6 +136,7 @@ states. Expected artifact: `checkpoints\diffusion\best_model.pth`.
 ```powershell
 python main.py train `
   --config $Config `
+  --data-dir $Data `
   --stage fast_sampler `
   --output-dir $Run `
   --fast-sampler-base-diffusion-checkpoint $DiffusionCheckpoint `
@@ -142,6 +156,7 @@ Expected artifact: `checkpoints\fast_sampler\fast_sampler_best.pth`.
 ```powershell
 python main.py train `
   --config $Config `
+  --data-dir $Data `
   --stage masked_room `
   --output-dir $Run `
   --seed $Seed `
@@ -162,6 +177,7 @@ This is equivalent to Sections 4.1-4.4 and uses the same internal order:
 ```powershell
 python main.py train `
   --config $Config `
+  --data-dir $Data `
   --stage all `
   --output-dir $Run `
   --seed $Seed `
@@ -184,14 +200,14 @@ foreach ($Seed in 42, 43, 44) {
   $VqCheckpoint = Join-Path $Run "checkpoints\vqvae\vqvae_pretrained.pth"
   $DiffusionCheckpoint = Join-Path $Run "checkpoints\diffusion\best_model.pth"
 
-  python main.py train --config $Config --stage vqvae --output-dir $Run --seed $Seed --no-auto-resume --verbose
+  python main.py train --config $Config --data-dir $Data --stage vqvae --output-dir $Run --seed $Seed --no-auto-resume --verbose
   if (!(Test-Path $VqCheckpoint)) { throw "Missing $VqCheckpoint" }
 
-  python main.py train --config $Config --stage diffusion --output-dir $Run --diffusion-vqvae-checkpoint $VqCheckpoint --seed $Seed --no-auto-resume --verbose
+  python main.py train --config $Config --data-dir $Data --stage diffusion --output-dir $Run --diffusion-vqvae-checkpoint $VqCheckpoint --seed $Seed --no-auto-resume --verbose
   if (!(Test-Path $DiffusionCheckpoint)) { throw "Missing $DiffusionCheckpoint" }
 
-  python main.py train --config $Config --stage fast_sampler --output-dir $Run --fast-sampler-base-diffusion-checkpoint $DiffusionCheckpoint --seed $Seed --no-auto-resume --verbose
-  python main.py train --config $Config --stage masked_room --output-dir $Run --seed $Seed --no-auto-resume --verbose
+  python main.py train --config $Config --data-dir $Data --stage fast_sampler --output-dir $Run --fast-sampler-base-diffusion-checkpoint $DiffusionCheckpoint --seed $Seed --no-auto-resume --verbose
+  python main.py train --config $Config --data-dir $Data --stage masked_room --output-dir $Run --seed $Seed --no-auto-resume --verbose
 }
 ```
 
@@ -212,6 +228,7 @@ $PuzzleDiffusion = Join-Path $PuzzleRun "checkpoints\diffusion\best_model.pth"
 
 python main.py train `
   --config $Config `
+  --data-dir $Data `
   --stage diffusion `
   --output-dir $PuzzleRun `
   --diffusion-vqvae-checkpoint $VqCheckpoint `
@@ -228,6 +245,7 @@ python main.py train `
 
 python main.py train `
   --config $Config `
+  --data-dir $Data `
   --stage fast_sampler `
   --output-dir $PuzzleRun `
   --fast-sampler-base-diffusion-checkpoint $PuzzleDiffusion `
@@ -244,6 +262,7 @@ python main.py train `
 
 python main.py train `
   --config $Config `
+  --data-dir $Data `
   --stage masked_room `
   --output-dir $PuzzleRun `
   --masked-room-puzzle-stage-conditioning-enabled `
@@ -365,6 +384,7 @@ process.
 ```powershell
 python main.py train `
   --config $Config `
+  --data-dir $Data `
   --stage diffusion `
   --output-dir $Run `
   --diffusion-vqvae-checkpoint $VqCheckpoint `
@@ -380,7 +400,7 @@ On Windows, use the `gloo` backend if the installed PyTorch build does not
 support NCCL:
 
 ```powershell
-python main.py train --config $Config --stage diffusion --output-dir $Run --diffusion-vqvae-checkpoint $VqCheckpoint --distributed-enabled --distributed-backend gloo --nproc-per-node 2 --cuda-visible-devices "0,1" --seed $Seed --no-auto-resume --verbose
+python main.py train --config $Config --data-dir $Data --stage diffusion --output-dir $Run --diffusion-vqvae-checkpoint $VqCheckpoint --distributed-enabled --distributed-backend gloo --nproc-per-node 2 --cuda-visible-devices "0,1" --seed $Seed --no-auto-resume --verbose
 ```
 
 ## 11. Independent Publication Baselines
@@ -444,6 +464,12 @@ foreach ($Persona in "speedrunner", "explorer", "combatant", "cautious") {
 
 - Clean experiment: new output directory plus `--no-auto-resume`.
 - Interrupted experiment: same output directory plus `--auto-resume`.
+- `--resume` is only for a complete `.pth` training-state checkpoint containing
+  model, optimizer, scheduler, epoch, global step, and AMP scaler state when AMP
+  is active. It fails closed for inference-only checkpoints.
+- `--warm-start` is the explicit diffusion-only weights transfer path. It accepts
+  compatible `.pth` or `.safetensors` weights and resets epoch, global step,
+  optimizer, scheduler, scaler, and historical best metrics.
 - Never resume one ablation from another architecture's checkpoint.
 - Preserve `resolved_config.yaml`, `run_metadata.json`, logs, and the selected
   best checkpoint together.
@@ -453,7 +479,20 @@ foreach ($Persona in "speedrunner", "explorer", "combatant", "cautious") {
 Example resume:
 
 ```powershell
-python main.py train --config $Config --stage diffusion --output-dir $Run --diffusion-vqvae-checkpoint $VqCheckpoint --seed $Seed --auto-resume --verbose
+python main.py train --config $Config --data-dir $Data --stage diffusion --output-dir $Run --diffusion-vqvae-checkpoint $VqCheckpoint --seed $Seed --auto-resume --verbose
+```
+
+Explicit diffusion warm start from an inference artifact:
+
+```powershell
+python -m src.train_diffusion `
+  --config $Config `
+  --data-dir $Data `
+  --vqvae-checkpoint $VqCheckpoint `
+  --checkpoint-dir (Join-Path $Run "checkpoints\diffusion") `
+  --warm-start "outputs\source_run\checkpoints\diffusion\best_model.safetensors" `
+  --no-auto-resume `
+  --seed $Seed
 ```
 
 ## 14. What To Run First

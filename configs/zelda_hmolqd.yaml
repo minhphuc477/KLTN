@@ -92,6 +92,7 @@ vqvae:
 diffusion:
   checkpoint_dir: ""  # type=str, default="", valid=path; empty=>output_dir/checkpoints/diffusion
   vqvae_checkpoint: null  # type=str|null, default=null, valid=checkpoint path or null
+  warm_start_checkpoint: null  # type=str|null, default=null; weights only, resets epoch/optimizer/scheduler/scaler and is mutually exclusive with runtime.resume
   epochs: 100  # type=int, default=100, valid>=1
   learning_rate: 0.0001  # type=float, default=1e-4, valid>0
   optimizer_weight_decay: 0.00001  # type=float, default=1e-5, valid>=0
@@ -281,7 +282,7 @@ generation:
   puzzle_stage_trace_decay: 0.75  # type=float, default=0.75, valid=0.05..1; decay applied when rasterizing ordered puzzle stages into runtime topology priors
   puzzle_stage_semantics_validation_mode: "off"  # type=str, default=off, valid={off,report,reject}; quoted because YAML 1.1 otherwise parses off as boolean false
   puzzle_stage_semantics_min_confidence: null  # type=float|null, default=null, valid=0..1; calibrated threshold required explicitly by reject mode
-  end_to_end_validation_mode: reject  # type=str, default=report, valid={off,report,reject}; canonical generation fails closed unless representation, graph, spatial-edge, and tile-oracle stages all pass
+  end_to_end_validation_mode: reject  # type=str, default=reject, valid={off,report,reject}; canonical generation fails closed unless representation, graph, spatial-edge, and tile-oracle stages all pass
   verify_solver_consistency: false  # type=bool, default=false; expensive A* versus full-state Dijkstra agreement ablation, enabled only in matched solver-consistency runs
   topology_betti_metrics_enabled: true  # type=bool, default=false; publication ablation reporting for raw-neural versus repaired H0/H1 curves, never used as a hard solvability oracle
   deterministic_graph_marker_overlay_enabled: true  # type=bool, default=true, valid={true,false}; keep enabled for the production hybrid path, disable only for purely-neural semantic ablations

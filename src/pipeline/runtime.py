@@ -135,9 +135,13 @@ def _initialize_pipeline_from_flat_kwargs(
     default_validator_plan_max_states: int = DEFAULT_VALIDATOR_PLAN_MAX_STATES,
     default_puzzle_stage_topology_enabled: bool = False,
     default_puzzle_stage_trace_decay: float = DEFAULT_PUZZLE_STAGE_TRACE_DECAY,
+    diffusion_puzzle_stage_conditioning_enabled: bool = False,
+    diffusion_puzzle_stage_token_scale: float = 0.20,
+    masked_room_puzzle_stage_conditioning_enabled: bool = False,
+    masked_room_puzzle_stage_token_scale: float = 0.20,
     default_puzzle_stage_semantics_validation_mode: str = "off",
     default_puzzle_stage_semantics_min_confidence: Optional[float] = None,
-    default_end_to_end_validation_mode: str = "report",
+    default_end_to_end_validation_mode: str = "reject",
     default_verify_solver_consistency: bool = False,
     default_topology_betti_metrics_enabled: bool = False,
     default_deterministic_graph_marker_overlay_enabled: bool = True,
@@ -300,6 +304,22 @@ def _initialize_pipeline_from_flat_kwargs(
     pipeline.default_puzzle_stage_trace_decay = float(
         max(0.05, min(1.0, float(default_puzzle_stage_trace_decay)))
     )
+    # These flags describe the checkpoint contract, not a runtime intervention.
+    # Applying stage tokens to a checkpoint that was trained without them is a
+    # distribution shift, while omitting them from a stage-conditioned model
+    # drops information the model learned to rely on.
+    pipeline.diffusion_puzzle_stage_conditioning_enabled = bool(
+        diffusion_puzzle_stage_conditioning_enabled
+    )
+    pipeline.diffusion_puzzle_stage_token_scale = float(
+        max(0.0, float(diffusion_puzzle_stage_token_scale))
+    )
+    pipeline.masked_room_puzzle_stage_conditioning_enabled = bool(
+        masked_room_puzzle_stage_conditioning_enabled
+    )
+    pipeline.masked_room_puzzle_stage_token_scale = float(
+        max(0.0, float(masked_room_puzzle_stage_token_scale))
+    )
     semantics_validation_mode = str(
         default_puzzle_stage_semantics_validation_mode or "off"
     ).strip().lower()
@@ -323,8 +343,10 @@ def _initialize_pipeline_from_flat_kwargs(
     )
     pipeline.puzzle_stage_semantics_head = None
     pipeline.puzzle_stage_semantics_head_source = None
+    pipeline.diffusion_puzzle_stage_semantics_head = None
+    pipeline.masked_room_puzzle_stage_semantics_head = None
     end_to_end_validation_mode = str(
-        default_end_to_end_validation_mode or "report"
+        default_end_to_end_validation_mode or "reject"
     ).strip().lower()
     if end_to_end_validation_mode not in {"off", "report", "reject"}:
         raise ValueError(

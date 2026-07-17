@@ -632,6 +632,56 @@ class TestSymbolicRefiner:
 
         assert success_a == success_b
         assert np.array_equal(repaired_a, repaired_b)
+
+    def test_local_wfc_cannot_invent_graph_owned_topology_tiles(self):
+        from src.core.symbolic_refiner import FailurePoint, SymbolicRefiner, TileType
+
+        class _Analyzer:
+            def __init__(self):
+                self.calls = 0
+
+            def analyze_grid(self, *_args, **_kwargs):
+                self.calls += 1
+                return (
+                    [FailurePoint((8, 5), "disconnected", None, [])]
+                    if self.calls == 1
+                    else []
+                )
+
+        class _EntropyReset:
+            def create_mask(self, shape, _failures):
+                return np.ones(shape, dtype=bool)
+
+            def expand_mask(self, mask, iterations=1):
+                _ = iterations
+                return mask
+
+        class _TopologyInventingWFC:
+            def initialize_state(self, **kwargs):
+                return kwargs
+
+            def collapse(self, state):
+                invented = np.full_like(state["initial_grid"], TileType.START.value)
+                return invented, True
+
+        refiner = SymbolicRefiner(max_repair_attempts=2)
+        refiner.path_analyzer = _Analyzer()
+        refiner.entropy_reset = _EntropyReset()
+        refiner.wfc = _TopologyInventingWFC()
+        refiner.refresh_learned_rules = lambda: None
+
+        grid = np.full((16, 11), TileType.FLOOR.value)
+        grid[8, 1] = TileType.START.value
+        grid[8, 9] = TileType.TRIFORCE.value
+        repaired, success, _ = refiner.repair_room_with_feedback(
+            grid,
+            start=(8, 1),
+            goal=(8, 9),
+        )
+
+        assert success is True
+        assert np.count_nonzero(repaired == TileType.START.value) == 1
+        assert np.count_nonzero(repaired == TileType.TRIFORCE.value) == 1
     
     def test_analyze_failures(self):
         """Test failure analysis."""

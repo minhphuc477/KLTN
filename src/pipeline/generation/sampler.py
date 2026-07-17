@@ -54,6 +54,7 @@ def _score_puzzle_stage_semantics(
     graph_data: Mapping[str, Any],
     *,
     room_id: Any,
+    generator_source: Optional[str] = None,
     stage: str = "raw",
     enforce_reject: bool = True,
 ) -> Dict[str, float]:
@@ -79,12 +80,19 @@ def _score_puzzle_stage_semantics(
 
     condition = graph_data.get("puzzle_stage_condition") if isinstance(graph_data, Mapping) else None
     condition_available = float(isinstance(condition, Mapping) and bool(condition))
-    head = getattr(pipeline, "puzzle_stage_semantics_head", None)
+    source = str(generator_source or getattr(pipeline, "room_generator_mode", "latent_diffusion")).strip().lower()
+    source = "masked_room" if source == "discrete_masked" else "diffusion"
+    head = getattr(
+        pipeline,
+        f"{source}_puzzle_stage_semantics_head",
+        getattr(pipeline, "puzzle_stage_semantics_head", None),
+    )
     metrics = {
         "puzzle_stage_semantics_condition_available": condition_available,
         "puzzle_stage_semantics_head_loaded": float(head is not None),
         f"{metric_prefix}_condition_available": condition_available,
         f"{metric_prefix}_head_loaded": float(head is not None),
+        f"{metric_prefix}_head_source_{source}": float(head is not None),
     }
     if condition_available == 0.0:
         return metrics
@@ -882,6 +890,7 @@ def generate_room(
             graph_context=graph_context,
             boundary_constraints=boundary_constraints,
             position=position,
+            room_generator_mode=effective_room_generator_mode,
         )
         _record_stage_time(stage_times, "condition_time_sec", condition_started_at)
 
@@ -1100,6 +1109,7 @@ def generate_room(
         logits,
         graph_data,
         room_id=room_id,
+        generator_source=effective_room_generator_mode,
         stage="raw",
         enforce_reject=True,
     )
@@ -1176,6 +1186,7 @@ def generate_room(
         logits,
         graph_data,
         room_id=room_id,
+        generator_source=effective_room_generator_mode,
         stage="constrained",
         enforce_reject=False,
     )
@@ -1938,7 +1949,10 @@ def generate_room(
             apply_repair=apply_repair,
             start_goal_coords=start_goal_coords,
             seed=seed,
-            precomputed_condition=condition.detach().clone(),
+            # The teacher can have a different stage-conditioning contract from
+            # the rejected MaskGIT candidate. Recompute its condition instead
+            # of feeding it tokens from the other generator family.
+            precomputed_condition=None,
             allow_teacher_fallback=False,
             room_generator_override="latent_diffusion",
         )

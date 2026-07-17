@@ -200,6 +200,7 @@ class DiffusionTrainingConfig:
         keep_last: int = 2,
         auto_resume: bool = True,
         resume_checkpoint: Optional[str] = None,
+        warm_start_checkpoint: Optional[str] = None,
         checkpoint_storage_budget_gb: Optional[float] = None,
         checkpoint_storage_warning_fraction: float = 0.8,
         checkpoint_storage_cleanup_enabled: bool = True,
@@ -528,6 +529,13 @@ class DiffusionTrainingConfig:
         self.keep_last = int(max(0, keep_last))
         self.auto_resume = bool(auto_resume)
         self.resume_checkpoint = None if resume_checkpoint is None else str(resume_checkpoint)
+        self.warm_start_checkpoint = (
+            None if warm_start_checkpoint is None else str(warm_start_checkpoint)
+        )
+        if self.resume_checkpoint and self.warm_start_checkpoint:
+            raise ValueError(
+                "resume_checkpoint and warm_start_checkpoint are mutually exclusive."
+            )
         self.checkpoint_storage_budget_gb = (
             None if checkpoint_storage_budget_gb is None else float(max(0.0, checkpoint_storage_budget_gb))
         )
@@ -743,6 +751,7 @@ def diffusion_training_kwargs_from_resolved_config(
         "keep_last": stage["keep_last"],
         "auto_resume": runtime["auto_resume"],
         "resume_checkpoint": runtime["resume"],
+        "warm_start_checkpoint": stage.get("warm_start_checkpoint"),
         "checkpoint_storage_budget_gb": runtime["checkpoint_storage_budget_gb"],
         "checkpoint_storage_warning_fraction": runtime["checkpoint_storage_warning_fraction"],
         "checkpoint_storage_cleanup_enabled": runtime["checkpoint_storage_cleanup_enabled"],
@@ -886,6 +895,7 @@ def _legacy_diffusion_overrides_from_args(args: argparse.Namespace) -> Dict[str,
     _set("keep_last", getattr(args, "keep_last", None))
     _set("auto_resume", getattr(args, "auto_resume", None))
     _set("resume_checkpoint", getattr(args, "resume", None))
+    _set("warm_start_checkpoint", getattr(args, "warm_start", None))
     _set("checkpoint_storage_budget_gb", getattr(args, "checkpoint_storage_budget_gb", None))
     _set("checkpoint_storage_warning_fraction", getattr(args, "checkpoint_storage_warning_fraction", None))
     _set("checkpoint_storage_cleanup_enabled", getattr(args, "checkpoint_storage_cleanup_enabled", None))
@@ -910,5 +920,4 @@ def build_diffusion_training_config_from_args(args: argparse.Namespace) -> Diffu
             setattr(args, "verbose", bool(resolved["runtime"]["verbose"]))
     legacy_overrides = _legacy_diffusion_overrides_from_args(args)
     return DiffusionTrainingConfig(**{**base_kwargs, **legacy_overrides})
-
 

@@ -441,6 +441,28 @@ def test_local_stream_pools_boundary_facing_neighbor_edges():
     assert encoder._pool_neighbor_latent(latent, "W").item() == torch.tensor([3, 7, 11], dtype=torch.float32).mean().item()
 
 
+def test_local_stream_broadcasts_single_neighbor_without_cross_batch_shape_failure():
+    import pytest
+    import torch
+    from src.core.condition_encoder import LocalStreamEncoder
+
+    encoder = LocalStreamEncoder(latent_dim=2, hidden_dim=4, output_dim=4)
+    shared = torch.tensor([[1.0, 2.0]])
+    output = encoder(
+        neighbor_latents={"N": shared, "S": None, "E": None, "W": None},
+        boundary_constraints=torch.zeros(1, 8),
+        position=torch.zeros(3, 2),
+    )
+
+    assert output.shape == (3, 4)
+    with pytest.raises(ValueError, match="does not match position batch"):
+        encoder(
+            neighbor_latents={"N": torch.zeros(2, 2), "S": None, "E": None, "W": None},
+            boundary_constraints=torch.zeros(3, 8),
+            position=torch.zeros(3, 2),
+        )
+
+
 def test_fallback_gnn_uses_sparse_edge_index_and_handles_isolated_nodes():
     import torch
     from src.core.condition_encoder import FallbackGNN
@@ -927,6 +949,28 @@ def test_graph_warp_consumes_each_small_key_once_per_edge():
     assert after_first.keys == 0
     assert len(after_first.opened_graph_edges) == 1
     assert blocked is False
+
+
+def test_opened_graph_warp_remains_discoverable_without_another_key():
+    grid = np.full((16, 33), int(SEMANTIC_PALETTE["FLOOR"]), dtype=np.int64)
+    graph = nx.DiGraph()
+    graph.add_edge(0, 1, edge_type="key_locked")
+    room_positions = {(0, 0): (0, 0), (0, 2): (0, 22)}
+    room_to_node = {(0, 0): 0, (0, 2): 1}
+    env = ZeldaLogicEnv(
+        grid,
+        graph=graph,
+        room_positions=room_positions,
+        room_to_node=room_to_node,
+        node_to_room={0: (0, 0), 1: (0, 2)},
+    )
+    solver = StateSpaceAStar(env, priority_options={"rules_profile": "extended"})
+    state = GameState(position=(1, 1), keys=0, opened_graph_edges={(0, 1)})
+
+    destinations = solver.get_graph_warp_destinations(state.position, state)
+
+    assert destinations
+    assert destinations[0][2] == "key_locked"
 
 
 def test_solver_comparison_uses_canonical_bomb_and_item_transitions():

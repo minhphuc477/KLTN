@@ -171,6 +171,22 @@ def generation_runtime_kwargs_from_resolved_config(config: Dict[str, Any]) -> Di
             "puzzle_stage_trace_decay",
             DEFAULT_PUZZLE_STAGE_TRACE_DECAY,
         ),
+        "diffusion_puzzle_stage_conditioning_enabled": config["diffusion"].get(
+            "puzzle_stage_conditioning_enabled",
+            False,
+        ),
+        "diffusion_puzzle_stage_token_scale": config["diffusion"].get(
+            "puzzle_stage_token_scale",
+            0.20,
+        ),
+        "masked_room_puzzle_stage_conditioning_enabled": config["masked_room"].get(
+            "puzzle_stage_conditioning_enabled",
+            False,
+        ),
+        "masked_room_puzzle_stage_token_scale": config["masked_room"].get(
+            "puzzle_stage_token_scale",
+            0.20,
+        ),
         "default_puzzle_stage_semantics_validation_mode": stage.get(
             "puzzle_stage_semantics_validation_mode",
             "off",
@@ -180,7 +196,7 @@ def generation_runtime_kwargs_from_resolved_config(config: Dict[str, Any]) -> Di
         ),
         "default_end_to_end_validation_mode": stage.get(
             "end_to_end_validation_mode",
-            "report",
+            "reject",
         ),
         "default_verify_solver_consistency": stage.get(
             "verify_solver_consistency",

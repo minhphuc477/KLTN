@@ -1073,7 +1073,7 @@ class MaskedRoomTrainer:
             node_features = torch.tensor(node_features, dtype=torch.float32)
         if not isinstance(edge_index, torch.Tensor):
             edge_index = torch.tensor(edge_index, dtype=torch.long)
-            node_features = node_features.to(self.device, dtype=torch.float32)
+        node_features = node_features.to(self.device, dtype=torch.float32)
         edge_index = edge_index.to(self.device, dtype=torch.long)
 
         num_nodes = int(node_features.shape[0])
@@ -1572,7 +1572,7 @@ class MaskedRoomTrainer:
             metrics["skipped_nonfinite_batch"] = 1.0
             return metrics
         if train:
-            self.optimizer.zero_grad()
+            self.optimizer.zero_grad(set_to_none=True)
             total_loss.backward()
             trainable_params = [
                 param
@@ -1995,8 +1995,8 @@ def train_masked_room(config: MaskedRoomTrainingConfig) -> MaskedRoomTrainer:
             epoch + 1,
             config.epochs,
             epoch_metrics["loss"],
-            epoch_metrics["val_loss"],
-            epoch_metrics["val_topology_focus_loss"],
+            float(epoch_metrics.get("val_loss", float("nan"))),
+            float(epoch_metrics.get("val_topology_focus_loss", float("nan"))),
         )
         if (epoch + 1) % config.save_every == 0:
             trainer.save_checkpoint(
@@ -2009,14 +2009,18 @@ def train_masked_room(config: MaskedRoomTrainingConfig) -> MaskedRoomTrainer:
                 pattern="masked_room_resume_epoch_*.pth",
                 keep_last=int(getattr(config, "keep_last", 2)),
             )
-        if best_metric_name == "val_topology_focus_loss":
-            current_metric_value = float(epoch_metrics["val_topology_focus_loss"])
-        elif best_metric_name == "val_puzzle_stage_semantic_loss":
-            current_metric_value = float(epoch_metrics["val_puzzle_stage_semantic_loss"])
-        elif best_metric_name == "val_loss":
-            current_metric_value = float(epoch_metrics["val_loss"])
-        else:
-            current_metric_value = float(epoch_metrics["loss"])
+        metric_key = {
+            "val_topology_focus_loss": "val_topology_focus_loss",
+            "val_puzzle_stage_semantic_loss": "val_puzzle_stage_semantic_loss",
+            "val_loss": "val_loss",
+            "train_loss": "loss",
+        }.get(best_metric_name, "loss")
+        if metric_key not in epoch_metrics:
+            raise RuntimeError(
+                f"Configured masked-room best metric {best_metric_name!r} was not produced "
+                f"for epoch {epoch + 1}; available metrics={sorted(epoch_metrics)}"
+            )
+        current_metric_value = float(epoch_metrics[metric_key])
         if current_metric_value < best_metric_value:
             best_metric_value = current_metric_value
             trainer.save_checkpoint(str(checkpoint_dir / "masked_room_best.pth"), epoch_metrics, include_optimizer=False)

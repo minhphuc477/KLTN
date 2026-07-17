@@ -5,12 +5,108 @@ Provides explicit retry, timeout, validation, and failure reporting for pipeline
 
 import time
 import logging
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+import multiprocessing as mp
+import traceback
 from enum import Enum
 from typing import Dict, Any, Callable, Tuple, Optional, List
 from dataclasses import dataclass, field
 
+import cloudpickle
+
 logger = logging.getLogger(__name__)
+
+
+class BlockExecutionTimeout(TimeoutError):
+    """Raised after a timed block process has been terminated and joined."""
+
+
+class BlockSerializationError(RuntimeError):
+    """A timed block could not be isolated because its inputs are not serializable."""
+
+    retryable = False
+
+
+class RemoteBlockExecutionError(RuntimeError):
+    """Preserve retryability and diagnostics for an exception raised in a worker."""
+
+    def __init__(self, exception_type: str, message: str, remote_traceback: str, retryable: bool):
+        super().__init__(f"{exception_type}: {message}\nRemote traceback:\n{remote_traceback}")
+        self.retryable = bool(retryable)
+
+
+def _isolated_block_worker(send_connection: Any, serialized_job: bytes) -> None:
+    """Execute one block in a disposable process and return a serialized result."""
+    try:
+        executor, state = cloudpickle.loads(serialized_job)
+        output = executor(state)
+        message = ("ok", output)
+    except BaseException as exc:  # The child must always report before exiting.
+        message = (
+            "error",
+            type(exc).__name__,
+            str(exc),
+            traceback.format_exc(),
+            bool(getattr(exc, "retryable", True)),
+        )
+    try:
+        send_connection.send_bytes(cloudpickle.dumps(message))
+    finally:
+        send_connection.close()
+
+
+def _execute_with_process_timeout(
+    executor: Callable[[Dict], Any],
+    state: Dict[str, Any],
+    timeout_seconds: float,
+) -> Any:
+    """Run a block in a killable process so timeout cannot leak mutations."""
+    try:
+        serialized_job = cloudpickle.dumps((executor, state))
+    except Exception as exc:
+        raise BlockSerializationError(
+            "Timed pipeline blocks require a cloudpickle-serializable executor and state"
+        ) from exc
+
+    context = mp.get_context("spawn")
+    recv_connection, send_connection = context.Pipe(duplex=False)
+    process = context.Process(
+        target=_isolated_block_worker,
+        args=(send_connection, serialized_job),
+        daemon=True,
+    )
+    try:
+        process.start()
+        send_connection.close()
+        if not recv_connection.poll(float(timeout_seconds)):
+            process.terminate()
+            process.join()
+            raise BlockExecutionTimeout(
+                f"isolated block exceeded timeout_per_block={timeout_seconds}s"
+            )
+
+        try:
+            response = cloudpickle.loads(recv_connection.recv_bytes())
+        except EOFError as exc:
+            raise RuntimeError(
+                f"Timed block worker exited without a result (exit_code={process.exitcode})"
+            ) from exc
+        process.join()
+    finally:
+        recv_connection.close()
+        send_connection.close()
+        if process.is_alive():
+            process.terminate()
+            process.join()
+
+    if response[0] == "ok":
+        return response[1]
+    _, exception_type, message, remote_traceback, retryable = response
+    raise RemoteBlockExecutionError(
+        exception_type,
+        message,
+        remote_traceback,
+        retryable,
+    )
 
 
 class BlockStatus(Enum):
@@ -99,19 +195,11 @@ class PipelineBlock:
             try:
                 # Execute the block
                 if self.config.timeout_per_block is not None and self.config.timeout_per_block > 0:
-                    pool = ThreadPoolExecutor(max_workers=1)
-                    try:
-                        future = pool.submit(self.executor, state)
-                        output = future.result(timeout=self.config.timeout_per_block)
-                    except FutureTimeoutError:
-                        future.cancel()
-                        pool.shutdown(wait=False, cancel_futures=True)
-                        raise
-                    except Exception:
-                        pool.shutdown(wait=True, cancel_futures=True)
-                        raise
-                    else:
-                        pool.shutdown(wait=True)
+                    output = _execute_with_process_timeout(
+                        self.executor,
+                        state,
+                        self.config.timeout_per_block,
+                    )
                 else:
                     output = self.executor(state)
                 execution_time = time.time() - start_time
@@ -132,12 +220,12 @@ class PipelineBlock:
                 else:
                     raise ValueError(f"Validation failed for {self.name}")
             
-            except FutureTimeoutError:
+            except BlockExecutionTimeout:
                 execution_time = time.time() - start_time
                 error_msg = (
                     f"TimeoutError: {self.name} exceeded timeout_per_block="
-                    f"{self.config.timeout_per_block}s. The thread backend cannot "
-                    "safely cancel running Python work, so this attempt will not be retried."
+                    f"{self.config.timeout_per_block}s. The isolated worker was terminated "
+                    "before returning, so it cannot mutate pipeline state after failure."
                 )
                 attempt_errors.append(error_msg)
 
@@ -659,12 +747,15 @@ def create_example_robust_pipeline():
         
         # Build a deterministic pseudo-layout with controlled floor ratio.
         height, width = 64, 64
-        grid = np.ones((height, width), dtype=np.int64)  # 1 = wall-like
-        interior = np.zeros((height - 2, width - 2), dtype=np.int64)  # 0 = floor-like
+        from src.core import SEMANTIC_PALETTE
+        wall_id = int(SEMANTIC_PALETTE['WALL'])
+        floor_id = int(SEMANTIC_PALETTE['FLOOR'])
+        grid = np.full((height, width), wall_id, dtype=np.int64)
+        interior = np.full((height - 2, width - 2), floor_id, dtype=np.int64)
         
         # Add structured obstacles so floor coverage is realistically constrained.
         obstacle_mask = rng.random(interior.shape) < 0.35
-        interior[obstacle_mask] = 1
+        interior[obstacle_mask] = wall_id
         grid[1:-1, 1:-1] = interior
         
         return {'visual_grid': grid}

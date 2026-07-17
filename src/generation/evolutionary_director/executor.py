@@ -73,7 +73,6 @@ class GraphGrammarExecutor:
                     "MergeShortcut",
                     "AddBossGauntlet",
                     "CreateHub",
-                    "AddSecret",
                     "PruneGraph",
                     "AddFungibleLock",
                     "FormBigRoom",

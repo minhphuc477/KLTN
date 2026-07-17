@@ -396,16 +396,22 @@ class FlowAnalyzer:
         else:
             combat_score = 0.0
 
-        shortest_path_tiles = room_content.get("path_length", 20)
+        shortest_path_tiles = room_content.get("path_length")
         room_width = room_content.get("room_width", 11)
         room_height = room_content.get("room_height", 7)
 
         euclidean_distance = np.sqrt(room_width**2 + room_height**2) * 0.5
         euclidean_distance = max(euclidean_distance, 1.0)
 
-        nav_complexity = shortest_path_tiles / euclidean_distance
-        nav_complexity = min((nav_complexity - 1.0) / 2.0, 1.0)
-        nav_complexity = max(nav_complexity, 0.0)
+        if shortest_path_tiles is None:
+            # A room-local route length cannot be inferred from mission-graph
+            # depth. Missing geometry evidence contributes a neutral value
+            # instead of a fabricated traversal.
+            nav_complexity = 0.0
+        else:
+            nav_complexity = float(shortest_path_tiles) / euclidean_distance
+            nav_complexity = min((nav_complexity - 1.0) / 2.0, 1.0)
+            nav_complexity = max(nav_complexity, 0.0)
 
         health_drops = room_content.get("health_pickups", 1)
         expected_damage = enemy_count * 0.5

@@ -276,7 +276,8 @@ class InsertLockKeyRule(ProductionRule):
         
         rng = context.get('rng') or random
         graph.sanitize()
-        original_graph = copy.deepcopy(graph)
+        original_graph = graph
+        graph = copy.deepcopy(graph)
 
         # Prefer splitting edges on the current critical path (START -> GOAL).
         start = graph.get_start_node()
@@ -298,7 +299,7 @@ class InsertLockKeyRule(ProductionRule):
                 if e.edge_type == EdgeType.PATH
             ]
             if not fallback_path_edges:
-                return graph
+                return original_graph
             _key_edge_idx, key_edge = rng.choice(fallback_path_edges)
         
         # Create a side-branch KEY node. Putting keys directly on the critical

@@ -1,10 +1,15 @@
 # Full Training, Ablation, and Evaluation Command Book
 
-Last updated: 2026-05-24
+Last verified: 2026-07-13
 
 For the shortest dependency-ordered training sequence, use
 [`TRAINING_COMMANDS_IN_ORDER.md`](TRAINING_COMMANDS_IN_ORDER.md). This document
 remains the expanded ablation and evaluation reference.
+
+The ordered runbook is the authoritative source for the baseline training
+commands and checkpoint hand-offs. Keep this document for optional model
+variants, ablations, and evaluation commands; do not combine its alternatives
+with the baseline sequence in a single output directory.
 
 This is the practical runbook for rebuilding the repo from scratch and
 reproducing the main ablations. It is intentionally operational.

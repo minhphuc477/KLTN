@@ -47,3 +47,4 @@ pytest-timeout>=2.4.0
 # Optional: Accelerated Training
 # accelerate>=0.20.0
 # wandb>=0.15.0
+cloudpickle>=3.0

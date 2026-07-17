@@ -47,6 +47,14 @@ def _write_yaml(path: Path, payload: dict) -> None:
         yaml.safe_dump(payload, handle, sort_keys=False)
 
 
+def test_diffusion_resume_and_warm_start_are_mutually_exclusive():
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        DiffusionTrainingConfig(
+            resume_checkpoint="resume.pth",
+            warm_start_checkpoint="weights.safetensors",
+        )
+
+
 def test_yaml_and_cli_merge_order_prefers_cli(tmp_path: Path):
     cfg_path = tmp_path / "config.yaml"
     _write_yaml(
@@ -473,6 +481,7 @@ def test_stage_helpers_forward_checkpoint_retention_and_resume_defaults():
     assert diffusion_kwargs["keep_last"] == 2
     assert diffusion_kwargs["auto_resume"] is True
     assert diffusion_kwargs["resume_checkpoint"] is None
+    assert diffusion_kwargs["warm_start_checkpoint"] is None
     assert diffusion_kwargs["checkpoint_storage_budget_gb"] is None
     assert diffusion_kwargs["latent_cache_enabled"] is True
     assert diffusion_kwargs["latent_cache_max_items"] == 4096

@@ -23,6 +23,7 @@ from src.core.logic_net import (
     DifferentiablePathfinder,
     LogicNet,
     PerturbAndMAPGridPathfinder,
+    ReachabilityScorer,
     SemanticEdgeEncoder,
     SoftBellmanFordGridPathfinder,
     SparseDifferentiablePathfinder,
@@ -72,6 +73,42 @@ def test_sparse_graph_pathfinder_matches_dense_distances_and_weight_gradients():
         atol=1e-5,
         rtol=1e-5,
     )
+
+
+def test_segmented_grid_checkpoint_matches_uncheckpointed_values_and_gradients(monkeypatch):
+    torch.manual_seed(17)
+    checkpointed = DifferentiablePathfinder(
+        num_iterations=1,
+        temperature=0.2,
+        full_coverage=True,
+    )
+    reference = DifferentiablePathfinder(
+        num_iterations=1,
+        temperature=0.2,
+        full_coverage=True,
+    )
+    monkeypatch.setattr(reference, "_should_checkpoint_relaxation", lambda *args: False)
+    walkability_a = torch.sigmoid(torch.randn(1, 9, 9)).requires_grad_(True)
+    walkability_b = walkability_a.detach().clone().requires_grad_(True)
+    traversal = torch.full((1, 9, 9), 0.25)
+    source = torch.zeros((1, 9, 9))
+    source[:, 0, 0] = 1.0
+
+    output_a = checkpointed(walkability_a, traversal, source)
+    output_b = reference(walkability_b, traversal, source)
+    output_a.sum().backward()
+    output_b.sum().backward()
+
+    assert torch.allclose(output_a, output_b, atol=1e-6, rtol=1e-6)
+    assert torch.allclose(walkability_a.grad, walkability_b.grad, atol=1e-5, rtol=1e-5)
+
+
+def test_reachability_scorer_respects_final_sub_point_one_temperature():
+    distances = torch.tensor([10.0])
+    warm = ReachabilityScorer(max_distance=50.0, temperature=0.1)(distances)
+    sharp = ReachabilityScorer(max_distance=50.0, temperature=0.05)(distances)
+
+    assert float(sharp) < float(warm)
 
 
 def test_logicnet_exposes_sparse_graph_backend_as_opt_in_ablation():
@@ -145,6 +182,8 @@ def test_key_lock_pair_builder_requires_all_multi_lock_tokens():
 
 
 def test_logicnet_multi_lock_opens_only_after_all_provider_stages():
+    from src.core.logic_net import LogicGraphContractError
+
     logic_net = LogicNet(
         latent_dim=4,
         num_tile_classes=5,
@@ -179,17 +218,13 @@ def test_logicnet_multi_lock_opens_only_after_all_provider_stages():
 
     blocked_graph = dict(graph_data)
     blocked_graph["key_lock_pairs"] = []
-    _blocked_total, blocked_reach_loss, _blocked_lock_loss, blocked_info = (
+    with pytest.raises(LogicGraphContractError, match="key_lock_pairs"):
         logic_net._compute_global_graph_losses(
             blocked_graph,
             room_passability=torch.ones(5),
             device=torch.device("cpu"),
             dtype=torch.float32,
         )
-    )
-    assert float(blocked_info["remaining_locked_edge_count"]) == 1.0
-    assert float(reach_loss) < float(blocked_reach_loss)
-    assert torch.isfinite(lock_loss)
 
 
 def test_logicnet_dynamic_spatial_shape_preserves_input_resolution():

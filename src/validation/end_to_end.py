@@ -46,6 +46,7 @@ class EndToEndValidationReport:
     graph_progression: ValidationStageEvidence
     global_state_progression: ValidationStageEvidence
     spatial_realization: ValidationStageEvidence
+    graph_tile_semantics: ValidationStageEvidence
     tile_solvability: ValidationStageEvidence
     route_replay: ValidationStageEvidence
     solver_consistency: ValidationStageEvidence
@@ -59,6 +60,7 @@ class EndToEndValidationReport:
             self.graph_progression,
             self.global_state_progression,
             self.spatial_realization,
+            self.graph_tile_semantics,
             self.tile_solvability,
             self.route_replay,
             self.solver_consistency,
@@ -218,6 +220,14 @@ def build_end_to_end_validation_report(
         )
 
     tile = dict(tile_validation or {})
+    graph_tile_context_known = "graph_tile_context_applied" in tile
+    graph_tile_applicable = bool(graph_applicable and graph_tile_context_known)
+    graph_tile_passed: Optional[bool]
+    if not graph_tile_applicable:
+        graph_tile_passed = None
+    else:
+        graph_tile_passed = bool(tile.get("graph_tile_context_applied", False))
+
     tile_status = str(tile.get("termination_status", "not_run"))
     tile_exact = bool(tile.get("is_exact", False))
     if not tile_exact or tile_status in {"unknown", "budget_exhausted", "validator_error", "not_run"}:
@@ -270,6 +280,23 @@ def build_end_to_end_validation_report(
             passed=spatial_passed,
             status=("intact" if spatial_passed is True else "broken" if spatial_passed is False else "not_run"),
             details=spatial,
+        ),
+        graph_tile_semantics=ValidationStageEvidence(
+            name="graph_tile_semantics",
+            passed=graph_tile_passed,
+            status=(
+                "enforced"
+                if graph_tile_passed is True
+                else "missing_graph_room_mapping"
+                if graph_tile_passed is False
+                else "not_reported"
+            ),
+            applicable=graph_tile_applicable,
+            details={
+                "graph_tile_context_applied": tile.get(
+                    "graph_tile_context_applied"
+                ),
+            },
         ),
         tile_solvability=ValidationStageEvidence(
             name="tile_solvability",

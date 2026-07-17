@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional, Tuple, Set
+from typing import Any, Dict, List, Optional, Tuple, Set
 
 import networkx as nx
 import numpy as np
@@ -52,6 +52,13 @@ def stable_node_sort_key(node: Any) -> Tuple[int, Any]:
     if isinstance(normalized, str):
         return (1, normalized)
     return (2, str(normalized))
+
+
+def canonical_node_order(graph: nx.Graph) -> List[Any]:
+    """Return the checkpoint-compatible node order used by graph encoders."""
+    if graph is None:
+        return []
+    return sorted(graph.nodes(), key=stable_node_sort_key)
 
 
 def coerce_bool(value: Any) -> bool:

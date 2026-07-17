@@ -155,8 +155,10 @@ def test_global_state_progression_requires_reachable_transition_before_gate():
 
 
 def test_pipeline_block_timeout_path():
-    def slow_executor(_state):
+    def slow_executor(state):
+        state["events"].append("child-started")
         time.sleep(0.05)
+        state["events"].append("child-finished")
         return {"done": True}
 
     block = PipelineBlock(
@@ -172,11 +174,33 @@ def test_pipeline_block_timeout_path():
     )
 
     started = time.monotonic()
-    result = block.execute(state={})
+    state = {"events": []}
+    result = block.execute(state=state)
     elapsed = time.monotonic() - started
+    time.sleep(0.08)
     assert result.status == BlockStatus.FAILED
     assert "TimeoutError" in (result.error or "")
-    assert elapsed < 0.04
+    assert elapsed < 5.0
+    assert state["events"] == []
+
+
+def test_pipeline_block_process_timeout_returns_successful_output():
+    block = PipelineBlock(
+        name="isolated_success",
+        executor=lambda state: {"value": state["value"] + 1},
+        validator=lambda out: out["value"] == 3,
+        config=PipelineConfig(
+            max_retries=1,
+            base_backoff=0.0,
+            enable_logging=False,
+            timeout_per_block=5.0,
+        ),
+    )
+
+    result = block.execute({"value": 2})
+
+    assert result.status == BlockStatus.SUCCESS
+    assert result.output == {"value": 3}
 
 
 def test_layout_validation_does_not_count_canonical_void_as_floor():

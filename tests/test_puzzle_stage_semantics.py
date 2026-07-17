@@ -19,6 +19,7 @@ from src.pipeline.generation.sampler import (
     _score_puzzle_stage_semantics,
 )
 from src.pipeline.models.model_manager import _bind_puzzle_stage_semantics_head
+from src.pipeline.generation.room_processing import _aggregate_puzzle_stage_semantics_metrics
 
 
 def test_build_puzzle_stage_semantic_targets_encodes_ordered_sequence():
@@ -198,7 +199,30 @@ def test_sampler_semantics_gate_reports_and_rejects_pre_repair_logits():
         _score_puzzle_stage_semantics(pipeline, logits, graph_data, room_id=7)
 
 
-def test_checkpoint_binds_semantics_head_only_to_active_generator():
+def test_puzzle_stage_metric_aggregation_preserves_raw_and_constrained_provenance():
+    metrics = _aggregate_puzzle_stage_semantics_metrics(
+        None,
+        [
+            {
+                "puzzle_stage_semantics_raw_joint_confidence": 0.25,
+                "puzzle_stage_semantics_constrained_joint_confidence": 0.75,
+                "puzzle_stage_semantics_constraint_confidence_delta": 0.50,
+                "puzzle_stage_semantics_raw_condition_available": 1.0,
+                "puzzle_stage_semantics_raw_head_loaded": 1.0,
+            },
+            {},
+        ],
+    )
+
+    assert metrics["puzzle_stage_semantics_rooms_total"] == 2.0
+    assert metrics["puzzle_stage_semantics_rooms_scored"] == 1.0
+    assert metrics["puzzle_stage_semantics_score_coverage"] == pytest.approx(0.5)
+    assert metrics["avg_puzzle_stage_semantics_raw_joint_confidence"] == pytest.approx(0.25)
+    assert metrics["avg_puzzle_stage_semantics_constrained_joint_confidence"] == pytest.approx(0.75)
+    assert metrics["avg_puzzle_stage_semantics_constraint_confidence_delta"] == pytest.approx(0.50)
+
+
+def test_checkpoint_keeps_generator_specific_semantics_heads_for_teacher_fallbacks():
     trained_head = PuzzleStageSemanticsHead(
         num_tile_classes=44,
         hidden_dim=16,
@@ -228,6 +252,7 @@ def test_checkpoint_binds_semantics_head_only_to_active_generator():
         checkpoint_config,
         source="masked_room",
     )
+    assert pipeline.masked_room_puzzle_stage_semantics_head is not None
     assert pipeline.puzzle_stage_semantics_head is None
 
     _bind_puzzle_stage_semantics_head(
@@ -237,6 +262,8 @@ def test_checkpoint_binds_semantics_head_only_to_active_generator():
         source="diffusion",
     )
     assert pipeline.puzzle_stage_semantics_head_source == "diffusion"
+    assert pipeline.diffusion_puzzle_stage_semantics_head is pipeline.puzzle_stage_semantics_head
+    assert pipeline.masked_room_puzzle_stage_semantics_head is not pipeline.puzzle_stage_semantics_head
     assert pipeline.puzzle_stage_semantics_head.training is False
     assert all(not parameter.requires_grad for parameter in pipeline.puzzle_stage_semantics_head.parameters())
     for expected, loaded in zip(

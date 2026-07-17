@@ -192,6 +192,20 @@ class EntitySpawner:
             entities.extend(self._spawn_safe_room(
                 spawn_candidates, room_semantics, room_bounds
             ))
+
+        # Treasure is an independent room attribute. A boss/combat/puzzle room
+        # can retain its primary archetype while also carrying a chest reward.
+        if room_semantics.has_treasure and not any(
+            entity.entity_type == EntityType.CHEST for entity in entities
+        ):
+            chest = self._spawn_treasure_chest(
+                spawn_candidates,
+                entities,
+                room_semantics,
+                room_bounds,
+            )
+            if chest is not None:
+                entities.append(chest)
         
         # Step 3: Spawn key(s) using explicit hint when provided.
         key_spawn_count = int(max(0, room_semantics.key_count_hint))
@@ -361,22 +375,15 @@ class EntitySpawner:
     ) -> List[Entity]:
         """Spawn chest and optional guard."""
         entities = []
-        
-        # Chest (guaranteed)
-        chest_pos = self._active_rng.choice(candidates)
-        entities.append(Entity(
-            EntityType.CHEST,
-            chest_pos[0] + bounds[0],
-            chest_pos[1] + bounds[1],
-            semantics.node_id,
-            {
-                'loot': 'gold' if self._active_rng.random() < 0.7 else 'rare_item',
-                'amount': self._active_rng.randint(50, 150)
-            }
-        ))
-        
+
+        chest = self._spawn_treasure_chest(candidates, entities, semantics, bounds)
+        if chest is None:
+            return entities
+        entities.append(chest)
+
         # Weak guard (50% chance)
         if self._active_rng.random() < 0.5:
+            chest_pos = (chest.x - bounds[0], chest.y - bounds[1])
             remaining = [c for c in candidates if c != chest_pos]
             if remaining:
                 guard_pos = self._active_rng.choice(remaining)
@@ -387,8 +394,40 @@ class EntitySpawner:
                     semantics.node_id,
                     {'hp': 30, 'damage': 8}
                 ))
-        
+
         return entities
+
+    def _spawn_treasure_chest(
+        self,
+        candidates: List[Tuple[int, int]],
+        existing_entities: List[Entity],
+        semantics: RoomSemantics,
+        bounds: Tuple[int, int, int, int],
+    ) -> Optional[Entity]:
+        """Spawn one chest on an unoccupied candidate tile."""
+        occupied = {
+            (entity.x - bounds[0], entity.y - bounds[1])
+            for entity in existing_entities
+        }
+        available = [candidate for candidate in candidates if candidate not in occupied]
+        if not available:
+            logger.warning(
+                "Room %s has no unoccupied spawn point for requested treasure",
+                semantics.node_id,
+            )
+            return None
+
+        chest_pos = self._active_rng.choice(available)
+        return Entity(
+            EntityType.CHEST,
+            chest_pos[0] + bounds[0],
+            chest_pos[1] + bounds[1],
+            semantics.node_id,
+            {
+                'loot': 'gold' if self._active_rng.random() < 0.7 else 'rare_item',
+                'amount': self._active_rng.randint(50, 150)
+            }
+        )
     
     def _spawn_puzzle_room(
         self, candidates: List[Tuple[int, int]],

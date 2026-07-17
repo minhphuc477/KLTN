@@ -609,6 +609,7 @@ class EvolutionaryTopologyGenerator:
     def _finalize_graph_output(self, graph: MissionGraph, *, directed_output: bool) -> nx.Graph:
         """Convert phenotype graph to validated output graph."""
         pre_repair_graph = copy.deepcopy(graph)
+        required_repair_graph = copy.deepcopy(graph)
         pre_repair_eval: Dict[str, Any] = {}
         try:
             pre_repair_eval = dict(self.evaluator.evaluate_graph(pre_repair_graph))
@@ -623,6 +624,11 @@ class EvolutionaryTopologyGenerator:
             graph = constraint_grammar.ensure_anchor_nodes(graph)
             graph = constraint_grammar.fix_lock_key_ordering(graph)
             graph = constraint_grammar.repair_progression_constraints(graph)
+            graph = constraint_grammar.ensure_anchor_nodes(graph)
+            # Anchor, lock ordering, and progression repairs establish the
+            # export contract. Quality-oriented repairs below are optional and
+            # must never be allowed to erase this certified baseline.
+            required_repair_graph = copy.deepcopy(graph)
             graph = self._bounded_optional_repair(
                 graph,
                 self._repair_pedagogical_progression(
@@ -675,13 +681,13 @@ class EvolutionaryTopologyGenerator:
             repair_ledger = copy.deepcopy(
                 graph.generation_stats["final_repair_evaluation"]
             )
-            graph = copy.deepcopy(pre_repair_graph)
+            graph = copy.deepcopy(required_repair_graph)
             graph.ensure_generation_stats_defaults()
             graph.generation_stats["final_repair_evaluation"] = repair_ledger
-            graph.generation_stats["final_repair_rollback"] = 1
+            graph.generation_stats["final_optional_repair_rollback"] = 1
             logger.warning(
-                "Final descriptor repairs invalidated the selected phenotype; "
-                "rolling them back before exact export validation."
+                "Final optional descriptor repairs invalidated the selected phenotype; "
+                "retaining required topology/progression repairs before exact export validation."
             )
 
         best_networkx = mission_graph_to_networkx(graph, directed=True)

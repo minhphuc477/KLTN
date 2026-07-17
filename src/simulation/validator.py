@@ -3581,6 +3581,21 @@ class StateSpaceAStar:
         )
         if current_node is None or target_node is None:
             return False, state
+        return self._apply_graph_edge_transition_nodes(
+            state,
+            current_node,
+            target_node,
+            edge_type,
+        )
+
+    def _apply_graph_edge_transition_nodes(
+        self,
+        state: GameState,
+        current_node: Any,
+        target_node: Any,
+        edge_type: str,
+    ) -> Tuple[bool, GameState]:
+        """Authoritative graph-edge gate transition using graph node IDs."""
         edge_key = tuple(
             sorted(
                 (current_node, target_node),
@@ -3659,6 +3674,22 @@ class StateSpaceAStar:
             return False, state
         new_state.opened_graph_edges.add(edge_key)
         return True, new_state
+
+    def _can_traverse_graph_edge(
+        self,
+        current_node: Any,
+        target_node: Any,
+        edge_type: str,
+        state: GameState,
+    ) -> bool:
+        """Preview the authoritative transition without mutating ``state``."""
+        allowed, _ = self._apply_graph_edge_transition_nodes(
+            state,
+            current_node,
+            target_node,
+            edge_type,
+        )
+        return bool(allowed)
     
     def _get_stair_destinations(self, current_pos: Tuple[int, int]) -> List[Tuple[int, int]]:
         """
@@ -3688,7 +3719,7 @@ class StateSpaceAStar:
                 current_room = room_pos
                 break
         
-        if not current_room:
+        if current_room is None:
             self._stair_dest_cache[current_pos] = []
             return []
         
@@ -3719,7 +3750,7 @@ class StateSpaceAStar:
             
             # Check if neighbor has a physical room
             neighbor_room = node_to_room.get(neighbor_node)
-            if not neighbor_room or neighbor_room not in self.env.room_positions:
+            if neighbor_room is None or neighbor_room not in self.env.room_positions:
                 continue
             
             # Find stair tile in neighbor room
@@ -3791,7 +3822,7 @@ class StateSpaceAStar:
                 current_room = room_pos
                 break
         
-        if not current_room:
+        if current_room is None:
             return []
         
         current_node = self.env.room_to_node.get(current_room)
@@ -3825,7 +3856,12 @@ class StateSpaceAStar:
             edge_type = self._edge_type_from_data(edge_data)
             
             # Check if we can traverse this edge based on game state
-            can_traverse = self._can_traverse_edge(edge_type, state)
+            can_traverse = self._can_traverse_graph_edge(
+                current_node,
+                neighbor,
+                edge_type,
+                state,
+            )
             if not can_traverse:
                 continue
             
@@ -3848,16 +3884,16 @@ class StateSpaceAStar:
                     if exit_data.get('is_virtual', False):
                         # Another virtual node - continue BFS if not visited
                         # Check if we can traverse this virtual-to-virtual edge
-                        if self._can_traverse_edge(exit_type, state):
+                        if self._can_traverse_graph_edge(v_node, exit_node, exit_type, state):
                             virtual_visited.add(exit_node)
                             combined_type = self._combine_edge_types(accumulated_type, exit_type)
                             virtual_queue.append((exit_node, combined_type))
                     else:
                         # Physical node - add as destination if we can traverse
                         exit_room = self._node_to_room.get(exit_node)
-                        if exit_room and exit_room in self.env.room_positions:
+                        if exit_room is not None and exit_room in self.env.room_positions:
                             # Check if we can traverse this exit edge
-                            if self._can_traverse_edge(exit_type, state):
+                            if self._can_traverse_graph_edge(v_node, exit_node, exit_type, state):
                                 virtual_visited.add(exit_node)
                                 dest_pos = self._find_room_entry_point(exit_room)
                                 
@@ -3918,7 +3954,7 @@ class StateSpaceAStar:
                 current_room = room_pos
                 break
         
-        if not current_room:
+        if current_room is None:
             return []
         
         current_node = self.env.room_to_node.get(current_room)
@@ -3943,7 +3979,7 @@ class StateSpaceAStar:
                 continue
             
             neighbor_room = self._node_to_room.get(neighbor)
-            if not neighbor_room or neighbor_room not in self.env.room_positions:
+            if neighbor_room is None or neighbor_room not in self.env.room_positions:
                 continue
             
             # Check if this is a non-adjacent room connection. Direct adjacent
@@ -3968,7 +4004,7 @@ class StateSpaceAStar:
                 continue
             
             # Check if we can traverse this edge
-            if not self._can_traverse_edge(edge_type, state):
+            if not self._can_traverse_graph_edge(current_node, neighbor, edge_type, state):
                 continue
             
             # Find entry point in destination room
@@ -4020,13 +4056,13 @@ class StateSpaceAStar:
                 # Check edge traversability
                 edge_data = self.env.graph.get_edge_data(node, next_node, {}) or {}
                 edge_type = self._edge_type_from_data(edge_data)
-                if not self._can_traverse_edge(edge_type, state):
+                if not self._can_traverse_graph_edge(node, next_node, edge_type, state):
                     continue
                 
                 visited.add(next_node)
                 next_room = self._node_to_room.get(next_node)
                 
-                if next_room and next_room in self.env.room_positions:
+                if next_room is not None and next_room in self.env.room_positions:
                     dest_pos = self._find_room_entry_point(next_room)
                     if dest_pos:
                         return dest_pos, cost + 5  # Found walkable room

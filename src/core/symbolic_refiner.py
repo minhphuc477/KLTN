@@ -1610,6 +1610,17 @@ class SymbolicRefiner:
                 force_floor = floor_mask & (~non_floorable)
                 constrained_grid[force_floor] = floor_id
 
+            # Doors, stairs, and global route endpoints belong to the mission
+            # topology. Local WFC may preserve existing instances but must not
+            # invent additional graph transitions or duplicate START/GOAL.
+            generated_topology_tiles = np.isin(
+                constrained_grid,
+                np.fromiter(_IMMUTABLE_REPAIR_TILES, dtype=np.int32),
+            ) & (~immutable_source_mask)
+            constrained_grid[generated_topology_tiles] = immutable_source_grid[
+                generated_topology_tiles
+            ]
+
             # WFC respects the reset mask, but an external neural feedback
             # callback receives the full grid and may accidentally write beyond
             # it. Restore topology-owned cells after every transformation so a

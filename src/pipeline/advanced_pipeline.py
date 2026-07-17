@@ -100,6 +100,12 @@ from src.utils.explainability import (
 from src.utils.stable_seed import stable_seed_offset
 
 logger = logging.getLogger(__name__)
+
+
+class _WFCRequiredFallback(RuntimeError):
+    """Signal a diagnosed best-effort collapse without counting an engine failure."""
+
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -110,6 +116,7 @@ class AdvancedPipelineConfig:
     # Performance
     use_lcm_lora: bool = False
     lcm_steps: int = 4  # Only used when a real fast-sampling path is available.
+    diffusion_steps: int = 50
     paired_baseline_generation_time_sec: Optional[float] = None
     lcm_lora_checkpoint: Optional[Path] = None
     vqvae_checkpoint: Optional[Path] = None
@@ -402,7 +409,7 @@ class AdvancedNeuralSymbolicPipeline:
         """Return the real sampler step count for room generation."""
         if self.fast_sampling_active:
             return max(1, int(self.config.lcm_steps))
-        return 50
+        return max(1, int(self.config.diffusion_steps))
 
     def _compute_reported_lcm_speedup(
         self,
@@ -495,7 +502,6 @@ class AdvancedNeuralSymbolicPipeline:
             'OPEN',
             'PATH',
             'SHORTCUT',
-            'HIDDEN',
             'LOCKED',
             'KEY_LOCKED',
             'BOSS_LOCKED',
@@ -639,9 +645,12 @@ class AdvancedNeuralSymbolicPipeline:
         dungeon_grid: np.ndarray,
         *,
         room_puzzle_metadata: Optional[Mapping[str, Any]] = None,
+        graph_validation_context: Optional[Mapping[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Run the tile-level oracle on the exact semantic artifact returned."""
         from src.simulation.validator import ZeldaValidator
+
+        context = dict(graph_validation_context or {})
 
         result = ZeldaValidator().validate_single(
             np.asarray(dungeon_grid).copy(),
@@ -650,6 +659,7 @@ class AdvancedNeuralSymbolicPipeline:
                 self.config.verify_solver_consistency
             ),
             room_puzzle_metadata=room_puzzle_metadata,
+            **context,
         )
         path = list(result.path or [])
         path_length = int(result.path_length) if result.is_solvable else 0
@@ -706,6 +716,12 @@ class AdvancedNeuralSymbolicPipeline:
             ),
             'solver_consistency_states_explored': int(
                 getattr(result, 'solver_consistency_states_explored', 0) or 0
+            ),
+            'graph_tile_context_applied': bool(
+                context.get('graph') is not None
+                and context.get('room_to_node')
+                and context.get('room_positions')
+                and context.get('node_to_room')
             ),
             'is_exact': True,
         }
@@ -772,8 +788,9 @@ class AdvancedNeuralSymbolicPipeline:
                 "boss": bool(is_boss),
                 "goal": bool(is_goal),
                 "safe_room": bool(attrs.get("is_safe", False)) or room_type in {"safe", "start"},
-                "path_length": int(attrs.get("path_length", 20)),
             }
+            if attrs.get("path_length") is not None:
+                contents[node_id]["path_length"] = int(attrs["path_length"])
 
         return contents
     
@@ -932,7 +949,18 @@ class AdvancedNeuralSymbolicPipeline:
         gen_time = time.time() - gen_start
         
         # Step 6: Stitch rooms into dungeon layout
-        dungeon_grid, room_layout = self._stitch_rooms(rooms, mission_graph)
+        stitched_layout = self.stitch_room_layout(
+            rooms=rooms,
+            mission_graph=mission_graph,
+        )
+        self._last_stitch_realization_metrics = dict(
+            stitched_layout.realization_metrics or {}
+        )
+        self._last_stitch_connection_realizations = dict(
+            stitched_layout.connection_realizations or {}
+        )
+        dungeon_grid = stitched_layout.dungeon_grid
+        room_layout = stitched_layout.layout_map
         stitch_metrics = dict(self._last_stitch_realization_metrics)
         topology_score = float(
             stitch_metrics.get("spatial_topology_invariant_preservation_score", 1.0)
@@ -1022,9 +1050,10 @@ class AdvancedNeuralSymbolicPipeline:
                 room_grid = dungeon_grid[y_min:y_max+1, x_min:x_max+1]
                 # Find a valid start position (any floor tile)
                 start_pos = None
+                floor_id = int(SEMANTIC_PALETTE['FLOOR'])
                 for r in range(room_grid.shape[0]):
                     for c in range(room_grid.shape[1]):
-                        if room_grid[r, c] == 1:  # FLOOR
+                        if int(room_grid[r, c]) == floor_id:
                             start_pos = (r, c)
                             break
                     if start_pos:
@@ -1033,6 +1062,9 @@ class AdvancedNeuralSymbolicPipeline:
                 if start_pos:
                     result = self.collision_validator.validate_room(room_grid, start_pos)
                     alignment_scores.append(result.overall_score if hasattr(result, 'overall_score') else 1.0)
+                else:
+                    logger.warning("Room %s has no floor tile for collision validation", _room_id)
+                    alignment_scores.append(0.0)
             
             alignment_score = np.mean(alignment_scores) if alignment_scores else 1.0
             logger.info(f"Collision alignment: {alignment_score:.1%}")
@@ -1107,10 +1139,28 @@ class AdvancedNeuralSymbolicPipeline:
             mission_graph=mission_graph,
             room_layout=room_layout,
         )
+        from src.pipeline.validation_context import (
+            build_stitched_validation_context,
+            has_complete_stitched_validation_context,
+        )
+
+        graph_tile_context = build_stitched_validation_context(
+            mission_graph,
+            stitched_layout,
+        )
+        if (
+            self.config.require_graph_solvability
+            and not has_complete_stitched_validation_context(graph_tile_context)
+        ):
+            raise RuntimeError(
+                "Final tile validation is missing the stitched graph-to-room mapping; "
+                "cannot certify graph-owned progression mechanics."
+            )
         final_validation_start = time.time()
         final_validation = self._validate_final_dungeon(
             dungeon_grid,
             room_puzzle_metadata=final_puzzle_metadata,
+            graph_validation_context=graph_tile_context,
         )
         val_time += time.time() - final_validation_start
         if self.config.require_final_solvability and not final_validation['solvable']:
@@ -1381,7 +1431,6 @@ class AdvancedNeuralSymbolicPipeline:
                 is_start=(i == 0),
                 is_boss=(i == n_rooms - 1),
                 is_triforce=(i == n_rooms - 1),
-                is_treasure=(i == n_rooms - 1),
                 label='s' if i == 0 else ('b,t' if i == n_rooms - 1 else ''),
             )
             if i > 0:
@@ -1737,11 +1786,14 @@ class AdvancedNeuralSymbolicPipeline:
                 logger.info(f"Generating big room {node_id}: {room_size[0]}x{room_size[1]}")
                 
                 if self.big_room_gen:
-                    neighbors = {'N': None, 'S': None, 'E': None, 'W': None}
-                    for predecessor in mission_graph.predecessors(node_id):
-                        if predecessor in neighbor_latents:
-                            neighbors['N'] = neighbor_latents[predecessor]
-                            break
+                    from src.pipeline.generation.graph_context import get_neighbor_latents
+
+                    neighbors = get_neighbor_latents(
+                        self.neural_pipeline,
+                        node_id,
+                        mission_graph,
+                        neighbor_latents,
+                    )
                     room_seed = (
                         None
                         if seed is None
@@ -1877,12 +1929,6 @@ class AdvancedNeuralSymbolicPipeline:
             room_id=node_id,
         )
         start_goal = pipeline._extract_room_start_goal(mission_graph, node_id)
-        room, marker_count, marker_ids = pipeline._overlay_room_graph_markers(
-            room,
-            graph=mission_graph,
-            room_id=node_id,
-            start_goal=start_goal,
-        )
 
         room_plan_mask = None
         if hasattr(pipeline, "_build_room_plan_trace"):
@@ -1897,6 +1943,15 @@ class AdvancedNeuralSymbolicPipeline:
             graph=mission_graph,
             room_id=node_id,
             room_plan_mask=room_plan_mask,
+            start_goal=start_goal,
+        )
+        # The scaffold legitimately clears its anchor pocket. Reapply graph
+        # owned markers afterwards so a puzzle, key, or other required marker
+        # cannot be silently downgraded to ordinary floor during fallback.
+        room, marker_count, marker_ids = pipeline._overlay_room_graph_markers(
+            room,
+            graph=mission_graph,
+            room_id=node_id,
             start_goal=start_goal,
         )
         # Puzzle construction may alter the interior, but the graph boundary
@@ -1929,13 +1984,14 @@ class AdvancedNeuralSymbolicPipeline:
     ) -> np.ndarray:
         """Generate a single room using full ML pipeline with WFC refinement."""
         try:
-            # Get neighbor context from graphMissionGrammar.generate(
-            neighbors = {'N': None, 'S': None, 'E': None, 'W': None}
-            for pred in mission_graph.predecessors(node_id):
-                if pred in neighbor_latents:
-                    # Map graph edge to spatial direction (simplified)
-                    neighbors['N'] = neighbor_latents[pred]
-                    break
+            from src.pipeline.generation.graph_context import get_neighbor_latents
+
+            neighbors = get_neighbor_latents(
+                self.neural_pipeline,
+                node_id,
+                mission_graph,
+                neighbor_latents,
+            )
             room_seed = None if seed is None else int(seed) + stable_seed_offset(node_id, modulo=100000)
             
             # STEP 1: Neural generation (VQ-VAE + Diffusion + LogicNet)
@@ -1986,10 +2042,14 @@ class AdvancedNeuralSymbolicPipeline:
                     wfc_diagnostics = wfc.get_diagnostics()
                     if bool(wfc_diagnostics.get("required_fallback", False)):
                         self._wfc_refinement_fallbacks += 1
-                        raise RuntimeError(
+                        message = (
                             "Weighted Bayesian WFC required best-effort completion "
                             f"for room {node_id}: {wfc_diagnostics}"
                         )
+                        if not self.config.allow_wfc_refinement_failure:
+                            raise _WFCRequiredFallback(message)
+                        logger.warning("%s; using neural output", message)
+                        return neural_room
 
                     # Neuro-symbolic discrepancy heatmap: where symbolic correction overrides neural belief.
                     if self.explainability_mgr is not None and getattr(result, "neural_probs", None) is not None:
@@ -2025,6 +2085,8 @@ class AdvancedNeuralSymbolicPipeline:
                     logger.debug(f"Room {node_id}: WFC refinement applied")
                     return refined_room
                     
+                except _WFCRequiredFallback:
+                    raise
                 except (AttributeError, RuntimeError, ValueError, TypeError) as e:
                     self._wfc_refinement_failures += 1
                     if not self.config.allow_wfc_refinement_failure:
@@ -2314,7 +2376,10 @@ def quick_start_demo():
         enable_collision_validation=True,
         theme=ThemeType.CASTLE,  # Style transfer
         enable_big_rooms=True,  # Boss arenas
-        enable_global_state=True,  # Explicit deterministic water-state ablation.
+        # A generic grammar demo cannot name stable room IDs before generation.
+        # Keep cross-room state disabled here; dedicated global-state experiments
+        # must provide a concrete graph and its validated room identifiers.
+        enable_global_state=False,
         calculate_fun_metrics=True,  # Quantify experience
         record_demo=True,  # GIF/MP4 output
         enable_explainability=True,  # Decision tracing
@@ -2332,24 +2397,6 @@ def quick_start_demo():
         user_constraints={
             "min_keys": 3,
             "boss_type": "dragon",
-            "global_state": {
-                "variables": [
-                    {"name": "water_level", "type": "water_level", "initial": "high"}
-                ],
-                "transitions": [
-                    {
-                        "from_room": 3,
-                        "trigger": "switch_pulled",
-                        "changes": {"water_level": "low"},
-                        "affects": [4, 5, 6],
-                    }
-                ],
-                "room_dependencies": {
-                    4: {"optional": {"water_level": ["high", "low"]}},
-                    5: {"optional": {"water_level": ["high", "low"]}},
-                    6: {"optional": {"water_level": ["high", "low"]}},
-                },
-            },
         }
     )
     

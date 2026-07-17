@@ -109,7 +109,10 @@ def main():
         start_state = GameState(position=(0, 0))
         result = finder.find_optimal_collection_order(start_state)
         
-        assert result is not None
+        assert result.success, result.failure_reason
+        assert result.terminal_state is not None
+        assert (5, 5) in result.terminal_state.collected_items
+        assert result.full_path[-1] == env.goal_pos
         
         print_status("Multi-goal pathfinder", True)
         results.append(True)
@@ -239,4 +242,3 @@ def main():
 if __name__ == "__main__":
     exit_code = main()
     sys.exit(exit_code)
-

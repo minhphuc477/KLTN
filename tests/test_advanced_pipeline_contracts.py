@@ -1,5 +1,6 @@
 import numpy as np
 import networkx as nx
+import pytest
 from types import SimpleNamespace
 
 from src.generation.style_transfer import ThemeType
@@ -12,6 +13,8 @@ from src.pipeline.advanced_pipeline import (
     AdvancedNeuralSymbolicPipeline,
     AdvancedPipelineConfig,
 )
+from src.pipeline.room_stitching import StitchedRoomLayout
+from src.pipeline.validation_context import build_stitched_validation_context
 
 
 def _make_test_config() -> AdvancedPipelineConfig:
@@ -45,6 +48,31 @@ def test_hazard_edges_compile_to_element_only_when_protection_is_required():
     assert enforcer._door_tile_for_edge(
         {"edge_type": "HAZARD"}
     ) == SEMANTIC_PALETTE["DOOR_OPEN"]
+
+    with np.testing.assert_raises_regex(ValueError, "Hidden/secret"):
+        enforcer._door_tile_for_edge({"edge_type": "HIDDEN"})
+
+
+def test_graph_constraint_enforcer_rejects_ambiguous_base_tile_ids():
+    with np.testing.assert_raises_regex(ValueError, "distinct wall, floor, and door"):
+        GraphConstraintEnforcer({"wall": 0, "floor": 1, "door": 1})
+
+
+def test_graph_constraint_enforcer_rejects_adjacency_without_edge_semantics():
+    enforcer = GraphConstraintEnforcer({"wall": 0, "floor": 1, "door": 2})
+
+    with pytest.raises(ValueError, match="missing canonical edge metadata"):
+        enforcer._get_valid_neighbors(0, {"adjacency": {0: {"E": 1}}})
+
+    legacy = GraphConstraintEnforcer(
+        {
+            "wall": 0,
+            "floor": 1,
+            "door": 2,
+            "allow_implicit_open_adjacency": True,
+        }
+    )
+    assert legacy._get_valid_neighbors(0, {"adjacency": {0: {"E": 1}}})[1]["edge_type"] == "open"
 
 
 def test_protected_hazard_metadata_requires_generic_traversal_item():
@@ -193,6 +221,15 @@ def test_spatial_pipeline_rejects_multiple_unrepresentable_protection_identities
         pipeline._validate_spatial_mechanics(graph)
 
 
+def test_spatial_pipeline_rejects_hidden_edges_without_a_discovery_mechanic():
+    graph = nx.DiGraph()
+    graph.add_edge(0, 1, edge_type="HIDDEN")
+    pipeline = object.__new__(AdvancedNeuralSymbolicPipeline)
+
+    with np.testing.assert_raises_regex(ValueError, "HIDDEN"):
+        pipeline._validate_spatial_mechanics(graph)
+
+
 def test_advanced_pipeline_fallback_preserves_locked_exit_and_key_marker():
     """A neural failure fallback must still realize the mission graph physically."""
     from src.pipeline.dungeon_pipeline import NeuralSymbolicDungeonPipeline
@@ -223,6 +260,31 @@ def test_advanced_pipeline_fallback_preserves_locked_exit_and_key_marker():
     assert int(np.sum(room == int(SEMANTIC_PALETTE["KEY_SMALL"]))) == 1
 
 
+def test_advanced_pipeline_fallback_preserves_puzzle_marker_after_scaffolding():
+    """Fallback scaffolding must not erase its required puzzle trigger."""
+    from src.pipeline.dungeon_pipeline import NeuralSymbolicDungeonPipeline
+
+    canonical = object.__new__(NeuralSymbolicDungeonPipeline)
+    canonical.default_puzzle_room_scaffold_enabled = True
+    canonical.default_puzzle_room_scaffold_min_structure_tiles = 999
+    canonical.default_semantic_puzzle_offset = 2
+    canonical.domain_schema = None
+
+    pipeline = object.__new__(AdvancedNeuralSymbolicPipeline)
+    pipeline.neural_pipeline = canonical
+    graph = nx.DiGraph()
+    graph.add_node(0, type="PUZZLE", has_puzzle=True, position=(0, 0, 0))
+    graph.add_node(1, type="GOAL", position=(1, 0, 0))
+    graph.add_edge(0, 1, edge_type="PATH")
+
+    room = pipeline._build_topology_preserving_fallback_room(
+        node_id=0,
+        mission_graph=graph,
+    )
+
+    assert int(np.sum(room == int(SEMANTIC_PALETTE["PUZZLE"]))) == 1
+
+
 def test_advanced_graph_oracle_rejects_unreachable_side_room_contract():
     pipeline = object.__new__(AdvancedNeuralSymbolicPipeline)
     pipeline.config = SimpleNamespace(graph_oracle_max_states=10_000)
@@ -241,6 +303,37 @@ def test_advanced_graph_oracle_rejects_unreachable_side_room_contract():
     assert result["unreachable_rooms"] == [2]
 
 
+def test_advanced_tile_oracle_receives_the_stitched_graph_contract():
+    """The final tile oracle must enforce the same room graph it was given."""
+    grid = np.full((16, 22), int(SEMANTIC_PALETTE["FLOOR"]), dtype=np.int64)
+    grid[7, 5] = int(SEMANTIC_PALETTE["START"])
+    grid[7, 17] = int(SEMANTIC_PALETTE["TRIFORCE"])
+    graph = nx.DiGraph()
+    graph.add_node(0, type="START")
+    graph.add_node(1, type="GOAL")
+    graph.add_edge(0, 1, edge_type="PATH")
+    layout = StitchedRoomLayout(
+        dungeon_grid=grid,
+        slot_positions={0: (0, 0), 1: (0, 1)},
+        room_offsets={0: (0, 0), 1: (0, 11)},
+        layout_map={0: (0, 0, 10, 15), 1: (11, 0, 21, 15)},
+    )
+    pipeline = object.__new__(AdvancedNeuralSymbolicPipeline)
+    pipeline.config = SimpleNamespace(
+        tile_oracle_max_states=10_000,
+        verify_solver_consistency=False,
+    )
+
+    result = pipeline._validate_final_dungeon(
+        grid,
+        graph_validation_context=build_stitched_validation_context(graph, layout),
+    )
+
+    assert result["solvable"] is True
+    assert result["route_replay_status"] == "verified"
+    assert result["graph_tile_context_applied"] is True
+
+
 def test_advanced_pipeline_disables_requested_lcm_without_real_backend():
     """Requested LCM-LoRA should not activate when only the experimental path exists."""
     pipeline = AdvancedNeuralSymbolicPipeline(_make_test_config())
@@ -252,6 +345,7 @@ def test_advanced_pipeline_disables_requested_lcm_without_real_backend():
 def test_advanced_pipeline_uses_standard_diffusion_steps_without_real_lcm(monkeypatch):
     """Advanced pipeline should keep standard DDIM steps when no real LCM backend is active."""
     pipeline = AdvancedNeuralSymbolicPipeline(_make_test_config())
+    pipeline.config.diffusion_steps = 17
     captured = {}
 
     class _RoomResult:
@@ -275,7 +369,7 @@ def test_advanced_pipeline_uses_standard_diffusion_steps_without_real_lcm(monkey
     )
 
     assert room.shape == (16, 11)
-    assert captured["num_diffusion_steps"] == 50
+    assert captured["num_diffusion_steps"] == 17
 
 
 def test_advanced_pipeline_activates_compatible_consistency_lora_backend(monkeypatch, tmp_path):
@@ -482,7 +576,22 @@ def test_advanced_pipeline_rejects_best_effort_wfc_output_when_fallback_is_allow
 
     assert np.array_equal(room, neural_room)
     assert pipeline._wfc_refinement_fallbacks == 1
-    assert pipeline._wfc_refinement_failures == 1
+    assert pipeline._wfc_refinement_failures == 0
+
+    pipeline.config.allow_wfc_refinement_failure = False
+    pipeline.config.allow_room_generation_fallback = False
+    pipeline._wfc_refinement_fallbacks = 0
+    pipeline._wfc_refinement_failures = 0
+    with pytest.raises(RuntimeError, match="WFC fallback is disabled|room fallback is disabled"):
+        pipeline._generate_single_room_with_ml(
+            node_id=0,
+            mission_graph=graph,
+            graph_context={},
+            neighbor_latents={},
+            theme=ThemeType.ZELDA_CLASSIC,
+        )
+    assert pipeline._wfc_refinement_fallbacks == 1
+    assert pipeline._wfc_refinement_failures == 0
 
 
 def test_advanced_pipeline_fun_evaluation_resolves_graph_route_not_insertion_order():
@@ -554,3 +663,8 @@ def test_advanced_pipeline_fun_contents_preserve_graph_and_entity_semantics():
     assert contents[2]["enemies"] == 1
     assert contents[2]["health_pickups"] == 1
     assert contents[2]["treasures"] == 1
+    assert "path_length" not in contents[0]
+
+    graph.nodes[0]["path_length"] = 7
+    measured_contents = AdvancedNeuralSymbolicPipeline._build_fun_room_contents(graph, entities)
+    assert measured_contents[0]["path_length"] == 7

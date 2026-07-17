@@ -1,10 +1,10 @@
 """Exact mission-graph progression validation for resource-gated edges.
 
-The grammar-level graph uses persistent affordances for named keys, boss keys,
-items, protection equipment, switches, and collection tokens. Fungible small
-keys are different: opening a ``requires_key_count`` edge consumes inventory.
-A monotone reachability closure therefore cannot prove those graphs by itself;
-it can accidentally reuse one key for several locks.
+The grammar-level graph uses persistent affordances for boss keys, items,
+protection equipment, switches, and collection tokens. Small keys are
+consumable, including keys with an explicit ``key_id``. A monotone reachability
+closure therefore cannot prove those graphs by itself; it can accidentally
+reuse one key for several locks.
 
 This module keeps the persistent part as a fixed-point closure and performs a
 state search over the subset of opened fungible-key gates. The representation
@@ -43,12 +43,16 @@ class ProgressionSearchResult:
 
 @dataclass(frozen=True)
 class _ResourceSnapshot:
-    named_key_ids: FrozenSet[int]
+    small_key_id_counts: Tuple[Tuple[int, int], ...]
+    boss_key_ids: FrozenSet[int]
     items: FrozenSet[str]
     switch_ids: FrozenSet[int]
     token_counts: Tuple[Tuple[str, int], ...]
     untyped_token_count: int
     small_key_supply: int
+
+    def small_key_id_count(self, key_id: int) -> int:
+        return int(dict(self.small_key_id_counts).get(int(key_id), 0))
 
     def token_count(self, token_id: Optional[str]) -> int:
         if token_id is None or not str(token_id).strip():
@@ -70,7 +74,8 @@ def _required_nodes(graph: MissionGraph, start: int) -> FrozenSet[int]:
 
 
 def _resources(graph: MissionGraph, reachable: Iterable[int]) -> _ResourceSnapshot:
-    named_key_ids: Set[int] = set()
+    small_key_id_counts: Counter[int] = Counter()
+    boss_key_ids: Set[int] = set()
     items: Set[str] = set()
     switch_ids: Set[int] = set()
     token_counts: Counter[str] = Counter()
@@ -81,10 +86,12 @@ def _resources(graph: MissionGraph, reachable: Iterable[int]) -> _ResourceSnapsh
         node = graph.nodes.get(node_id)
         if node is None:
             continue
-        if node.node_type in {NodeType.KEY, NodeType.BIG_KEY} and node.key_id is not None:
-            named_key_ids.add(int(node.key_id))
         if node.node_type == NodeType.KEY:
             small_key_supply += max(1, int(getattr(node, "key_count_hint", 0) or 0))
+            if node.key_id is not None:
+                small_key_id_counts[int(node.key_id)] += 1
+        if node.node_type == NodeType.BIG_KEY and node.key_id is not None:
+            boss_key_ids.add(int(node.key_id))
         if node.node_type in {NodeType.ITEM, NodeType.PROTECTION_ITEM} and node.item_type:
             items.add(str(node.item_type))
         if node.node_type == NodeType.RESOURCE_FARM and node.drops_resource:
@@ -99,7 +106,8 @@ def _resources(graph: MissionGraph, reachable: Iterable[int]) -> _ResourceSnapsh
                 token_counts[str(node.token_id)] += 1
 
     return _ResourceSnapshot(
-        named_key_ids=frozenset(named_key_ids),
+        small_key_id_counts=tuple(sorted(small_key_id_counts.items())),
+        boss_key_ids=frozenset(boss_key_ids),
         items=frozenset(items),
         switch_ids=frozenset(switch_ids),
         token_counts=tuple(sorted(token_counts.items())),
@@ -112,15 +120,20 @@ def _node_gate_open(graph: MissionGraph, node_id: int, resources: _ResourceSnaps
     node = graph.nodes.get(node_id)
     if node is None:
         return False
-    if node.node_type in {NodeType.LOCK, NodeType.BOSS_DOOR}:
-        return node.key_id is not None and int(node.key_id) in resources.named_key_ids
+    if node.node_type == NodeType.LOCK:
+        return (
+            node.key_id is not None
+            and resources.small_key_id_count(int(node.key_id)) > 0
+        )
+    if node.node_type == NodeType.BOSS_DOOR:
+        return node.key_id is not None and int(node.key_id) in resources.boss_key_ids
     return True
 
 
 def _persistent_edge_gate_open(edge: MissionEdge, resources: _ResourceSnapshot) -> bool:
     """Check every non-consumable requirement on an edge."""
-    if edge.edge_type in {EdgeType.LOCKED, EdgeType.BOSS_LOCKED} and edge.key_required is not None:
-        if int(edge.key_required) not in resources.named_key_ids:
+    if edge.edge_type == EdgeType.BOSS_LOCKED and edge.key_required is not None:
+        if int(edge.key_required) not in resources.boss_key_ids:
             return False
 
     if edge.edge_type == EdgeType.ITEM_GATE:
@@ -148,6 +161,14 @@ def _persistent_edge_gate_open(edge: MissionEdge, resources: _ResourceSnapshot) 
     return True
 
 
+def _small_key_cost(edge: MissionEdge) -> int:
+    """Return the canonical consumable-key cost of one graph edge."""
+    configured = int(max(0, edge.requires_key_count))
+    if edge.edge_type == EdgeType.LOCKED:
+        return max(1, configured)
+    return configured
+
+
 def _closure(
     graph: MissionGraph,
     start: int,
@@ -164,7 +185,7 @@ def _closure(
                 continue
             if edge.source not in reachable or edge.target in reachable:
                 continue
-            if int(max(0, edge.requires_key_count)) > 0 and edge_index not in opened_fungible_edges:
+            if _small_key_cost(edge) > 0 and edge_index not in opened_fungible_edges:
                 continue
             if not _node_gate_open(graph, edge.target, resources):
                 continue
@@ -236,16 +257,19 @@ def solve_mission_progression(
             )
 
         resources = _resources(graph, reachable)
-        spent_keys = sum(
-            int(max(0, graph.edges[index].requires_key_count))
+        spent_keys = sum(_small_key_cost(graph.edges[index]) for index in opened)
+        consumed_key_ids: Counter[int] = Counter(
+            int(graph.edges[index].key_required)
             for index in opened
+            if graph.edges[index].edge_type == EdgeType.LOCKED
+            and graph.edges[index].key_required is not None
         )
         available_keys = int(resources.small_key_supply) - int(spent_keys)
         if available_keys <= 0:
             continue
 
         for edge_index, edge in enumerate(graph.edges):
-            cost = int(max(0, edge.requires_key_count))
+            cost = _small_key_cost(edge)
             if cost <= 0 or edge_index in opened or cost > available_keys:
                 continue
             if edge.edge_type in graph.NON_TRAVERSABLE_EDGE_TYPES:
@@ -256,6 +280,10 @@ def solve_mission_progression(
                 continue
             if not _persistent_edge_gate_open(edge, resources):
                 continue
+            if edge.edge_type == EdgeType.LOCKED and edge.key_required is not None:
+                key_id = int(edge.key_required)
+                if resources.small_key_id_count(key_id) <= consumed_key_ids[key_id]:
+                    continue
             next_opened = frozenset((*opened, edge_index))
             if next_opened in visited:
                 continue

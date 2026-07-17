@@ -623,7 +623,10 @@ class BeliefMap:
             uncertainty = -conf * math.log2(conf) - (1.0 - conf) * math.log2(1.0 - conf)
             total_uncertainty += uncertainty
 
-        return total_uncertainty / len(visible)
+        # Complete occlusion is a valid perceptual state, not an arithmetic
+        # failure. With no observations there is no entropy contribution from
+        # the current view; uncertainty from prior beliefs is handled elsewhere.
+        return total_uncertainty / len(visible) if visible else 0.0
     
     def get_knowledge_state(self, position: Tuple[int, int]) -> TileKnowledge:
         """Get the knowledge state of a tile."""
@@ -2639,7 +2642,7 @@ class CognitiveBoundedSearch:
             conf = float(min(1.0 - eps, max(eps, obs.confidence)))
             total_uncertainty += -conf * math.log2(conf) - (1.0 - conf) * math.log2(1.0 - conf)
 
-        return total_uncertainty / len(visible)
+        return total_uncertainty / len(visible) if visible else 0.0
     
     def _perceive(self, cog_state: CognitiveState, grid: np.ndarray) -> None:
         """

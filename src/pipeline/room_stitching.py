@@ -483,9 +483,9 @@ def compute_strict_room_placement(
                     comp,
                     tree_exc,
                 )
-                return compute_relaxed_room_placement(
+                comp_positions = compute_relaxed_room_placement(
                     graph,
-                    room_ids,
+                    comp,
                     sort_key=sort_key,
                     node_position_getter=node_position_getter,
                     first_free_position_fn=first_free_position_fn,
@@ -903,7 +903,6 @@ def _connector_tiles(
     has_reverse_edge: bool,
 ) -> Tuple[int, int]:
     floor_id = int(SEMANTIC_PALETTE.get("FLOOR", 1))
-    wall_id = int(SEMANTIC_PALETTE.get("WALL", 2))
     # Default connection tile is DOOR_OPEN so that the seal-then-carve
     # approach can always distinguish carved connections from stray floor.
     door_open_id = int(SEMANTIC_PALETTE.get("DOOR_OPEN", floor_id))
@@ -931,8 +930,6 @@ def _connector_tiles(
 
     if (not has_reverse_edge) or {"soft_locked", "one_way", "shutter"}.intersection(edge_tokens):
         src_tile = int(SEMANTIC_PALETTE.get("DOOR_SOFT", src_tile))
-        if dst_tile == wall_id:
-            dst_tile = door_open_id
 
     return src_tile, dst_tile
 
@@ -1052,6 +1049,12 @@ def carve_room_connection_between_bboxes(
                 src_apron = src_x_min + 1
                 dst_apron = dst_x_max - 1
                 rows = _canonical_overlap(_door_rows(src_bbox, "W"), _door_rows(dst_bbox, "E"), row_low, row_high)
+            if not rows:
+                # Geometric adjacency alone is insufficient: without a shared
+                # legal doorway span there is no physical realization to
+                # record. Returning success here produced an empty trace that
+                # the post-stitch integrity check could only misclassify.
+                return None
             for row in rows:
                 global_grid[row, src_boundary] = src_tile
                 global_grid[row, dst_boundary] = dst_tile
@@ -1086,6 +1089,8 @@ def carve_room_connection_between_bboxes(
                 src_apron = src_y_min + 1
                 dst_apron = dst_y_max - 1
                 cols = _canonical_overlap(_door_cols(src_bbox, "N"), _door_cols(dst_bbox, "S"), col_low, col_high)
+            if not cols:
+                return None
             for col in cols:
                 global_grid[src_boundary, col] = src_tile
                 global_grid[dst_boundary, col] = dst_tile
@@ -1120,9 +1125,6 @@ def carve_room_connection_between_bboxes(
     if not (0 <= start[0] < H and 0 <= start[1] < W and 0 <= goal[0] < H and 0 <= goal[1] < W):
         return None
 
-    global_grid[src_anchor[0], src_anchor[1]] = src_tile
-    global_grid[dst_anchor[0], dst_anchor[1]] = dst_tile
-
     def neighbors(cell: Tuple[int, int]):
         r, c = cell
         for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1)):
@@ -1132,6 +1134,25 @@ def carve_room_connection_between_bboxes(
 
     def heuristic(a: Tuple[int, int], b: Tuple[int, int]) -> int:
         return abs(a[0] - b[0]) + abs(a[1] - b[1])
+
+    def _inside_bbox(row: int, col: int, bbox: Tuple[int, int, int, int]) -> bool:
+        x_min, y_min, x_max, y_max = bbox
+        return y_min <= row <= y_max and x_min <= col <= x_max
+
+    def _corridor_envelope_is_clear(path_cells: List[Tuple[int, int]]) -> bool:
+        path_set = set(path_cells)
+        for row, col in path_set:
+            for next_row, next_col in neighbors((row, col)):
+                if (next_row, next_col) in path_set:
+                    continue
+                if int(global_grid[next_row, next_col]) == int(fill_tile):
+                    continue
+                if _inside_bbox(next_row, next_col, src_bbox) or _inside_bbox(
+                    next_row, next_col, dst_bbox
+                ):
+                    continue
+                return False
+        return True
 
     obstacle = global_grid != int(fill_tile)
     obstacle[start[0], start[1]] = False
@@ -1173,6 +1194,14 @@ def carve_room_connection_between_bboxes(
             path.append(current)
             current = came_from.get(current)
         path.reverse()
+        if not _corridor_envelope_is_clear(path):
+            found = False
+            if diagnostic_callback is not None:
+                diagnostic_callback("corridor_envelope_blocked")
+
+    if found:
+        global_grid[src_anchor[0], src_anchor[1]] = src_tile
+        global_grid[dst_anchor[0], dst_anchor[1]] = dst_tile
         carved_cells: List[Tuple[int, int]] = []
         for row, col in path:
             if global_grid[row, col] == int(fill_tile):
@@ -1229,7 +1258,19 @@ def carve_room_connection_between_bboxes(
             str(dst_bbox),
         )
         return None
+    if not _corridor_envelope_is_clear(fallback_path):
+        if diagnostic_callback is not None:
+            diagnostic_callback("corridor_fallback_envelope_blocked")
+        logger.warning(
+            "Fallback corridor envelope intersects unrelated occupied cells between %s and %s; "
+            "leaving the edge uncarved.",
+            str(src_bbox),
+            str(dst_bbox),
+        )
+        return None
 
+    global_grid[src_anchor[0], src_anchor[1]] = src_tile
+    global_grid[dst_anchor[0], dst_anchor[1]] = dst_tile
     carved_cells: List[Tuple[int, int]] = []
     for row, col in fallback_path:
         global_grid[row, col] = floor_id

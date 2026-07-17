@@ -280,11 +280,18 @@ def load_checkpoint(
     trainer: Any,
     path: str,
     *,
+    restore_training_state: bool,
     has_safetensors: bool,
     load_safetensors: Optional[SafetensorsLoad],
     logger: logging.Logger,
-) -> None:
+) -> Dict[str, Any]:
     if str(path).lower().endswith(".safetensors"):
+        if restore_training_state:
+            raise ValueError(
+                "Safetensors artifacts contain model weights only and cannot be used for "
+                "stateful resume. Use the matching .pth resume checkpoint or configure "
+                "warm_start_checkpoint explicitly."
+            )
         if not has_safetensors or load_safetensors is None:
             raise ImportError("Loading .safetensors checkpoints requires the safetensors package.")
         payload = load_safetensors(path, device=str(trainer.device))
@@ -335,22 +342,19 @@ def load_checkpoint(
         metadata = load_checkpoint_metadata_sidecar(path)
         architecture = dict(metadata.get("architecture", {}) or {})
         _validate_checkpoint_config(trainer.config, architecture)
-        extra = dict(metadata.get("extra", {}) or {})
-        trainer.epoch = int(extra.get("epoch", getattr(trainer, "epoch", 0)))
-        trainer.global_step = int(extra.get("global_step", getattr(trainer, "global_step", 0)))
-        trainer._reset_gradient_accumulation()
+        trainer._reset_training_state_for_warm_start()
         trainer._configure_guidance()
         trainer._configure_guidance(trainer.ema_diffusion)
         logger.info(
-            "Loaded tensor-only safetensors checkpoint from %s (epoch %d, global_step %d); "
-            "optimizer/scheduler state was not restored.",
+            "Warm-started model weights from tensor-only safetensors checkpoint %s; "
+            "epoch/global_step and optimizer/scheduler state were reset.",
             path,
-            int(trainer.epoch),
-            int(trainer.global_step),
         )
-        return
+        return {}
 
     checkpoint = safe_torch_load(path, map_location=trainer.device)
+    if not isinstance(checkpoint, dict):
+        raise ValueError(f"Checkpoint {path} must contain a mapping payload.")
     checkpoint_config = checkpoint.get("config", {}) if isinstance(checkpoint, dict) else {}
     if isinstance(checkpoint_config, dict):
         _validate_checkpoint_config(trainer.config, checkpoint_config)
@@ -381,9 +385,35 @@ def load_checkpoint(
                 f"Checkpoint {path} contains non-finite values in `{key}` and cannot be resumed safely."
             )
 
-    trainer.epoch = checkpoint["epoch"]
-    trainer.global_step = checkpoint["global_step"]
-    trainer._reset_gradient_accumulation()
+    required_model_keys = {
+        "diffusion_state_dict",
+        "condition_encoder_state_dict",
+    }
+    missing_model_keys = sorted(required_model_keys.difference(checkpoint))
+    if missing_model_keys:
+        raise ValueError(
+            f"Checkpoint {path} is missing required model state: {missing_model_keys}."
+        )
+    if restore_training_state:
+        required_resume_keys = {
+            "epoch",
+            "global_step",
+            "optimizer_state_dict",
+            "scheduler_state_dict",
+        }
+        if bool(getattr(trainer.config, "use_amp", False)):
+            required_resume_keys.add("grad_scaler_state_dict")
+        missing_resume_keys = sorted(required_resume_keys.difference(checkpoint))
+        if missing_resume_keys:
+            raise ValueError(
+                f"Checkpoint {path} is not a complete resume artifact; missing "
+                f"{missing_resume_keys}. Use warm_start_checkpoint for weights-only artifacts."
+            )
+
+    if restore_training_state:
+        trainer.epoch = int(checkpoint["epoch"])
+        trainer.global_step = int(checkpoint["global_step"])
+        trainer._reset_gradient_accumulation()
     trainer.diffusion.load_state_dict(checkpoint["diffusion_state_dict"])
     if "ema_diffusion_state_dict" in checkpoint:
         trainer.ema_diffusion.load_state_dict(checkpoint["ema_diffusion_state_dict"])
@@ -413,44 +443,61 @@ def load_checkpoint(
             )
         else:
             trainer.puzzle_stage_semantics_head.load_state_dict(stage_head_state)
+    elif (
+        restore_training_state
+        and getattr(trainer, "puzzle_stage_semantics_head", None) is not None
+    ):
+        raise ValueError(
+            f"Checkpoint {path} cannot resume stage-semantics training because it is missing "
+            "puzzle_stage_semantics_head_state_dict. Use warm_start_checkpoint only when "
+            "you intentionally want a newly initialized auxiliary head."
+        )
+
+    if not restore_training_state:
+        trainer._reset_training_state_for_warm_start()
 
     optimizer_state_loaded = False
-    if "optimizer_state_dict" in checkpoint:
+    if restore_training_state:
         try:
             trainer.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
             optimizer_state_loaded = True
         except ValueError as exc:
-            logger.warning(
-                "Skipping optimizer state from %s because it is incompatible with the current "
-                "trainer: %s",
-                path,
-                exc,
-            )
-    if "scheduler_state_dict" in checkpoint:
+            raise ValueError(
+                f"Optimizer state in resume checkpoint {path} is incompatible with the "
+                f"current trainer: {exc}"
+            ) from exc
+    scheduler_state_loaded = False
+    if restore_training_state and optimizer_state_loaded:
         try:
             trainer.scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+            scheduler_state_loaded = True
         except ValueError as exc:
-            reason = (
-                "optimizer state was not restored"
-                if not optimizer_state_loaded
-                else "the scheduler state is incompatible with the current trainer"
-            )
-            logger.warning(
-                "Skipping scheduler state from %s because %s: %s",
-                path,
-                reason,
-                exc,
-            )
-    if "grad_scaler_state_dict" in checkpoint:
+            raise ValueError(
+                f"Scheduler state in resume checkpoint {path} is incompatible with the "
+                f"current trainer: {exc}"
+            ) from exc
+    if restore_training_state and "grad_scaler_state_dict" in checkpoint:
         try:
             trainer._grad_scaler.load_state_dict(checkpoint["grad_scaler_state_dict"])
         except (RuntimeError, ValueError, TypeError) as exc:
-            logger.warning(
-                "Skipping AMP GradScaler state from %s because it is incompatible: %s",
-                path,
-                exc,
-            )
+            if bool(getattr(trainer.config, "use_amp", False)):
+                raise ValueError(
+                    f"AMP GradScaler state in resume checkpoint {path} is incompatible: {exc}"
+                ) from exc
+            logger.warning("Ignoring incompatible inactive GradScaler state from %s: %s", path, exc)
 
     trainer._configure_guidance()
     trainer._configure_guidance(trainer.ema_diffusion)
-    logger.info("Loaded checkpoint from %s (epoch %s)", path, trainer.epoch)
+    trainer._scheduler_state_restored = bool(scheduler_state_loaded)
+    trainer._scheduler_period_configured = bool(scheduler_state_loaded)
+    metrics = checkpoint.get("metrics", {}) if restore_training_state else {}
+    trainer._loaded_checkpoint_metrics = dict(metrics) if isinstance(metrics, dict) else {}
+    if restore_training_state:
+        logger.info("Resumed complete training state from %s (epoch %s)", path, trainer.epoch)
+    else:
+        logger.info(
+            "Warm-started model weights from %s; epoch/global_step and optimizer/scheduler "
+            "state were reset.",
+            path,
+        )
+    return dict(trainer._loaded_checkpoint_metrics)

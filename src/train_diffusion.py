@@ -399,6 +399,9 @@ class DiffusionTrainer:
             T_mult=config.scheduler_t_mult,
             eta_min=config.scheduler_eta_min,
         )
+        self._scheduler_state_restored = False
+        self._scheduler_period_configured = False
+        self._loaded_checkpoint_metrics: Dict[str, Any] = {}
         self._apply_lr_warmup(completed_steps=0)
         
         # --- Phase 4A: EMA model weights ---
@@ -1928,10 +1931,10 @@ class DiffusionTrainer:
             for p_ema, p in zip(self.ema_diffusion.parameters(),
                                 self.diffusion.parameters()):
                 p_ema.data.mul_(self.ema_decay).add_(p.data, alpha=1.0 - self.ema_decay)
-        average_module_parameters(
-            self.ema_diffusion,
-            context=getattr(self, "distributed_context", None),
-        )
+            average_module_parameters(
+                self.ema_diffusion,
+                context=getattr(self, "distributed_context", None),
+            )
 
     @staticmethod
     def _tensor_is_finite(value: Any) -> bool:
@@ -2020,7 +2023,9 @@ class DiffusionTrainer:
         """Make cosine restart periods use real optimizer-step counts."""
         if self.scheduler is None:
             return
-        if int(getattr(self, "global_step", 0)) > 0:
+        if bool(getattr(self, "_scheduler_state_restored", False)):
+            return
+        if bool(getattr(self, "_scheduler_period_configured", False)):
             return
         total_epochs = int(max(1, int(getattr(self.config, "epochs", 1))))
         step_count = int(max(1, steps_per_epoch))
@@ -2034,6 +2039,58 @@ class DiffusionTrainer:
             self.scheduler.T_i = scheduler_t0
         if hasattr(self.scheduler, "T_cur"):
             self.scheduler.T_cur = 0
+        current_step = int(max(0, int(getattr(self, "global_step", 0))))
+        if current_step > 0:
+            # A partial/legacy checkpoint can restore model progress without a
+            # scheduler payload. Reconstruct the cosine phase only after the
+            # real dataloader length establishes the optimizer-step period.
+            self.scheduler.step(current_step)
+        self._scheduler_period_configured = True
+
+    def _reset_training_state_for_warm_start(self) -> None:
+        """Reset every stateful optimizer surface after loading weights only."""
+        self.epoch = 0
+        self.global_step = 0
+        self._reset_gradient_accumulation()
+        self.optimizer.state.clear()
+        for group in self.optimizer.param_groups:
+            base_lr = float(group.get("base_lr", getattr(self.config, "learning_rate", 1e-4)))
+            group["lr"] = base_lr
+            group["initial_lr"] = base_lr
+
+        self._estimated_total_steps = self._default_estimated_total_steps()
+        estimated_steps_per_epoch = max(
+            1,
+            int(
+                math.ceil(
+                    self._estimated_total_steps
+                    / float(max(1, int(getattr(self.config, "epochs", 1))))
+                )
+            ),
+        )
+        scheduler_t0 = int(max(1, int(getattr(self.config, "scheduler_t0", 1))))
+        if scheduler_t0 <= int(max(1, int(getattr(self.config, "epochs", 1)))):
+            scheduler_t0 *= estimated_steps_per_epoch
+        self.scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
+            self.optimizer,
+            T_0=max(1, scheduler_t0),
+            T_mult=int(max(1, int(getattr(self.config, "scheduler_t_mult", 1)))),
+            eta_min=float(max(0.0, float(getattr(self.config, "scheduler_eta_min", 0.0)))),
+        )
+        self._scheduler_state_restored = False
+        self._scheduler_period_configured = False
+        self._loaded_checkpoint_metrics = {}
+
+        scaler_enabled = (
+            bool(getattr(self.config, "use_amp", False))
+            and str(getattr(self.config, "amp_mixed_precision", "fp16")).strip().lower() == "fp16"
+            and torch.device(self.device).type == "cuda"
+        )
+        try:
+            self._grad_scaler = torch.amp.GradScaler("cuda", enabled=scaler_enabled)
+        except TypeError:  # Older PyTorch compatibility.
+            self._grad_scaler = torch.cuda.amp.GradScaler(enabled=scaler_enabled)
+        self._apply_lr_warmup(completed_steps=0)
 
     def _warmup_scale(self, warmup_epochs: int, completed_steps: int) -> float:
         if warmup_epochs <= 0:
@@ -2055,7 +2112,8 @@ class DiffusionTrainer:
             step_index,
         ) if bool(getattr(self.config, "logic_net_trainable", True)) else 1.0
         for group in self.optimizer.param_groups:
-            base_lr = float(group.get("base_lr", group.get("lr", self.config.learning_rate)))
+            configured_lr = float(getattr(self.config, "learning_rate", group.get("lr", 1e-4)))
+            base_lr = float(group.get("base_lr", group.get("lr", configured_lr)))
             scale = global_scale
             if group.get("name") == "logic_net":
                 scale = min(scale, logic_scale)
@@ -2156,6 +2214,25 @@ class DiffusionTrainer:
                     continue
                 seen.add(param_id)
                 param.grad.detach().div_(scale)
+
+    def _clip_joint_optimizer_gradients(self, max_norm: float) -> torch.Tensor:
+        """Clip the optimizer's full gradient vector with one global norm."""
+        parameters: List[torch.Tensor] = []
+        seen: Set[int] = set()
+        for group in self.optimizer.param_groups:
+            for parameter in group.get("params", []):
+                if not isinstance(parameter, torch.Tensor) or parameter.grad is None:
+                    continue
+                parameter_id = id(parameter)
+                if parameter_id in seen:
+                    continue
+                seen.add(parameter_id)
+                parameters.append(parameter)
+        if not parameters:
+            return torch.zeros((), device=self.device, dtype=torch.float32)
+        if self._accelerator is not None:
+            return self._accelerator.clip_grad_norm_(parameters, max_norm=float(max_norm))
+        return torch.nn.utils.clip_grad_norm_(parameters, max_norm=float(max_norm))
 
     def _puzzle_stage_semantic_loss(
         self,
@@ -2307,7 +2384,6 @@ class DiffusionTrainer:
             context=getattr(self, "distributed_context", None),
         )
         if not diffusion_loss_is_finite:
-            self._reset_gradient_accumulation()
             self._warn_nonfinite(
                 "diffusion_loss",
                 "Diffusion training: non-finite diffusion loss detected; skipping optimizer step for this batch.",
@@ -2444,7 +2520,6 @@ class DiffusionTrainer:
             context=getattr(self, "distributed_context", None),
         )
         if not total_loss_is_finite:
-            self._reset_gradient_accumulation()
             self._warn_nonfinite(
                 "total_loss",
                 "Diffusion training: non-finite total loss detected; skipping optimizer step for this batch.",
@@ -2529,35 +2604,8 @@ class DiffusionTrainer:
             return metrics
         grad_clip_norm = float(max(0.0, float(getattr(self.config, "grad_clip_norm", 1.0))))
         if grad_clip_norm > 0:
-            if self._accelerator is not None:
-                grad_norms = [
-                    self._accelerator.clip_grad_norm_(self.diffusion.parameters(), max_norm=grad_clip_norm),
-                    self._accelerator.clip_grad_norm_(self.condition_encoder.parameters(), max_norm=grad_clip_norm),
-                ]
-                if bool(getattr(self.config, "logic_net_trainable", True)):
-                    grad_norms.append(self._accelerator.clip_grad_norm_(self.logic_net.parameters(), max_norm=grad_clip_norm))
-                if getattr(self, "puzzle_stage_semantics_head", None) is not None:
-                    grad_norms.append(
-                        self._accelerator.clip_grad_norm_(
-                            self.puzzle_stage_semantics_head.parameters(),
-                            max_norm=grad_clip_norm,
-                        )
-                    )
-            else:
-                grad_norms = [
-                    torch.nn.utils.clip_grad_norm_(self.diffusion.parameters(), max_norm=grad_clip_norm),
-                    torch.nn.utils.clip_grad_norm_(self.condition_encoder.parameters(), max_norm=grad_clip_norm),
-                ]
-                if bool(getattr(self.config, "logic_net_trainable", True)):
-                    grad_norms.append(torch.nn.utils.clip_grad_norm_(self.logic_net.parameters(), max_norm=grad_clip_norm))
-                if getattr(self, "puzzle_stage_semantics_head", None) is not None:
-                    grad_norms.append(
-                        torch.nn.utils.clip_grad_norm_(
-                            self.puzzle_stage_semantics_head.parameters(),
-                            max_norm=grad_clip_norm,
-                        )
-                    )
-            if not all(self._tensor_is_finite(norm) for norm in grad_norms):
+            grad_norm = self._clip_joint_optimizer_gradients(grad_clip_norm)
+            if not self._tensor_is_finite(grad_norm):
                 self._amp_update_after_skipped_step()
                 self._reset_gradient_accumulation()
                 self._warn_nonfinite(
@@ -2645,7 +2693,6 @@ class DiffusionTrainer:
             context=getattr(self, "distributed_context", None),
         )
         if not dpo_loss_is_finite:
-            self._reset_gradient_accumulation()
             self._warn_nonfinite(
                 "dpo_loss",
                 "Diffusion-DPO: non-finite DPO loss detected; skipping optimizer step for this batch.",
@@ -2705,21 +2752,8 @@ class DiffusionTrainer:
             }
         grad_clip = float(getattr(self.config, "grad_clip_norm", 0.0))
         if grad_clip > 0:
-            if self._accelerator is not None:
-                grad_norms = [
-                    self._accelerator.clip_grad_norm_(self.diffusion.parameters(), grad_clip),
-                    self._accelerator.clip_grad_norm_(self.condition_encoder.parameters(), grad_clip),
-                ]
-                if bool(getattr(self.config, "logic_net_trainable", True)):
-                    grad_norms.append(self._accelerator.clip_grad_norm_(self.logic_net.parameters(), grad_clip))
-            else:
-                grad_norms = [
-                    torch.nn.utils.clip_grad_norm_(self.diffusion.parameters(), grad_clip),
-                    torch.nn.utils.clip_grad_norm_(self.condition_encoder.parameters(), grad_clip),
-                ]
-                if bool(getattr(self.config, "logic_net_trainable", True)):
-                    grad_norms.append(torch.nn.utils.clip_grad_norm_(self.logic_net.parameters(), grad_clip))
-            if not all(self._tensor_is_finite(norm) for norm in grad_norms):
+            grad_norm = self._clip_joint_optimizer_gradients(grad_clip)
+            if not self._tensor_is_finite(grad_norm):
                 self._amp_update_after_skipped_step()
                 self._reset_gradient_accumulation()
                 self._warn_nonfinite(
@@ -3181,7 +3215,13 @@ class DiffusionTrainer:
     def _extract_prefixed_safetensors_state(payload: Mapping[str, torch.Tensor], prefix: str) -> Dict[str, torch.Tensor]:
         return _checkpoint_io.extract_prefixed_safetensors_state(payload, prefix)
 
-    def save_checkpoint(self, path: str, metrics: Optional[Dict] = None, *, include_optimizer: bool = True):
+    def save_checkpoint(
+        self,
+        path: str,
+        metrics: Optional[Dict] = None,
+        *,
+        include_optimizer: bool = True,
+    ) -> None:
         """Save training or inference checkpoint."""
         _checkpoint_io.save_checkpoint(
             self,
@@ -3193,11 +3233,23 @@ class DiffusionTrainer:
             logger=logger,
         )
     
-    def load_checkpoint(self, path: str):
-        """Load training checkpoint."""
+    def load_checkpoint(self, path: str) -> Dict[str, Any]:
+        """Resume model, optimizer, scheduler, scaler, and progress atomically."""
         return _checkpoint_io.load_checkpoint(
             self,
             path,
+            restore_training_state=True,
+            has_safetensors=_HAS_SAFETENSORS,
+            load_safetensors=_load_safetensors,
+            logger=logger,
+        )
+
+    def warm_start_from_checkpoint(self, path: str) -> Dict[str, Any]:
+        """Load compatible model weights while resetting all training progress."""
+        return _checkpoint_io.load_checkpoint(
+            self,
+            path,
+            restore_training_state=False,
             has_safetensors=_HAS_SAFETENSORS,
             load_safetensors=_load_safetensors,
             logger=logger,
@@ -3373,10 +3425,28 @@ def train_diffusion(config: DiffusionTrainingConfig) -> DiffusionTrainer:
 
         checkpoint_dir = Path(config.checkpoint_dir)
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        warm_start_path = getattr(config, "warm_start_checkpoint", None)
+        if warm_start_path and getattr(config, "resume_checkpoint", None):
+            raise ValueError(
+                "resume_checkpoint and warm_start_checkpoint are mutually exclusive. "
+                "Resume restores optimizer/scheduler progress; warm start resets it."
+            )
+        if warm_start_path:
+            warm_start_path = str(Path(warm_start_path))
+            if not Path(warm_start_path).exists():
+                raise FileNotFoundError(
+                    f"Requested diffusion warm-start checkpoint does not exist: {warm_start_path}"
+                )
+            trainer.warm_start_from_checkpoint(warm_start_path)
+            logger.info("Warm-started diffusion model weights from %s", warm_start_path)
+
         resume_path = resolve_resume_checkpoint(
             explicit_path=getattr(config, "resume_checkpoint", None),
             checkpoint_dir=str(checkpoint_dir),
-            auto_resume=bool(getattr(config, "auto_resume", True)),
+            auto_resume=(
+                bool(getattr(config, "auto_resume", True))
+                and warm_start_path is None
+            ),
             latest_filename=LATEST_RESUME_FILENAME,
         )
         if resume_path is not None:
@@ -3407,11 +3477,19 @@ def train_diffusion(config: DiffusionTrainingConfig) -> DiffusionTrainer:
         best_teacher_loss = float("inf")
         metrics: Dict[str, float] = {}
         if resume_path is not None:
-            latest_ckpt = safe_torch_load(str(resume_path), map_location="cpu")
-            latest_metrics = latest_ckpt.get("metrics", {})
-            if isinstance(latest_metrics, dict):
-                best_solvability = float(latest_metrics.get("best_solvability", latest_metrics.get("val_solvability", 0.0)))
-                best_teacher_loss = float(latest_metrics.get("best_teacher_loss", latest_metrics.get("val_total_loss", float("inf"))))
+            latest_metrics = dict(getattr(trainer, "_loaded_checkpoint_metrics", {}) or {})
+            best_solvability = float(
+                latest_metrics.get(
+                    "best_solvability",
+                    latest_metrics.get("val_solvability", 0.0),
+                )
+            )
+            best_teacher_loss = float(
+                latest_metrics.get(
+                    "best_teacher_loss",
+                    latest_metrics.get("val_total_loss", float("inf")),
+                )
+            )
 
         for epoch in range(int(getattr(trainer, "epoch", 0)) + 1, config.epochs + 1):
             trainer.epoch = int(epoch)
@@ -3747,6 +3825,12 @@ def main():
     parser.add_argument('--checkpoint-storage-cleanup-enabled', action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument('--checkpoint-storage-cleanup-target-fraction', type=float, default=None)
     parser.add_argument('--resume', type=str, default=None)
+    parser.add_argument(
+        '--warm-start',
+        type=str,
+        default=None,
+        help='Load diffusion/conditioning weights only and reset all training progress.',
+    )
     parser.add_argument('--vqvae-checkpoint', type=str, default=None)
     parser.add_argument('--device', type=str, default=None)
     parser.add_argument('--seed', type=int, default=None)

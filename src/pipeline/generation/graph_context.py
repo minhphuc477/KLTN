@@ -34,7 +34,7 @@ from src.pipeline.room_topology_conditioning import (
     build_semantic_room_plan_trace,
     build_room_topology_condition_map,
 )
-from src.pipeline.spatial_utils import stable_node_sort_key
+from src.pipeline.spatial_utils import canonical_node_order, stable_node_sort_key
 from src.pipeline.types import RoomGenerationResult
 from src.utils.style_tokens import iter_style_metadata_candidates, resolve_style_token_id
 from src.zelda_data.vglc_utils import get_physical_start_node
@@ -77,19 +77,9 @@ def _prepare_graph_context(pipeline, graph: nx.Graph, use_tpe: bool = True) -> D
             'floor_labels_present': [],
         }
 
-    # Deterministic order is required so room_id -> node_idx stays stable.
-    if isinstance(graph, nx.DiGraph):
-        try:
-            node_order = list(
-                nx.lexicographical_topological_sort(
-                    graph,
-                    key=_stable_node_sort_key,
-                )
-            )
-        except nx.NetworkXUnfeasible:
-            node_order = sorted(graph.nodes(), key=_stable_node_sort_key)
-    else:
-        node_order = sorted(graph.nodes(), key=_stable_node_sort_key)
+    # Training checkpoints use stable-ID order. Keep inference identical even
+    # when that order differs from a DAG's topological order.
+    node_order = canonical_node_order(graph)
 
     node_to_idx = {node_id: idx for idx, node_id in enumerate(node_order)}
     num_nodes = len(node_order)
@@ -209,7 +199,7 @@ def _prepare_graph_context(pipeline, graph: nx.Graph, use_tpe: bool = True) -> D
     }
 
 
-def _get_neighbor_latents(
+def get_neighbor_latents(
     pipeline,
     room_id: int,
     graph: nx.Graph,
@@ -249,6 +239,16 @@ def _get_neighbor_latents(
             neighbor_dict[direction] = generated_latents[nid].to(pipeline.device)
 
     return neighbor_dict
+
+
+def _get_neighbor_latents(
+    pipeline,
+    room_id: int,
+    graph: nx.Graph,
+    generated_latents: Dict[int, torch.Tensor],
+) -> Dict[str, Optional[torch.Tensor]]:
+    """Compatibility wrapper for the former private helper name."""
+    return get_neighbor_latents(pipeline, room_id, graph, generated_latents)
 
 
 def _get_neighbor_reference_room_maps(
@@ -842,6 +842,12 @@ def _build_room_graph_context(
 def _edge_tokens_to_door_tile(pipeline, tokens: Set[str]) -> int:
     """Map edge-semantic tokens to a concrete door tile ID."""
     normalized = {str(t).strip().lower() for t in set(tokens)}
+    if {"hidden", "secret"} & normalized:
+        raise ValueError(
+            "Hidden/secret graph edges have no discovery-state tile representation. "
+            "Exclude them from final-map generation or implement an explicit "
+            "discovery mechanic before compilation."
+        )
     if {"boss_locked"} & normalized:
         return int(SEMANTIC_PALETTE["DOOR_BOSS"])
     if {"key_locked", "locked"} & normalized:

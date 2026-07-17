@@ -1,6 +1,6 @@
 # KLTN Documentation Index
 
-Last updated: 2026-07-02
+Last updated: 2026-07-13
 
 This is the canonical navigation page for `docs/`. Top-level files should be
 current references, executable protocols, or stable thesis/report materials.

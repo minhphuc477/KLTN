@@ -7,7 +7,7 @@ what stops it from generating layouts that violate your mission graph?"
 """
 
 import numpy as np
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from dataclasses import dataclass
 import logging
 
@@ -77,6 +77,16 @@ class GraphConstraintEnforcer:
         self.WALL_ID = tile_config['wall']
         self.FLOOR_ID = tile_config['floor']
         self.DOOR_ID = tile_config.get('door', 2)
+        base_tiles = {
+            'wall': int(self.WALL_ID),
+            'floor': int(self.FLOOR_ID),
+            'door': int(self.DOOR_ID),
+        }
+        if len(set(base_tiles.values())) != len(base_tiles):
+            raise ValueError(
+                'GraphConstraintEnforcer requires distinct wall, floor, and door tile IDs; '
+                f'got {base_tiles}'
+            )
         hazard_default = int(tile_config.get('element', SEMANTIC_PALETTE.get('ELEMENT', self.DOOR_ID)))
         self.DOOR_TILE_IDS = {
             'open': self.DOOR_ID,
@@ -89,6 +99,9 @@ class GraphConstraintEnforcer:
         }
         self.START_ID = tile_config.get('start')
         self.GOAL_ID = tile_config.get('goal')
+        self.allow_implicit_open_adjacency = bool(
+            tile_config.get('allow_implicit_open_adjacency', False)
+        )
     
     def enforce_graph_constraints(
         self,
@@ -162,17 +175,44 @@ class GraphConstraintEnforcer:
     ) -> Dict[int, Dict[str, Any]]:
         """Get neighbor IDs and edge semantics from the mission graph."""
         neighbors: Dict[int, Dict[str, Any]] = {}
+        raw_edges = list(mission_graph.get('edges', []) or [])
+        declared_pairs = {
+            frozenset((edge[0], edge[1]))
+            for edge in raw_edges
+            if isinstance(edge, (list, tuple)) and len(edge) >= 2
+        }
         
         # Check adjacency dict (format: {node_id: {direction: neighbor_id}})
         if 'adjacency' in mission_graph:
             adjacency = mission_graph['adjacency']
             if node_id in adjacency:
-                for neighbor_id in adjacency[node_id].values():
-                    neighbors.setdefault(neighbor_id, {})
+                raw_neighbors = adjacency[node_id]
+                neighbor_ids = (
+                    raw_neighbors.values()
+                    if isinstance(raw_neighbors, dict)
+                    else raw_neighbors
+                )
+                for neighbor_id in neighbor_ids:
+                    if frozenset((node_id, neighbor_id)) not in declared_pairs:
+                        if not self.allow_implicit_open_adjacency:
+                            raise ValueError(
+                                "Adjacency-only connection is missing canonical edge metadata: "
+                                f"{node_id}->{neighbor_id}. Supply an edges record with edge_type, "
+                                "or explicitly enable allow_implicit_open_adjacency for legacy data."
+                            )
+                        logger.warning(
+                            "Treating legacy adjacency-only connection %s->%s as open.",
+                            node_id,
+                            neighbor_id,
+                        )
+                        neighbors.setdefault(
+                            neighbor_id,
+                            {'edge_type': 'open', '_spatial_gate_here': True},
+                        )
         
         # Also check edges list (format: [(src, dst), ...])
-        if 'edges' in mission_graph:
-            for edge in mission_graph['edges']:
+        if raw_edges:
+            for edge in raw_edges:
                 if len(edge) >= 2:
                     src, dst = edge[0], edge[1]
                     edge_data = dict(edge[2]) if len(edge) >= 3 and isinstance(edge[2], dict) else {}
@@ -180,7 +220,12 @@ class GraphConstraintEnforcer:
                     edge_type = str(getattr(raw_type, 'name', raw_type) or 'open').strip().lower()
                     if edge_type.startswith('edgetype.'):
                         edge_type = edge_type.split('.', 1)[1]
-                    if edge_type in {'visual_link', 'window'}:
+                    # These links are intentionally not represented as normal
+                    # doorway tiles. A secret passage needs discovery-state
+                    # mechanics and a window is visual-only; creating an open
+                    # door or raising midway through enforcement corrupts the
+                    # graph-to-grid contract either way.
+                    if edge_type in {'visual_link', 'window', 'hidden', 'secret'}:
                         continue
                     metadata = edge_data.get('metadata', {})
                     implied_reverse = bool(
@@ -208,8 +253,12 @@ class GraphConstraintEnforcer:
         if edge_type.startswith('edgetype.'):
             edge_type = edge_type.split('.', 1)[1]
 
-        if edge_type in {'open', 'path', 'shortcut', 'hidden', ''}:
+        if edge_type in {'open', 'path', 'shortcut', ''}:
             return int(self.DOOR_TILE_IDS['open'])
+        if edge_type in {'hidden', 'secret'}:
+            raise ValueError(
+                'Hidden/secret graph edges have no discovery-state tile representation'
+            )
         if edge_type in {'locked', 'key_locked', 'k'}:
             return int(self.DOOR_TILE_IDS['locked'])
         if edge_type in {'bombable', 'bomb', 'b'}:
@@ -297,7 +346,19 @@ class GraphConstraintEnforcer:
                 distance = abs(x - center_x) + abs(y - center_y)
                 candidates.append((distance, y, x))
         if not candidates:
-            raise ValueError(f"Room {boundary.node_id!r} has no floor tile for its START/GOAL anchor")
+            # A generated all-wall room cannot carry a required START/GOAL
+            # contract. Carve the smallest deterministic interior foothold so
+            # the subsequent validator sees a real anchor instead of an
+            # uncaught enforcement failure. Door carving has already occurred;
+            # this does not replace any topology edge.
+            y = max(boundary.y_min + 1, min(boundary.y_max - 1, center_y))
+            x = max(boundary.x_min + 1, min(boundary.x_max - 1, center_x))
+            if not (boundary.y_min < y < boundary.y_max and boundary.x_min < x < boundary.x_max):
+                raise ValueError(
+                    f"Room {boundary.node_id!r} has no interior cell for its START/GOAL anchor"
+                )
+            grid[y, x] = int(self.FLOOR_ID)
+            candidates.append((0, y, x))
         _, y, x = min(candidates)
         grid[y, x] = int(anchor_id)
         return grid
@@ -405,8 +466,16 @@ def verify_topology_match(
     Returns:
         True if topology matches, False otherwise
     """
+    wall_id = int(tile_config['wall'])
+    floor_id = int(tile_config['floor'])
+    door_id = int(tile_config.get('door', 2))
+    if len({wall_id, floor_id, door_id}) != 3:
+        raise ValueError(
+            'verify_topology_match requires distinct wall, floor, and door tile IDs; '
+            f'got wall={wall_id}, floor={floor_id}, door={door_id}'
+        )
     door_ids = {
-        int(tile_config.get('door', 2)),
+        door_id,
         int(tile_config.get('door_locked', tile_config.get('door', 2))),
         int(tile_config.get('door_bomb', tile_config.get('door', 2))),
         int(tile_config.get('door_puzzle', tile_config.get('door', 2))),
@@ -482,7 +551,7 @@ def _find_room_at_position(
     x: int, 
     y: int, 
     layout_map: Dict[int, Tuple[int, int, int, int]]
-) -> int:
+) -> Optional[int]:
     """Find which room contains the given position."""
     for node_id, (x_min, y_min, x_max, y_max) in layout_map.items():
         if x_min <= x <= x_max and y_min <= y <= y_max:

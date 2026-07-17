@@ -1779,3 +1779,156 @@ claims: 85 graph-to-tile/advanced-pipeline tests and 207
 puzzle-semantics/MaskGIT/neural-pipeline/config/ablation tests passed. A
 five-seed 20-room generation probe also produced certified graphs in 1-5
 attempts, and every accepted graph passed the complete validation contract.
+
+### Progression And Graph-To-Tile Contract Follow-up (2026-07-13)
+
+- `MissionGrammar.validate_progression_constraints()` now uses a compact
+  resource-state search in addition to local provider diagnostics. It spends
+  each small key when opening a `LOCKED` edge, including named small keys, and
+  keeps boss keys persistent. This rejects both repeated fungible-key use and
+  repeated named-key use while retaining staged `key -> lock -> key -> lock`
+  progression. The canonical external validator remains the broader oracle.
+- The advanced pipeline had been dropping graph route-replay evidence when it
+  translated `ExternalValidator` results. The report now retains
+  `route_replay_status` and `route_replay_error`, so a graph-certified result
+  can satisfy the end-to-end contract only with an actual replay certificate.
+- Canonical and advanced generation now share one stitched graph-to-room
+  validation context. The advanced path retains the authoritative
+  `StitchedRoomLayout`, passes graph/mapping data into the final
+  `ZeldaValidator`, and fails closed when a graph-solvable artifact cannot be
+  validated against that mapping. The end-to-end report exposes this as
+  `graph_tile_semantics`; a known missing mapping is a hard failure rather than
+  a silent tile-only validation.
+- The default canonical end-to-end mode is now `reject`. `report` and `off`
+  remain explicit diagnostic modes, but returned production artifacts no longer
+  default to accepting failed or indeterminate hard validation stages.
+- The topology-preserving room fallback now applies its puzzle scaffold before
+  restoring graph-owned markers. This prevents the scaffold's floor pocket from
+  erasing a required `PUZZLE`, key, or item trigger. Final boundary enforcement
+  still owns all door tiles after that restoration.
+- `HIDDEN`/secret graph edges are no longer advertised as spatially compilable.
+  The final-map rule space excludes `AddSecret`, and both graph-to-room compilers
+  reject hidden edges rather than flattening them into ordinary open doors. A
+  secret-passage mechanic remains a graph-only/full-rule experiment until the
+  tile vocabulary and validator implement discovery state explicitly.
+
+Scientific boundary: the shared mapping closes an important representation
+gap, but it does not prove that two independently valid paths have identical
+style or player experience. The guarantee is limited to the encoded graph
+mechanics, stitched connection records, and replayed tile-state route. This is
+consistent with the distinction between local level constraints and global
+playability in [Horswill and Foged (2012)](https://cdn.aaai.org/ojs/12428/12428-52-15956-1-2-20201228.pdf)
+and with the designer-constraint framing in
+[Linden et al. (2013)](https://ojs.aaai.org/index.php/AIIDE/article/view/12592).
+
+Focused verification: `74` grammar, advanced-pipeline, and end-to-end contract
+tests passed, plus the exact-oracle neural-pipeline test. A broader neural
+pipeline file run exceeded a two-minute timeout and is intentionally not
+reported as passing.
+
+### Critical Cross-Component Verification (2026-07-17)
+
+The latest critical ledger was checked against live source rather than accepted
+as a patch list. Confirmed defects were fixed across four ownership boundaries:
+
+- Masked-room graph normalization now moves tensor and non-tensor node features
+  to the trainer device unconditionally.
+- Big-room merging accepts legacy 2D positions, normalizes them to the canonical
+  3D coordinate contract, and refuses cross-floor merges.
+- Entangled branch gates populate both the singular and collection switch
+  metadata used by current and compatibility validators.
+- Resource farms remain reachable pre-gate spurs. They no longer add a
+  bidirectional farm-to-START shortcut that bypasses intervening progression.
+- Graph constraint enforcement rejects colliding wall/floor/door IDs instead of
+  interpreting ordinary floor as a door.
+- Non-adjacent room connections are atomic: failed A* and fallback routing no
+  longer leave endpoint doors carved into disconnected rooms.
+- Advanced room generation now shares the canonical directional-neighbor
+  resolver for both standard and large rooms.
+- Local conditioning explicitly broadcasts singleton neighbor and boundary
+  context, rejects incompatible batches, and normalizes inputs onto the module
+  device and dtype.
+- LogicNet now rejects locked graphs without explicit provider-to-lock metadata.
+  The former constant penalty could report an error but could not provide a
+  useful gradient for learning the missing discrete assignment.
+
+Several reported critical issues were stale in the current tree: production
+LogicNet uses complete Bellman coverage, the learned grid pathfinder masks the
+source distance to zero, empty visibility sets are guarded, disconnected graph
+normalization fails before relabeling, and the shared progression planner spends
+fungible and named small keys. These paths were left intact.
+
+Scientific boundary: a differentiable shortest-path relaxation can learn costs
+or routing over a specified graph, but it cannot recover an absent causal
+key-to-lock assignment without additional supervision. The implementation now
+keeps that distinction explicit. This is consistent with algorithm-aligned
+Bellman-Ford message passing in
+[Zhu et al. (2021)](https://arxiv.org/abs/2106.06935), differentiable perturbed
+optimizers for specified combinatorial problems in
+[Berthet et al. (2020)](https://proceedings.neurips.cc/paper_files/paper/2020/hash/6bb56208f672af0dd65451f869fedfd9-Abstract.html),
+and explicit key/lock relationships in the
+[PCG Book grammar chapter](https://www.pcgbook.com/chapter05.pdf).
+
+Verification: `227` focused LogicNet, conditioning, MaskGIT, grammar,
+stitching, and advanced-pipeline tests passed. This count excludes unrelated
+tests and is not presented as whole-repository certification.
+
+### Timeout Isolation And Final-Artifact Contract Follow-up (2026-07-17)
+
+- Timed robust-pipeline blocks now run in disposable spawned processes. A hard
+  timeout terminates and joins the worker before returning, so late work cannot
+  mutate parent pipeline state after a failed attempt. Executor and state
+  serialization failures are explicit non-retryable contract errors.
+- Graph transition discovery now previews the authoritative state transition
+  instead of using edge-type-only permission checks. This preserves consumed
+  resources, already-opened graph edges, one-way constraints, and room
+  coordinates containing zero without inventing a separate traversal policy.
+- Routed room corridors are accepted only when both the route and its wall
+  envelope avoid unrelated occupied cells. Endpoint doors are committed only
+  after a route succeeds, preserving atomic stitching on failure.
+- Local WFC repair can preserve graph-owned doors, stairs, START, and GOAL
+  markers, but cannot invent new instances of them. This closes a graph-to-tile
+  drift path in which a locally consistent repaired room could violate the
+  global mission topology.
+- Neural integration tests now use a compact real condition encoder and U-Net
+  with the production 64-channel latent contract. Random uncheckpointed models
+  are evaluated in report mode for orchestration tests and are never presented
+  as certified generators. Strict symbolic assembly remains fail-closed.
+
+Verification for this follow-up: `120` timeout, stitching, transition, and
+symbolic-repair tests passed; all `45` neural-pipeline integration tests passed;
+and `237` broader grammar, end-to-end, evolutionary, LogicNet, diffusion
+conditioning, and staged-puzzle tests passed. The earlier two-minute neural
+suite timeout was traced to repeated production-size model construction in the
+test process, not a per-inference retention leak; repeated inference memory was
+stable, and the compact real-model fixture removes that test-only failure mode.
+
+### Resume And Staged-Puzzle Provenance Follow-up (2026-07-17)
+
+- Diffusion checkpoint loading now distinguishes a stateful resume from a
+  weights-only warm start. A stateful resume requires optimizer, scheduler,
+  scaler, and auxiliary staged-puzzle-head state; a weights-only source resets
+  training progress rather than silently mixing incompatible optimizer state.
+- Puzzle-stage conditioning is now source-specific for diffusion and MaskGIT.
+  The runtime applies the same stage-control ordering used during training, and
+  a teacher fallback recomputes its condition for the teacher rather than
+  reusing incompatible MaskGIT tokens.
+- Checkpoint loading retains separate frozen puzzle-semantic heads for the two
+  generators. Room metrics identify the scoring head source and report neural
+  predictions before structural enforcement as well as after enforcement.
+- Dungeon results now aggregate raw and constrained stage-semantic confidence,
+  their delta, and scoring coverage. This prevents a symbolic repair from being
+  reported as a neural-model gain in an ablation table.
+- Hidden/secret graph edges are ignored by door placement, all-wall START/GOAL
+  rooms receive a deterministic interior foothold before anchoring, and an
+  empty cognitive visibility set reports zero uncertainty instead of failing.
+- The example robust pipeline uses the semantic palette rather than inverted
+  numeric tile assumptions. The generic quick-start path no longer injects
+  arbitrary room IDs into a normalized graph.
+
+Verification: `251` focused configuration, training-conditioning, checkpoint,
+room-generation, grammar, stitching, advanced-pipeline, and end-to-end tests
+passed. `py_compile` passed for the touched source modules and `git diff --check`
+reported no whitespace errors (only existing CRLF conversion warnings). This is
+targeted evidence, not a claim that every experiment, checkpoint, or the full
+repository test suite has been executed.
