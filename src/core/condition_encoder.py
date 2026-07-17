@@ -808,17 +808,20 @@ class GlobalStreamEncoder(nn.Module):
         )
 
     def _align_projected_edge_attr(self, edge_attr: Tensor, *, feature_name: str) -> Tensor:
-        """Align projected edge attributes to the GNN edge hidden width."""
+        """Align an internal edge projection to the GNN hidden width.
+
+        This is an internal module boundary, not an input-schema boundary.  A
+        checkpoint migration or a replacement projection can legitimately
+        produce a different width, and rejecting it under ``strict_schema``
+        turns a recoverable model-internal mismatch into a data-contract error.
+        Raw graph feature widths remain strict in ``_prepare_*`` methods.
+        """
         if edge_attr.dim() != 2:
             raise ValueError(f"{feature_name} must be [E,D], got {tuple(edge_attr.shape)}.")
         expected_dim = int(self.hidden_dim)
         current_dim = int(edge_attr.shape[1])
         if current_dim == expected_dim:
             return edge_attr
-        if self.strict_schema:
-            raise ConditioningSchemaError(
-                f"{feature_name} projected width {current_dim} does not match hidden_dim={expected_dim}."
-            )
         self._warn_once(
             f"{feature_name}_projected_width:{current_dim}->{expected_dim}",
             (
@@ -826,10 +829,19 @@ class GlobalStreamEncoder(nn.Module):
                 "Aligning width instead of dropping edge-conditioning signal."
             ),
         )
-        return self._align_feature_dim(
-            edge_attr,
-            expected_dim=expected_dim,
-            feature_name=feature_name,
+        if current_dim > expected_dim:
+            return edge_attr[:, :expected_dim]
+        return torch.cat(
+            [
+                edge_attr,
+                torch.zeros(
+                    edge_attr.shape[0],
+                    expected_dim - current_dim,
+                    device=edge_attr.device,
+                    dtype=edge_attr.dtype,
+                ),
+            ],
+            dim=-1,
         )
 
     def _prepare_tpe(
@@ -889,6 +901,12 @@ class GlobalStreamEncoder(nn.Module):
 
         num_edges = int(edge_index.shape[1]) if edge_index.dim() == 2 and edge_index.shape[0] == 2 else 0
         expected_dim = int(GRAPH_TPE_DIM)
+        # RRWP is optional. Data loaders use an empty [0, D] tensor when the
+        # feature is unavailable, which is semantically distinct from a
+        # nonempty tensor with the wrong edge alignment. Do not pad invented
+        # positional encodings into a graph that did not provide them.
+        if int(tensor.shape[0]) == 0 and num_edges > 0:
+            return None
         if int(tensor.shape[0]) != num_edges or int(tensor.shape[1]) != expected_dim:
             if self.strict_schema:
                 raise ConditioningSchemaError(
@@ -1550,7 +1568,15 @@ class CrossAttentionFusion(nn.Module):
             if valid_mask is not None:
                 expanded_mask = valid_mask.unsqueeze(1).unsqueeze(2).to(dtype=attn_weights.dtype)
                 attn_weights = attn_weights * expanded_mask
-                attn_weights = attn_weights / attn_weights.sum(dim=-1, keepdim=True).clamp_min(1e-8)
+                # Do not manufacture a tiny denominator for fully masked rows.
+                # Their attention output is defined as zero, matching the SDPA
+                # branch and avoiding a precision-dependent normalization.
+                weight_sum = attn_weights.sum(dim=-1, keepdim=True)
+                attn_weights = torch.where(
+                    weight_sum > 0,
+                    attn_weights / weight_sum,
+                    torch.zeros_like(attn_weights),
+                )
             attn_weights = self.dropout(attn_weights)
             attn_output = torch.matmul(attn_weights, V)  # [B, H, 1, D]
 

@@ -1505,6 +1505,27 @@ def test_cross_attention_fusion_all_masked_context_is_finite():
     assert torch.isfinite(global_tokens.grad).all()
 
 
+def test_cross_attention_fusion_manual_fallback_zeros_all_masked_rows():
+    import src.core.condition_encoder as condition_encoder
+    from src.core.condition_encoder import CrossAttentionFusion
+
+    module = CrossAttentionFusion(local_dim=4, global_dim=4, output_dim=8, num_heads=2, dropout=0.0)
+    local = torch.randn(2, 4, requires_grad=True)
+    global_tokens = torch.randn(2, 3, 4, requires_grad=True)
+    mask = torch.zeros(2, 3, dtype=torch.bool)
+    original_has_sdpa = condition_encoder.HAS_SDPA
+    try:
+        condition_encoder.HAS_SDPA = False
+        output = module(local, global_tokens, mask=mask)
+        output.square().mean().backward()
+    finally:
+        condition_encoder.HAS_SDPA = original_has_sdpa
+
+    assert torch.isfinite(output).all()
+    assert torch.isfinite(local.grad).all()
+    assert torch.isfinite(global_tokens.grad).all()
+
+
 def test_cross_attention_fusion_sdpa_matches_manual_fallback():
     import src.core.condition_encoder as condition_encoder
     from src.core.condition_encoder import CrossAttentionFusion
