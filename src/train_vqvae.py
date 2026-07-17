@@ -931,65 +931,6 @@ def train_vqvae(args):
             checkpoint_dir=save_dir,
             label="Saved latest VQ-VAE resume checkpoint",
         )
-        if (epoch + 1) % args.save_every == 0:
-            periodic = save_dir / f"vqvae_resume_epoch{epoch+1:04d}.pth"
-            atomic_torch_save(resume_payload, str(periodic))
-            write_checkpoint_metadata(
-                str(periodic),
-                model_type=checkpoint_resume_type,
-                architecture={
-                    "architecture": str(architecture_name),
-                    "num_classes": int(num_classes),
-                    "latent_dim": int(args.latent_dim),
-                    "hidden_dim": int(getattr(args, "hidden_dim", 128)),
-                    "codebook_size": int(args.codebook_size),
-                    "top_codebook_size": (
-                        None if getattr(args, "top_codebook_size", None) is None else int(args.top_codebook_size)
-                    ),
-                    "top_latent_dim": (
-                        None if getattr(args, "top_latent_dim", None) is None else int(args.top_latent_dim)
-                    ),
-                    "use_codebook": bool(use_codebook),
-                    "commitment_cost": float(getattr(args, "commitment_cost", 0.25)),
-                    "rare_tile_weight": float(getattr(args, "rare_tile_weight", 5.0)),
-                    "use_ema": bool(getattr(args, "use_ema", True)),
-                    "use_coordconv": bool(args.use_coordconv),
-                    "mrf_penalty_weight": float(args.mrf_penalty_weight),
-                    "num_res_blocks": 2,
-                    "encoder_channel_mult": [1, 2, 4],
-                    "decoder_channel_mult": [4, 2, 1],
-                    "dead_code_reset_interval": int(args.dead_code_reset_interval),
-                    "dead_code_threshold": float(args.dead_code_threshold),
-                    "dead_code_warmup_steps": int(args.dead_code_warmup_steps),
-                    "protect_active_codes_during_reset": bool(args.protect_active_codes_during_reset),
-                    "max_dead_code_resets_per_event": int(args.max_dead_code_resets_per_event),
-                    "room_level": bool(room_level),
-                },
-                extra={
-                    "epoch": int(epoch + 1),
-                    "loss": float(epoch_metrics["loss"]),
-                    "checkpoint_kind": "retained_resume",
-                    "best_epoch": "" if best_epoch is None else int(best_epoch),
-                    "epoch_to_best": "" if best_epoch is None else int(max(0, int(best_epoch) - int(start_epoch))),
-                    "wall_time_sec": float(epoch_metrics["wall_time_sec"]),
-                    "epoch_runtime_sec": float(epoch_metrics["epoch_runtime_sec"]),
-                    "eval_split": eval_split_name,
-                    "best_metric_name": str(best_metric_name),
-                    "best_metric_value": float(best_metric_value),
-                    **{key: value for key, value in epoch_metrics.items() if key.startswith("val_") or key.startswith("train_eval_") or key.startswith("codebook_") or key.startswith("ema_") or key.startswith("top_codebook_") or key.startswith("bottom_codebook_") or key.startswith("top_ema_") or key.startswith("bottom_ema_")},
-                },
-            )
-            log_checkpoint_artifact(
-                logger,
-                periodic,
-                checkpoint_dir=save_dir,
-                label="Saved retained VQ-VAE resume checkpoint",
-            )
-            prune_checkpoints(
-                checkpoint_dir=str(save_dir),
-                pattern="vqvae_resume_epoch*.pth",
-                keep_last=int(getattr(args, "keep_last", 2)),
-            )
         enforce_checkpoint_storage_budget(
             logger,
             checkpoint_dir=save_dir,

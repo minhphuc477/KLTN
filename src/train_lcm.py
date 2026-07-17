@@ -1402,13 +1402,6 @@ def train_fast_sampler(config: FastSamplerTrainingConfig) -> ConsistencyLoRATrai
             val_metrics["val_topology_decode_ce_loss"],
         )
 
-        if (epoch + 1) % config.save_every == 0:
-            trainer.save_resume_checkpoint(str(checkpoint_dir / f"fast_sampler_resume_epoch_{epoch+1:04d}.pth"), metrics)
-            prune_checkpoints(
-                checkpoint_dir=str(checkpoint_dir),
-                pattern="fast_sampler_resume_epoch_*.pth",
-                keep_last=int(getattr(config, "keep_last", 2)),
-            )
         if best_metric_name == "val_topology_decode_ce_loss":
             current_metric_value = float(val_metrics["val_topology_decode_ce_loss"])
         elif best_metric_name == "val_decode_ce_loss":

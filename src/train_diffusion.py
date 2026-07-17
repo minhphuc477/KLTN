@@ -3523,18 +3523,6 @@ def train_diffusion(config: DiffusionTrainingConfig) -> DiffusionTrainer:
                     f"logic_loss_{'enabled' if epoch >= config.warmup_epochs and config.alpha_logic > 0 else 'disabled'}"
                 )
 
-                if epoch % config.save_every == 0:
-                    trainer.save_checkpoint(
-                        str(checkpoint_dir / f"resume_epoch_{epoch:04d}.pth"),
-                        metrics,
-                        include_optimizer=True,
-                    )
-                    prune_checkpoints(
-                        checkpoint_dir=str(checkpoint_dir),
-                        pattern="resume_epoch_*.pth",
-                        keep_last=int(getattr(config, "keep_last", 2)),
-                    )
-
                 current_teacher_loss = float(val_metrics.get("val_total_loss", float("inf")))
                 current_solvability = float(val_metrics['val_solvability'])
                 is_better_teacher = (

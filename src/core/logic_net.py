@@ -975,7 +975,11 @@ class LearnableGridPathfinder(nn.Module):
             q_values = self.transition(torch.cat([reward, value], dim=1))
             updated = soft_max(q_values, dim=1, temperature=max(self.temperature, 1e-4)).unsqueeze(1)
             value = torch.maximum(value, reward + updated)
-            value = value * (1.0 - source)
+            # NOTE: Do NOT zero the source cell here. The large source reward
+            # drives value to its maximum at the source through the max() update.
+            # Per-step zeroing would reset the source to 0 every iteration,
+            # reporting maximum distance (distance_scale) at the start cell.
+            # The output already zeroes source via: `distances * (1.0 - source)`.
 
         value = value - value.amin(dim=(2, 3), keepdim=True)
         value = value / value.amax(dim=(2, 3), keepdim=True).clamp_min(1e-6)

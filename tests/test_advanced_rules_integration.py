@@ -713,6 +713,12 @@ class TestAdvancedRulesIntegration:
         graph.sanitize()
 
         assert not grammar.validate_progression_constraints(graph, log_failures=False)
+        assert grammar._progression_reachable_nodes(
+            graph,
+            0,
+            exclude_nodes=set(),
+            exclude_edges=set(),
+        ) == {0, 1, 2}
 
     def test_fungible_key_search_accepts_new_key_behind_first_lock(self):
         """The progression planner must allow a valid staged key economy."""

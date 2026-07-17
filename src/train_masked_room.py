@@ -1998,17 +1998,6 @@ def train_masked_room(config: MaskedRoomTrainingConfig) -> MaskedRoomTrainer:
             float(epoch_metrics.get("val_loss", float("nan"))),
             float(epoch_metrics.get("val_topology_focus_loss", float("nan"))),
         )
-        if (epoch + 1) % config.save_every == 0:
-            trainer.save_checkpoint(
-                str(checkpoint_dir / f"masked_room_resume_epoch_{epoch + 1:04d}.pth"),
-                epoch_metrics,
-                include_optimizer=True,
-            )
-            prune_checkpoints(
-                checkpoint_dir=str(checkpoint_dir),
-                pattern="masked_room_resume_epoch_*.pth",
-                keep_last=int(getattr(config, "keep_last", 2)),
-            )
         metric_key = {
             "val_topology_focus_loss": "val_topology_focus_loss",
             "val_puzzle_stage_semantic_loss": "val_puzzle_stage_semantic_loss",

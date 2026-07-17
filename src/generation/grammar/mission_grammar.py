@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import random
+import copy
 from collections import defaultdict, deque
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -1397,80 +1398,40 @@ class MissionGrammar:
         exclude_nodes: Set[int],
         exclude_edges: Set[Tuple[int, int]],
     ) -> Set[int]:
-        """Return nodes reachable without passing unresolved progression gates."""
+        """Return resource-feasible nodes after removing requested graph parts.
+
+        This helper is used by rule repair to ask questions such as "can a
+        provider be reached before this gate?"  A monotonic closure is not
+        sufficient for that question because it implicitly reuses fungible
+        small keys after every expansion.  Run the same stateful planner that
+        certifies final progression on a filtered graph instead.
+        """
         if start in exclude_nodes or start not in graph.nodes:
             return set()
 
-        reachable: Set[int] = {start}
-        changed = True
-
-        def _available_resources() -> Tuple[Set[int], Set[str], int, int]:
-            key_ids: Set[int] = set()
-            items: Set[str] = set()
-            small_keys = 0
-            tokens = 0
-            for node_id in reachable:
-                node = graph.nodes.get(node_id)
-                if node is None:
-                    continue
-                if node.node_type in {NodeType.KEY, NodeType.BIG_KEY} and node.key_id is not None:
-                    key_ids.add(int(node.key_id))
-                if node.node_type == NodeType.KEY:
-                    small_keys += 1
-                if node.node_type in {NodeType.ITEM, NodeType.PROTECTION_ITEM} and node.item_type:
-                    items.add(str(node.item_type))
-                if node.node_type == NodeType.RESOURCE_FARM and node.drops_resource:
-                    items.add(str(node.drops_resource))
-                if node.node_type == NodeType.TOKEN:
-                    tokens += 1
-            return key_ids, items, small_keys, tokens
-
-        def _node_gate_open(node_id: int, key_ids: Set[int]) -> bool:
-            node = graph.nodes.get(node_id)
-            if node is None:
-                return False
-            if node.node_type in {NodeType.LOCK, NodeType.BOSS_DOOR}:
-                return node.key_id is not None and int(node.key_id) in key_ids
-            return True
-
-        def _edge_gate_open(edge: Any, key_ids: Set[int], items: Set[str], small_keys: int, tokens: int) -> bool:
-            if edge.edge_type in {EdgeType.LOCKED, EdgeType.BOSS_LOCKED}:
-                if edge.key_required is not None and int(edge.key_required) not in key_ids:
-                    return False
-
-            if edge.edge_type == EdgeType.HAZARD:
-                required_item = str(edge.protection_item_id or "").strip()
-                if not required_item or required_item not in items:
-                    return False
-            if edge.requires_key_count > 0 and small_keys < int(edge.requires_key_count):
-                return False
-            if edge.edge_type == EdgeType.ITEM_GATE and edge.item_required and str(edge.item_required) not in items:
-                return False
-            if edge.edge_type == EdgeType.MULTI_LOCK and edge.token_count > 0 and tokens < int(edge.token_count):
-                return False
-            if edge.edge_type == EdgeType.STATE_BLOCK and edge.switches_required:
-                if not set(edge.switches_required).issubset(reachable):
-                    return False
-            return True
-
-        while changed:
-            changed = False
-            key_ids, items, small_keys, tokens = _available_resources()
-            for edge in graph.edges:
-                if (edge.source, edge.target) in exclude_edges:
-                    continue
-                if edge.edge_type in graph.NON_TRAVERSABLE_EDGE_TYPES:
-                    continue
-                if edge.source not in reachable or edge.target in reachable or edge.target in exclude_nodes:
-                    continue
-                if not _node_gate_open(edge.target, key_ids):
-                    continue
-                if not _edge_gate_open(edge, key_ids, items, small_keys, tokens):
-                    continue
-                reachable.add(edge.target)
-                changed = True
-
-        return reachable
+        filtered = copy.deepcopy(graph)
+        excluded_nodes = {int(node_id) for node_id in exclude_nodes}
+        excluded_edges = {
+            (int(source), int(target))
+            for source, target in exclude_edges
+        }
+        for node_id in excluded_nodes:
+            filtered.nodes.pop(node_id, None)
+        filtered.edges = [
+            edge
+            for edge in filtered.edges
+            if edge.source not in excluded_nodes
+            and edge.target not in excluded_nodes
+            and (edge.source, edge.target) not in excluded_edges
+        ]
+        filtered.sanitize()
+        result = solve_mission_progression(filtered, int(start))
+        if result.exhausted:
+            # The shared planner only exhausts when a caller explicitly opts
+            # into a state budget. This helper requests exact certification;
+            # fail closed should that contract ever change.
+            return set()
+        return set(result.reachable_nodes)
     
     def _fix_lock_key_ordering(self, graph: MissionGraph) -> MissionGraph:
         """

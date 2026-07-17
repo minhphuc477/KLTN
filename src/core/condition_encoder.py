@@ -1539,9 +1539,6 @@ class CrossAttentionFusion(nn.Module):
                 attn_mask=attn_mask,
                 dropout_p=self.dropout.p if self.training else 0.0,
             )
-            if has_valid_context is not None and not torch.all(has_valid_context):
-                attn_output = attn_output.clone()
-                attn_output[~has_valid_context] = 0.0
         else:
             # Compatibility fallback for older PyTorch versions without fused SDPA.
             scale = math.sqrt(self.head_dim)
@@ -1556,6 +1553,10 @@ class CrossAttentionFusion(nn.Module):
                 attn_weights = attn_weights / attn_weights.sum(dim=-1, keepdim=True).clamp_min(1e-8)
             attn_weights = self.dropout(attn_weights)
             attn_output = torch.matmul(attn_weights, V)  # [B, H, 1, D]
+
+        if has_valid_context is not None and not torch.all(has_valid_context):
+            attn_output = attn_output.clone()
+            attn_output[~has_valid_context] = 0.0
         
         # Reshape and project
         attn_output = attn_output.transpose(1, 2).contiguous().view(B, 1, self.output_dim)

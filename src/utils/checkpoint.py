@@ -1,4 +1,4 @@
-﻿"""
+"""
 Checkpoint Management for KLTN Training
 =======================================
 
@@ -460,25 +460,15 @@ class CheckpointManager:
         if extra_state is not None:
             checkpoint['extra_state'] = extra_state
         
-        # Determine filename
-        if filename is None:
-            filename = f"checkpoint_epoch_{epoch:04d}.pth"
+        # Always update rolling latest checkpoint (progress epoch save)
+        latest_path = self.save_dir / "checkpoint_latest.pth"
+        atomic_torch_save(checkpoint, str(latest_path))
+        logger.info(f"Updated latest progress checkpoint at {latest_path}")
         
-        filepath = self.save_dir / filename
-        
-        # Save checkpoint atomically so interrupted writes do not corrupt the
-        # target path that future resume/evaluation jobs expect to load.
-        atomic_torch_save(checkpoint, str(filepath))
-        logger.info(f"Saved checkpoint to {filepath}")
-        
-        # Update history and rotate old checkpoints
-        self.checkpoint_history.append(filepath)
-        self._rotate_checkpoints()
-        
-        # Save best model separately
+        # Save best model separately when metric improves (best epoch save only)
         if is_best and current_metric is not None:
             best_path = self.save_dir / "best_model.pth"
-            atomic_torch_save(checkpoint, best_path)
+            atomic_torch_save(checkpoint, str(best_path))
             logger.info(
                 "Updated best model (epoch %d, %s=%.4f)",
                 epoch,
@@ -486,11 +476,7 @@ class CheckpointManager:
                 current_metric,
             )
         
-        # Always save latest
-        latest_path = self.save_dir / "checkpoint_latest.pth"
-        atomic_torch_save(checkpoint, str(latest_path))
-        
-        return filepath
+        return latest_path
     
     def load(
         self,

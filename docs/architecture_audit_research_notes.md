@@ -1932,3 +1932,28 @@ passed. `py_compile` passed for the touched source modules and `git diff --check
 reported no whitespace errors (only existing CRLF conversion warnings). This is
 targeted evidence, not a claim that every experiment, checkpoint, or the full
 repository test suite has been executed.
+
+### Progression-Repair Consistency Follow-up (2026-07-17)
+
+Grammar repair previously used a monotonic helper when asking whether a key,
+item, or token provider was reachable before a candidate gate. That helper
+could count the same fungible small key again after each closure expansion.
+It now clones the graph, removes only the requested nodes/edges, and delegates
+to `solve_mission_progression`, the exact consumable-resource planner used by
+final progression validation. Repair and certification therefore share the
+same key-consumption semantics.
+
+The remaining items in the accompanying defect list were rechecked against
+live code. The reported resource-loop START shortcut, tile-ID collision,
+directional-neighbor collapse, demo tile inversion, disconnected BFS relabel,
+joint gradient clipping, all-wall anchor crash, valve overwrite, empty
+connection realization, constant LogicNet lock loss, and uncheckpointed grid
+relaxation are already fixed. Cross-attention's compatibility path zeros fully
+masked rows before the output projection; `GPSLayer` treats a missing
+`batch_idx` as one graph by contract, while multi-graph flat inputs must pass
+their assignments explicitly.
+
+Verification: `88` grammar, graph-enforcement, attention, and LogicNet tests
+passed after replacing the progression probe. The new regression covers a
+single fungible key before two locks and confirms the second gate is not
+reachable.
