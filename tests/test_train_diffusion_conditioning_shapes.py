@@ -703,6 +703,20 @@ def test_validate_keeps_dungeon_scope_masks_atomic_when_budget_is_smaller():
     assert tuple(selected["logic_source_mask"].shape) == (1, ROOM_HEIGHT, ROOM_WIDTH)
     assert int(selected["current_node_idx"].item()) == 1
 
+    # Exercise the real contract consumer, not only the trainer selector.
+    production_logic_net = LogicNet(
+        latent_dim=4,
+        num_classes=44,
+        num_iterations=2,
+        graph_pathfinder_type="dense_bellman_ford",
+    )
+    real_loss, real_info = production_logic_net(
+        torch.zeros(1, 44, ROOM_HEIGHT, ROOM_WIDTH),
+        graph_data=selected,
+    )
+    assert torch.isfinite(real_loss)
+    assert tuple(real_info["walkability"].shape) == (1, 1, ROOM_HEIGHT, ROOM_WIDTH)
+
 
 def test_logic_resource_contract_rejects_locked_graph_without_pairs():
     edge_features = torch.zeros(1, GRAPH_EDGE_FEATURE_DIM)
