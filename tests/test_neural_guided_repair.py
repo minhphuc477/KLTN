@@ -129,6 +129,37 @@ def test_neural_guided_repair_omits_logic_floor_mask_without_graph_data():
     assert refiner.kwargs["required_floor_mask"] is None
 
 
+def test_single_room_graph_view_slices_only_room_aligned_dungeon_tensors():
+    graph_data = {
+        "graph_scope": "dungeon",
+        "_logic_room_index": 1,
+        "node_features": torch.zeros(3, 14),
+        "edge_index": torch.tensor([[0, 1], [1, 2]], dtype=torch.long),
+        "logic_source_mask": torch.zeros(3, 1, 5, 5),
+        "logic_target_mask": torch.zeros(3, 1, 5, 5),
+        "room_topology_map": torch.zeros(3, 4, 5, 5),
+        "boundary_constraints": torch.zeros(3, 8),
+        "current_node_idx": torch.tensor([0, 1, 2]),
+    }
+
+    selected = NeuralGuidedRepair._single_room_graph_view(graph_data)
+
+    assert tuple(selected["node_features"].shape) == (3, 14)
+    assert tuple(selected["edge_index"].shape) == (2, 2)
+    assert tuple(selected["logic_source_mask"].shape) == (1, 1, 5, 5)
+    assert tuple(selected["logic_target_mask"].shape) == (1, 1, 5, 5)
+    assert tuple(selected["room_topology_map"].shape) == (1, 4, 5, 5)
+    assert tuple(selected["boundary_constraints"].shape) == (1, 8)
+    assert selected["current_node_idx"].tolist() == [1]
+
+
+def test_single_room_graph_view_rejects_ambiguous_unsliced_masks():
+    with pytest.raises(ValueError, match="_logic_room_index"):
+        NeuralGuidedRepair._single_room_graph_view(
+            {"logic_source_mask": torch.zeros(3, 1, 5, 5)}
+        )
+
+
 def test_resize_mask_transposes_reversed_spatial_axes():
     mask = torch.zeros(1, 1, 5, 3)
     mask[:, :, 4, 1] = 1.0

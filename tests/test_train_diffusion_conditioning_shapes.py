@@ -649,8 +649,12 @@ def test_validate_keeps_dungeon_scope_masks_atomic_when_budget_is_smaller():
     trainer = _make_stub_trainer(context_dim=8)
     trainer.config.validation_num_diffusion_samples = 1
 
-    node_features = torch.zeros(3, 6)
-    node_features[2, 3] = 1.0
+    # Three rendered rooms can legitimately correspond to four graph nodes
+    # when an abstract pointer/start node has no room image.  This forces the
+    # stacker to use the room-batch fallback while preserving a three-room
+    # atomic LogicNet mask contract.
+    node_features = torch.zeros(4, 6)
+    node_features[3, 3] = 1.0
     base = {
         "n": 3,
         "node_features": node_features,
@@ -658,14 +662,14 @@ def test_validate_keeps_dungeon_scope_masks_atomic_when_budget_is_smaller():
         "edge_features": torch.zeros(2, GRAPH_EDGE_FEATURE_DIM),
         "edge_attr": torch.tensor([0, 0], dtype=torch.long),
         "edge_rrwp": torch.zeros(2, GRAPH_TPE_DIM),
-        "tpe": torch.zeros(3, GRAPH_TPE_DIM),
-        "node_positions": torch.zeros(3, 2),
-        "node_mask": torch.ones(3),
-        "num_nodes": 3,
+        "tpe": torch.zeros(4, GRAPH_TPE_DIM),
+        "node_positions": torch.zeros(4, 2),
+        "node_mask": torch.ones(4),
+        "num_nodes": 4,
         "num_edges": 2,
         "start_node_id": 0,
-        "target_idx": 2,
-        "node_to_idx": {"a": 0, "b": 1, "c": 2},
+        "target_idx": 3,
+        "node_to_idx": {"a": 0, "b": 1, "c": 2, "start_pointer": 3},
         "room_topology_map": torch.zeros(ROOM_TOPOLOGY_CHANNEL_COUNT, ROOM_HEIGHT, ROOM_WIDTH),
         "boundary_constraints": torch.zeros(8),
         "logic_source_mask": torch.zeros(1, ROOM_HEIGHT, ROOM_WIDTH),
@@ -699,7 +703,7 @@ def test_validate_keeps_dungeon_scope_masks_atomic_when_budget_is_smaller():
         sample_idx=1,
         batch_size=3,
     )
-    assert tuple(selected["node_features"].shape) == (3, 6)
+    assert tuple(selected["node_features"].shape) == (4, 6)
     assert tuple(selected["logic_source_mask"].shape) == (1, ROOM_HEIGHT, ROOM_WIDTH)
     assert int(selected["current_node_idx"].item()) == 1
 

@@ -1192,33 +1192,40 @@ class DiffusionTrainer:
                 selected[key] = value[int(sample_idx)]
             else:
                 selected[key] = value
+        selected["_logic_room_index"] = int(sample_idx)
         selected["graph_scope"] = "room"
         return selected
 
     @staticmethod
-    def _is_atomic_dungeon_graph_batch(
+    def _is_atomic_logic_graph_batch(
         graph_data: Optional[Dict[str, Any]],
         *,
         batch_size: int,
     ) -> bool:
-        """Return whether a validation batch represents one whole dungeon.
+        """Return whether validation must keep all room-aligned LogicNet rows.
 
-        Global LogicNet supervision relates room-level passability to a single
-        mission graph.  Sampling only a prefix of that room batch makes its
-        masks, current-node indices, and key/lock constraints refer to rooms
-        that are no longer present.  Treat that batch as an atomic evaluation
-        unit rather than silently slicing it to ``validation_num_samples``.
+        A rendered dungeon can have fewer rooms than mission-graph nodes (for
+        example, an abstract start pointer).  Such a batch legitimately falls
+        back to ``room_batch`` rather than being labelled ``dungeon``.  Its
+        LogicNet masks and current-node indices are still aligned to the full
+        rendered-room set, so validation must not truncate it merely because a
+        room-count budget is smaller.
         """
         if not isinstance(graph_data, dict):
             return False
-        if str(graph_data.get("graph_scope", "")).strip().lower() != "dungeon":
-            return False
         current_indices = graph_data.get("current_node_idx")
-        return (
+        room_mask = graph_data.get("logic_source_mask", graph_data.get("logic_target_mask"))
+        has_room_aligned_rows = (
+            isinstance(room_mask, torch.Tensor)
+            and room_mask.dim() == 4
+            and int(room_mask.shape[0]) == int(batch_size)
+        )
+        has_current_room_rows = (
             isinstance(current_indices, torch.Tensor)
             and current_indices.dim() == 1
             and int(current_indices.numel()) == int(batch_size)
         )
+        return has_room_aligned_rows and has_current_room_rows
 
     @staticmethod
     def _validate_logic_resource_contract(
@@ -3172,16 +3179,16 @@ class DiffusionTrainer:
                     )
 
             if logic_eval_enabled and num_generated_eval < int(num_samples):
-                atomic_dungeon_batch = self._is_atomic_dungeon_graph_batch(
+                atomic_logic_batch = self._is_atomic_logic_graph_batch(
                     diffusion_graph_data,
                     batch_size=int(batch_size),
                 )
-                if atomic_dungeon_batch and (
+                if atomic_logic_batch and (
                     int(num_samples) - int(num_generated_eval) < int(batch_size)
                 ):
                     logger.info(
-                        "Validation sample budget (%d remaining) is smaller than dungeon scope "
-                        "(%d rooms); evaluating the complete dungeon to preserve LogicNet graph contracts.",
+                        "Validation sample budget (%d remaining) is smaller than the full "
+                        "LogicNet room batch (%d rooms); evaluating it atomically to preserve graph contracts.",
                         int(num_samples) - int(num_generated_eval),
                         int(batch_size),
                     )
@@ -3235,7 +3242,7 @@ class DiffusionTrainer:
                     else:
                         generated_batch = (
                             int(batch_size)
-                            if atomic_dungeon_batch
+                            if atomic_logic_batch
                             else min(batch_size, int(num_samples) - num_generated_eval)
                         )
                         solvability_proxy = float(self._logic_loss_to_solvability_proxy(logic_loss).item())
@@ -3251,12 +3258,12 @@ class DiffusionTrainer:
                             num_logic_metric_eval += generated_batch
                         if hasattr(self, "vqvae") and hasattr(self.vqvae, "decode"):
                             try:
-                                # A dungeon-scope graph and its room masks are an
-                                # atomic contract.  Never truncate its decoded
-                                # rooms merely to honor a room-count budget.
+                                # Full room-aligned graph masks are an atomic
+                                # contract. Never truncate their decoded rooms
+                                # merely to honor a room-count budget.
                                 decoded = (
                                     decoded_for_logic
-                                    if atomic_dungeon_batch
+                                    if atomic_logic_batch
                                     else decoded_for_logic[:generated_batch]
                                 )
                                 wfc_loss, wfc_samples, _wfc_mean = self._wfc_pseudo_label_loss(
@@ -3277,12 +3284,14 @@ class DiffusionTrainer:
                                     repaired_hard = self._compute_hard_solvability(repaired_decoded)
                                     total_hard_solvability_after_repair += repaired_hard * generated_batch
                                     total_validation_repair_success += float(repair_success_rate) * generated_batch
-                                    repaired_maps = (
-                                        repaired_decoded.argmax(dim=1).float()
-                                        / float(max(1, int(self.config.num_classes) - 1))
-                                    ).unsqueeze(1)
-                                    z_repaired = self.encode_to_latent(repaired_maps.to(self.device))
-                                    repaired_tile_logits = self._decode_latent_for_logic(z_repaired)
+                                    # ``repaired_decoded`` is an exact one-hot
+                                    # representation of the symbolic result.
+                                    # Re-encoding it through the VQ-VAE before
+                                    # LogicNet scoring changes tile identities
+                                    # and turns a post-repair metric into an
+                                    # approximation of the repair. Score the
+                                    # repaired grid itself instead.
+                                    repaired_tile_logits = repaired_decoded
                                     repaired_logic_loss, _repaired_logic_info = self.logic_net(
                                         repaired_tile_logits,
                                         graph_data=logic_graph_data,

@@ -129,7 +129,41 @@ if (!(Test-Path $DiffusionCheckpoint)) {
 
 The canonical config enables trainable LogicNet supervision. The diffusion
 checkpoint therefore contains the diffusion, condition encoder, and LogicNet
-states. Expected artifact: `checkpoints\diffusion\best_model.pth`.
+states. `warmup_epochs=5` intentionally suppresses the LogicNet objective at
+the start of training, so `logic_loss=0` during that interval is expected; it
+does not mean the component is disconnected. Expected artifact:
+`checkpoints\diffusion\best_model.pth`.
+
+### 4.2a Reduced-Capacity Diffusion Run
+
+The 96-channel teacher contains about 66M denoiser parameters, which is too
+large for a roughly 300-room training split to serve as the sole scientific
+result. Run this lower-capacity profile as the primary small-data experiment
+and retain the larger model only as a matched-budget capacity ablation. It
+uses a 48-channel, one-residual-block U-Net with a 192-dimensional condition
+space (about 12.4M denoiser parameters before the condition encoder).
+
+```powershell
+python main.py train `
+  --config $Config `
+  --data-dir $Data `
+  --stage diffusion `
+  --output-dir "outputs\diffusion_small_seed_$Seed" `
+  --diffusion-vqvae-checkpoint $VqCheckpoint `
+  --diffusion-model-channels 48 `
+  --diffusion-context-dim 192 `
+  --diffusion-unet-num-res-blocks 1 `
+  --diffusion-unet-num-heads 4 `
+  --diffusion-condition-hidden-dim 128 `
+  --diffusion-condition-num-gnn-layers 2 `
+  --seed $Seed `
+  --no-auto-resume `
+  --verbose
+```
+
+This creates an architecture-incompatible diffusion checkpoint. Do not resume
+the existing 96-channel run into this output directory. Re-train the fast
+sampler from the selected diffusion checkpoint afterward.
 
 ### 4.3 Train LCM-LoRA Fast Sampler
 

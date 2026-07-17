@@ -84,6 +84,8 @@ class NeuralGuidedRepair:
         if int(tile_logits.shape[0]) != 1:
             raise ValueError("NeuralGuidedRepair currently repairs one room at a time; expected batch size 1.")
 
+        graph_data = self._single_room_graph_view(graph_data)
+
         was_training = bool(getattr(self.logic_net, "training", False))
         try:
             self.logic_net.eval()
@@ -116,6 +118,65 @@ class NeuralGuidedRepair:
         finally:
             if was_training:
                 self.logic_net.train()
+
+    @staticmethod
+    def _single_room_graph_view(graph_data: Optional[dict]) -> Optional[dict]:
+        """Normalize room-aligned graph tensors for one-room repair.
+
+        A dungeon-level graph deliberately keeps global node and edge tensors
+        shared across its rooms.  Repair receives one room logit tensor, so
+        only maps tied to room pixels may have a batch dimension greater than
+        one.  The trainer records ``_logic_room_index`` when selecting a room;
+        refusing to guess that index prevents silently applying another room's
+        START/GOAL/topology mask.
+        """
+        if graph_data is None or not isinstance(graph_data, dict):
+            return graph_data
+        normalized = dict(graph_data)
+        raw_index = normalized.get("_logic_room_index")
+        try:
+            room_index = int(raw_index) if raw_index is not None else None
+        except (TypeError, ValueError, OverflowError):
+            room_index = None
+
+        room_aligned_keys = (
+            "room_topology_map",
+            "boundary_constraints",
+            "logic_source_mask",
+            "logic_target_mask",
+            "current_node_idx",
+        )
+        for key in room_aligned_keys:
+            value = normalized.get(key)
+            if not isinstance(value, torch.Tensor) or value.dim() == 0:
+                continue
+            # Do not confuse unbatched [C,H,W], [8], or [1,H,W] tensors with
+            # a room batch merely because their first dimension is greater
+            # than one.  Each key has a distinct batched representation.
+            is_batched = (
+                (key in {"logic_source_mask", "logic_target_mask", "room_topology_map"} and value.dim() == 4)
+                or (key == "boundary_constraints" and value.dim() == 2)
+                or (key == "current_node_idx" and value.dim() == 1)
+            )
+            if not is_batched:
+                continue
+            leading = int(value.shape[0])
+            if leading == 1:
+                continue
+            if room_index is None:
+                raise ValueError(
+                    f"One-room neural repair received graph_data['{key}'] with batch "
+                    f"{leading} but no _logic_room_index. Refusing to guess a room mask."
+                )
+            if room_index < 0 or room_index >= leading:
+                raise ValueError(
+                    f"_logic_room_index={room_index} is outside graph_data['{key}'] "
+                    f"batch {leading}."
+                )
+            # Keep an explicit batch dimension for mask/topology tensors; the
+            # LogicNet target resolver accepts [1,...] directly.
+            normalized[key] = value[room_index : room_index + 1]
+        return normalized
 
     def repair_room_with_neural_guidance(
         self,

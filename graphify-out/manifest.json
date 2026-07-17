@@ -725,8 +725,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\core\\condition_encoder.py": {
-    "mtime": 1784257571.9815571,
-    "ast_hash": "703a455d68e706d7a70ce71afaf62c70",
+    "mtime": 1784297856.343825,
+    "ast_hash": "b2aa1160c57b7a63ce0ddb6bb51ebf5b",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\core\\definitions.py": {
@@ -750,13 +750,13 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\core\\latent_diffusion.py": {
-    "mtime": 1783859331.8070629,
-    "ast_hash": "315c731d4994b01f47265389ef922b9f",
+    "mtime": 1784309710.2194705,
+    "ast_hash": "709d0dda22747123cddf091fa7276d34",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\core\\logic_net.py": {
-    "mtime": 1784257571.9835546,
-    "ast_hash": "96d4efb6d3b6020cc1ea22094b72af39",
+    "mtime": 1784295564.0754066,
+    "ast_hash": "49e8ec817c12e3d2f24a51a868b5f54c",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\core\\puzzle_stage_semantics.py": {
@@ -2105,8 +2105,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\train_diffusion.py": {
-    "mtime": 1784257793.847846,
-    "ast_hash": "a1e69d7c2b96f67b000a6486a5383560",
+    "mtime": 1784311292.5726607,
+    "ast_hash": "6c4ccd6a1e76164a1af6538bd1c9776e",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\train_gaussian_vae.py": {
@@ -2115,18 +2115,18 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\train_lcm.py": {
-    "mtime": 1783858228.0979931,
-    "ast_hash": "b3b2dbd33b0321ec04a41fad50abc120",
+    "mtime": 1784296593.0816474,
+    "ast_hash": "835748ef6907e4d504ac5a23be26402f",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\train_masked_room.py": {
-    "mtime": 1784253707.313701,
-    "ast_hash": "d632787421c91477455eea3d34783625",
+    "mtime": 1784296602.063256,
+    "ast_hash": "2b8fa0c13c5eb3b049413dcbf9783c70",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\train_vqvae.py": {
-    "mtime": 1783068160.090945,
-    "ast_hash": "db8ef24629b1698f6427c3ab3b3368ee",
+    "mtime": 1784296576.3515172,
+    "ast_hash": "0db6acd11f2fb1c4bab2ae8ee96bf7a6",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\utils\\__init__.py": {
@@ -2140,8 +2140,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\utils\\checkpoint.py": {
-    "mtime": 1783770454.0508552,
-    "ast_hash": "cc551b36002c377edc6c6be3445e5f5d",
+    "mtime": 1784296558.3499708,
+    "ast_hash": "dfa8cd33aec3f605d1d9f04acddc063f",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\utils\\data_loading.py": {
@@ -2965,8 +2965,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_ml_components.py": {
-    "mtime": 1783880841.156726,
-    "ast_hash": "a144dfa3e94c2c2d075a67e3e8571282",
+    "mtime": 1784297757.3538778,
+    "ast_hash": "75fe17da8da5d540f625df6838773dfd",
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_model_capacity.py": {
@@ -3080,8 +3080,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_train_diffusion_conditioning_shapes.py": {
-    "mtime": 1784293297.7052064,
-    "ast_hash": "8d096ed53176168547eec7ac7bb072ff",
+    "mtime": 1784312782.4861224,
+    "ast_hash": "d1dbf592623b5a78fe7ef65d3331ec15",
     "semantic_hash": ""
   },
   "F:\\KLTN\\tests\\test_train_lcm_checkpointing.py": {
@@ -3490,8 +3490,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\docs\\architecture_audit_research_notes.md": {
-    "mtime": 1784294729.3801644,
-    "ast_hash": "b716765f6fde818c22c1679af4c140d0",
+    "mtime": 1784311417.2342317,
+    "ast_hash": "7652b0e40fcd05ba2c16a0da275d1b40",
     "semantic_hash": ""
   },
   "F:\\KLTN\\docs\\archive\\2026-q1\\ARCHITECTURE_RESEARCH_JUDGMENT_2026_02_24.md": {
@@ -4894,11 +4894,6 @@
     "ast_hash": "c6fc8b236b947fa9ed106509f4666e41",
     "semantic_hash": ""
   },
-  "F:\\KLTN\\Procedural content generation game level zelda legend.pdf": {
-    "mtime": 1783700610.1997857,
-    "ast_hash": "0cfafcf1b4e4652e4e88ebb8a98b2c16",
-    "semantic_hash": ""
-  },
   "F:\\KLTN\\tests\\test_controllability_evidence_contract.py": {
     "mtime": 1783711876.47637,
     "ast_hash": "d03bfe0ad0ab25978e71300876008243",
@@ -5060,8 +5055,8 @@
     "semantic_hash": ""
   },
   "F:\\KLTN\\docs\\TRAINING_COMMANDS_IN_ORDER.md": {
-    "mtime": 1784257556.7491882,
-    "ast_hash": "ac65c5bc1ea936797af2cf676d70916a",
+    "mtime": 1784307289.711636,
+    "ast_hash": "95e990cdca57a9c3431276f468b59dab",
     "semantic_hash": ""
   },
   "F:\\KLTN\\src\\generation\\grammar\\progression_solver.py": {
