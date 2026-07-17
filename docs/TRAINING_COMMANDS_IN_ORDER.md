@@ -195,7 +195,7 @@ Use independent output directories. This loop retrains the complete stack for
 seeds 42, 43, and 44, including a tokenizer per seed.
 
 ```powershell
-foreach ($Seed in 42, 43, 44) {
+foreach ($Seed in 7, 3407, 0) {
   $Run = "outputs\paper_baseline_seed_$Seed"
   $VqCheckpoint = Join-Path $Run "checkpoints\vqvae\vqvae_pretrained.pth"
   $DiffusionCheckpoint = Join-Path $Run "checkpoints\diffusion\best_model.pth"
@@ -221,7 +221,7 @@ This is a separate experiment family. Do not write these checkpoints into the
 baseline directory.
 
 ```powershell
-$Seed = 42
+$Seed = 3407
 $PuzzleRun = "outputs\paper_stage_semantics_seed_$Seed"
 $VqCheckpoint = "outputs\paper_baseline_seed_$Seed\checkpoints\vqvae\vqvae_pretrained.pth"
 $PuzzleDiffusion = Join-Path $PuzzleRun "checkpoints\diffusion\best_model.pth"

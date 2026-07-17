@@ -43,6 +43,7 @@ from torch_geometric.utils import softmax as pyg_softmax
 from src.core.attention_kernels import HedgehogFeatureMap, hedgehog_linear_attention
 from src.core.definitions import EDGE_TYPE_PRIORITY, GRAPH_EDGE_FEATURE_DIM, ROOM_TOPOLOGY_CHANNEL_COUNT
 from src.core.graph_grid_attention import SpatialGraphConditioner
+from src.core.logic_net import LogicGraphContractError
 
 logger = logging.getLogger(__name__)
 HAS_SDPA = hasattr(F, "scaled_dot_product_attention")
@@ -2574,18 +2575,41 @@ class GradientGuidance(nn.Module):
                 target_idx = None
 
         key_lock_pairs_raw = graph_data.get("key_lock_pairs", [])
-        key_lock_pairs: List[Tuple[int, int]] = []
+        key_lock_pairs: Any = key_lock_pairs_raw
         if isinstance(key_lock_pairs_raw, (list, tuple)):
-            for pair in list(key_lock_pairs_raw)[: self.max_key_lock_pairs]:
-                if not isinstance(pair, (list, tuple)) or len(pair) != 2:
-                    continue
-                try:
-                    key_idx = int(pair[0])
-                    lock_idx = int(pair[1])
-                except (TypeError, ValueError, OverflowError):
-                    continue
-                if 0 <= key_idx < node_count and 0 <= lock_idx < node_count:
-                    key_lock_pairs.append((key_idx, lock_idx))
+            if key_lock_pairs_raw and all(isinstance(item, (list, tuple)) and len(item) == 2 for item in key_lock_pairs_raw):
+                key_lock_pairs = []
+                for pair in list(key_lock_pairs_raw)[: self.max_key_lock_pairs]:
+                    try:
+                        key_idx = int(pair[0])
+                        lock_idx = int(pair[1])
+                    except (TypeError, ValueError, OverflowError):
+                        continue
+                    if 0 <= key_idx < node_count and 0 <= lock_idx < node_count:
+                        key_lock_pairs.append((key_idx, lock_idx))
+            else:
+                sanitized_batches: List[Any] = []
+                total_pairs = 0
+                for batch_pairs in key_lock_pairs_raw:
+                    if not isinstance(batch_pairs, (list, tuple)):
+                        sanitized_batches.append([])
+                        continue
+                    cleaned_pairs: List[Tuple[int, int]] = []
+                    for pair in list(batch_pairs):
+                        if total_pairs >= self.max_key_lock_pairs:
+                            break
+                        if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+                            continue
+                        try:
+                            key_idx = int(pair[0])
+                            lock_idx = int(pair[1])
+                        except (TypeError, ValueError, OverflowError):
+                            continue
+                        if 0 <= key_idx < node_count and 0 <= lock_idx < node_count:
+                            cleaned_pairs.append((key_idx, lock_idx))
+                            total_pairs += 1
+                    sanitized_batches.append(cleaned_pairs)
+                key_lock_pairs = sanitized_batches
 
         sanitized.update({
             "adjacency": adjacency,
@@ -2739,7 +2763,7 @@ class GradientGuidance(nn.Module):
                 if _debug_guidance:
                     grad_norm_raw = grad.view(grad.shape[0], -1).norm(dim=1)
                     logger.info(f"[GUIDANCE] grad_norm (before clamp): min={grad_norm_raw.min():.6f}, max={grad_norm_raw.max():.6f}, mean={grad_norm_raw.mean():.6f}")
-        except (AttributeError, RuntimeError, ValueError, TypeError) as e:
+        except (AttributeError, RuntimeError, ValueError, TypeError, LogicGraphContractError) as e:
             self.failure_count += 1
             self.last_failure_type = type(e).__name__
             self.last_failure_message = str(e)

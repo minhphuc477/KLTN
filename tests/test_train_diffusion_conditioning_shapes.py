@@ -644,6 +644,78 @@ def test_try_stack_dungeon_scope_graph_batch_collapses_full_room_set():
     )
 
 
+def test_validate_keeps_dungeon_scope_masks_atomic_when_budget_is_smaller():
+    """A room-count budget must not slice a globally conditioned dungeon."""
+    trainer = _make_stub_trainer(context_dim=8)
+    trainer.config.validation_num_diffusion_samples = 1
+
+    node_features = torch.zeros(3, 6)
+    node_features[2, 3] = 1.0
+    base = {
+        "n": 3,
+        "node_features": node_features,
+        "edge_index": torch.tensor([[0, 1], [1, 2]], dtype=torch.long),
+        "edge_features": torch.zeros(2, GRAPH_EDGE_FEATURE_DIM),
+        "edge_attr": torch.tensor([0, 0], dtype=torch.long),
+        "edge_rrwp": torch.zeros(2, GRAPH_TPE_DIM),
+        "tpe": torch.zeros(3, GRAPH_TPE_DIM),
+        "node_positions": torch.zeros(3, 2),
+        "node_mask": torch.ones(3),
+        "num_nodes": 3,
+        "num_edges": 2,
+        "start_node_id": 0,
+        "target_idx": 2,
+        "node_to_idx": {"a": 0, "b": 1, "c": 2},
+        "room_topology_map": torch.zeros(ROOM_TOPOLOGY_CHANNEL_COUNT, ROOM_HEIGHT, ROOM_WIDTH),
+        "boundary_constraints": torch.zeros(8),
+        "logic_source_mask": torch.zeros(1, ROOM_HEIGHT, ROOM_WIDTH),
+        "logic_target_mask": torch.zeros(1, ROOM_HEIGHT, ROOM_WIDTH),
+        "key_lock_pairs": [],
+    }
+    graph_list = []
+    for index in range(3):
+        item = dict(base)
+        item["current_node_idx"] = index
+        graph_list.append(item)
+
+    metrics = DiffusionTrainer.validate(
+        trainer,
+        [(torch.zeros(3, 1, ROOM_HEIGHT, ROOM_WIDTH), graph_list)],
+        num_samples=1,
+        num_diffusion_samples=1,
+    )
+
+    assert trainer.logic_net.last_shape == (3, 44, ROOM_HEIGHT, ROOM_WIDTH)
+    assert tuple(trainer.logic_net.last_graph_data["logic_source_mask"].shape) == (
+        3,
+        1,
+        ROOM_HEIGHT,
+        ROOM_WIDTH,
+    )
+    assert metrics["val_logic_loss"] == pytest.approx(0.25)
+
+    selected = trainer._select_validation_graph_sample(
+        trainer.logic_net.last_graph_data,
+        sample_idx=1,
+        batch_size=3,
+    )
+    assert tuple(selected["node_features"].shape) == (3, 6)
+    assert tuple(selected["logic_source_mask"].shape) == (1, ROOM_HEIGHT, ROOM_WIDTH)
+    assert int(selected["current_node_idx"].item()) == 1
+
+
+def test_logic_resource_contract_rejects_locked_graph_without_pairs():
+    edge_features = torch.zeros(1, GRAPH_EDGE_FEATURE_DIM)
+    edge_features[0, 1] = 1.0
+
+    with pytest.raises(RuntimeError, match="key_lock_pairs"):
+        DiffusionTrainer._validate_logic_resource_contract(
+            {"edge_features": edge_features, "key_lock_pairs": []},
+            batch_size=1,
+            phase="test",
+        )
+
+
 def test_wfc_pseudo_label_loss_is_opt_in_and_backpropagates(monkeypatch):
     trainer = DiffusionTrainer.__new__(DiffusionTrainer)
     trainer.device = torch.device("cpu")

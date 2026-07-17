@@ -1957,3 +1957,31 @@ Verification: `88` grammar, graph-enforcement, attention, and LogicNet tests
 passed after replacing the progression probe. The new regression covers a
 single fungible key before two locks and confirms the second gate is not
 reachable.
+
+### Dungeon-Scope LogicNet Validation Follow-up (2026-07-18)
+
+- Validation now treats a graph whose scope is `dungeon` as an atomic unit.
+  Global LogicNet masks, per-room passability values, current-node indices,
+  and key/lock stages all refer to the complete mission graph. A room-count
+  budget smaller than that dungeon no longer truncates decoded rooms before
+  neural-symbolic repair or hard-solvability scoring.
+- Per-room repair derives a one-room view only for room-aligned tensors
+  (`room_topology_map`, boundary constraints, logic masks, and the current
+  room index). It retains the global node and edge tensors, avoiding the
+  accidental reinterpretation of a `[N, D]` mission graph as a room batch.
+- Training and validation now check the locked-edge resource contract before
+  executing diffusion or LogicNet guidance. A graph with a locked edge must
+  carry explicit `key_lock_pairs`; the trainer refuses ambiguous causal
+  supervision with an actionable graph-preparation error instead of failing
+  deep in a sampling step. A direct loader audit of the current 356-room
+  training corpus found explicit pairs for every locked graph record.
+- This does not make a 70.15M-parameter diffusion model statistically sound
+  on roughly 296 training rooms. That is a capacity/experimental-design risk,
+  not a runtime defect. Publication runs need a reduced-capacity comparison,
+  held-out dungeon evaluation, and matched-budget baselines before drawing
+  generalization conclusions.
+
+Verification: `131` tests covering diffusion conditioning, LogicNet resource
+rollouts, and Zelda loader graph conditioning passed. The regression creates a
+three-room dungeon scope with a one-room metric budget and verifies that its
+three logic masks remain aligned through validation.

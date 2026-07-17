@@ -1160,16 +1160,135 @@ class DiffusionTrainer:
         """Select one room graph from a stacked validation graph batch."""
         if not isinstance(graph_data, dict):
             return graph_data
-        if graph_data.get("graph_scope") != "room_batch":
-            return graph_data
+        scope = str(graph_data.get("graph_scope", "")).strip().lower()
+        # A dungeon-scope graph has node-shaped tensors whose leading dimension
+        # happens to equal the number of rooms.  They are *not* batched room
+        # tensors, so retain them for per-room repair.  Only slice inputs that
+        # are explicitly aligned with generated room maps.
+        dungeon_room_aligned_keys = {
+            "room_topology_map",
+            "boundary_constraints",
+            "logic_source_mask",
+            "logic_target_mask",
+            "current_node_idx",
+        }
         selected: Dict[str, Any] = {}
         for key, value in graph_data.items():
-            if isinstance(value, torch.Tensor) and value.dim() > 0 and int(value.shape[0]) == int(batch_size):
+            slice_value = (
+                scope != "dungeon" or key in dungeon_room_aligned_keys
+            )
+            if (
+                slice_value
+                and isinstance(value, torch.Tensor)
+                and value.dim() > 0
+                and int(value.shape[0]) == int(batch_size)
+            ):
+                selected[key] = value[int(sample_idx)]
+            elif (
+                slice_value
+                and isinstance(value, (list, tuple))
+                and len(value) == int(batch_size)
+            ):
                 selected[key] = value[int(sample_idx)]
             else:
                 selected[key] = value
         selected["graph_scope"] = "room"
         return selected
+
+    @staticmethod
+    def _is_atomic_dungeon_graph_batch(
+        graph_data: Optional[Dict[str, Any]],
+        *,
+        batch_size: int,
+    ) -> bool:
+        """Return whether a validation batch represents one whole dungeon.
+
+        Global LogicNet supervision relates room-level passability to a single
+        mission graph.  Sampling only a prefix of that room batch makes its
+        masks, current-node indices, and key/lock constraints refer to rooms
+        that are no longer present.  Treat that batch as an atomic evaluation
+        unit rather than silently slicing it to ``validation_num_samples``.
+        """
+        if not isinstance(graph_data, dict):
+            return False
+        if str(graph_data.get("graph_scope", "")).strip().lower() != "dungeon":
+            return False
+        current_indices = graph_data.get("current_node_idx")
+        return (
+            isinstance(current_indices, torch.Tensor)
+            and current_indices.dim() == 1
+            and int(current_indices.numel()) == int(batch_size)
+        )
+
+    @staticmethod
+    def _validate_logic_resource_contract(
+        graph_data: Optional[Dict[str, Any]],
+        *,
+        batch_size: int,
+        phase: str,
+    ) -> None:
+        """Fail early when a locked LogicNet graph lacks causal pair metadata.
+
+        LogicNet deliberately refuses to invent a provider-to-lock assignment:
+        an index-order heuristic would create false supervision.  Checking the
+        contract before the diffusion sampler starts turns an expensive late
+        failure into a data/graph-preparation error with the affected sample
+        indices.  The graph builder is the only valid place to recover the
+        missing metadata.
+        """
+        if not isinstance(graph_data, dict):
+            return
+        edge_features = graph_data.get("edge_features")
+        if not isinstance(edge_features, torch.Tensor) or edge_features.numel() == 0:
+            return
+
+        # Canonical edge-feature index is intentionally local to avoid a
+        # dependency from the trainer on LogicNet implementation internals.
+        key_lock_feature_index = 1
+        locked_rows: List[int] = []
+        if edge_features.dim() == 2:
+            if int(edge_features.shape[1]) > key_lock_feature_index and bool(
+                (edge_features[:, key_lock_feature_index] > 0.5).any()
+            ):
+                locked_rows = [0]
+        elif edge_features.dim() == 3:
+            if int(edge_features.shape[2]) > key_lock_feature_index:
+                locked_rows = torch.nonzero(
+                    (edge_features[:, :, key_lock_feature_index] > 0.5).any(dim=1),
+                    as_tuple=False,
+                ).flatten().tolist()
+        if not locked_rows:
+            return
+
+        raw_pairs = graph_data.get("key_lock_pairs")
+        if edge_features.dim() == 2:
+            valid_pairs = isinstance(raw_pairs, (list, tuple)) and any(
+                isinstance(pair, (list, tuple)) and len(pair) == 2
+                for pair in raw_pairs
+            )
+            missing = [] if valid_pairs else [0]
+        else:
+            missing = []
+            for sample_idx in locked_rows:
+                sample_pairs = (
+                    raw_pairs[sample_idx]
+                    if isinstance(raw_pairs, (list, tuple)) and sample_idx < len(raw_pairs)
+                    else None
+                )
+                if not (
+                    isinstance(sample_pairs, (list, tuple))
+                    and any(
+                        isinstance(pair, (list, tuple)) and len(pair) == 2
+                        for pair in sample_pairs
+                    )
+                ):
+                    missing.append(int(sample_idx))
+        if missing:
+            raise RuntimeError(
+                f"{phase}: locked graph samples {missing} have no explicit key_lock_pairs. "
+                "Rebuild graph conditioning from the authoritative mission graph; "
+                "LogicNet will not infer ambiguous provider-to-lock assignments."
+            )
     
     def _encode_graph_conditioning(
         self,
@@ -2845,7 +2964,8 @@ class DiffusionTrainer:
                     dropout_prob=float(self.config.puzzle_structure_dropout_prob),
                 )
             real_maps = real_maps.to(self.device)
-            
+            batch_size = int(real_maps.shape[0])
+
             # === Build conditioning from REAL graph data ===
             conditioning = None
             logic_graph_data = None
@@ -2867,6 +2987,11 @@ class DiffusionTrainer:
                 
                 if include_logic:
                     logic_graph_data = diffusion_graph_data
+                    self._validate_logic_resource_contract(
+                        logic_graph_data,
+                        batch_size=int(batch_size),
+                        phase="Diffusion training graph contract",
+                    )
             
             is_last_batch = int(batch_idx) + 1 >= len(dataloader)
             train_step_kwargs: Dict[str, Any] = {
@@ -3000,6 +3125,13 @@ class DiffusionTrainer:
             
             if conditioning is None:
                 conditioning = self.get_dummy_conditioning(batch_size)
+
+            if logic_eval_enabled:
+                self._validate_logic_resource_contract(
+                    diffusion_graph_data,
+                    batch_size=int(batch_size),
+                    phase="Diffusion validation graph contract",
+                )
             
             # Encode real maps to get latent shape
             z_0 = self.encode_to_latent(real_maps)
@@ -3040,6 +3172,19 @@ class DiffusionTrainer:
                     )
 
             if logic_eval_enabled and num_generated_eval < int(num_samples):
+                atomic_dungeon_batch = self._is_atomic_dungeon_graph_batch(
+                    diffusion_graph_data,
+                    batch_size=int(batch_size),
+                )
+                if atomic_dungeon_batch and (
+                    int(num_samples) - int(num_generated_eval) < int(batch_size)
+                ):
+                    logger.info(
+                        "Validation sample budget (%d remaining) is smaller than dungeon scope "
+                        "(%d rooms); evaluating the complete dungeon to preserve LogicNet graph contracts.",
+                        int(num_samples) - int(num_generated_eval),
+                        int(batch_size),
+                    )
                 # Generate samples using EMA model
                 guidance_module = getattr(eval_model, "guidance", None)
                 old_guidance_scale = getattr(guidance_module, "guidance_scale", None)
@@ -3088,7 +3233,11 @@ class DiffusionTrainer:
                             "Diffusion validation: non-finite logic loss detected on sampled latent; skipping this validation batch.",
                         )
                     else:
-                        generated_batch = min(batch_size, int(num_samples) - num_generated_eval)
+                        generated_batch = (
+                            int(batch_size)
+                            if atomic_dungeon_batch
+                            else min(batch_size, int(num_samples) - num_generated_eval)
+                        )
                         solvability_proxy = float(self._logic_loss_to_solvability_proxy(logic_loss).item())
                         total_logic_loss += float(logic_loss.item()) * generated_batch
                         total_solvability_proxy += solvability_proxy * generated_batch
@@ -3102,7 +3251,14 @@ class DiffusionTrainer:
                             num_logic_metric_eval += generated_batch
                         if hasattr(self, "vqvae") and hasattr(self.vqvae, "decode"):
                             try:
-                                decoded = decoded_for_logic[:generated_batch]
+                                # A dungeon-scope graph and its room masks are an
+                                # atomic contract.  Never truncate its decoded
+                                # rooms merely to honor a room-count budget.
+                                decoded = (
+                                    decoded_for_logic
+                                    if atomic_dungeon_batch
+                                    else decoded_for_logic[:generated_batch]
+                                )
                                 wfc_loss, wfc_samples, _wfc_mean = self._wfc_pseudo_label_loss(
                                     decoded,
                                     real_maps[:generated_batch],
