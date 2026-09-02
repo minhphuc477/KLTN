@@ -262,7 +262,6 @@ class AdvancedNeuralSymbolicPipeline:
         self.wfc_tile_priors = None
         
         # Generation
-        from src.core.definitions import SEMANTIC_PALETTE
         tile_config = {
             'wall': SEMANTIC_PALETTE['WALL'],
             'floor': SEMANTIC_PALETTE['FLOOR'],
@@ -1073,7 +1072,6 @@ class AdvancedNeuralSymbolicPipeline:
         val_time = time.time() - val_start
         
         # Step 10: Graph constraint enforcement
-        from src.core.definitions import SEMANTIC_PALETTE
         tile_config = {
             'wall': SEMANTIC_PALETTE['WALL'],
             'floor': SEMANTIC_PALETTE['FLOOR'],

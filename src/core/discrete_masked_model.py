@@ -747,7 +747,7 @@ class DiscreteMaskedRoomModel(nn.Module):
             progress = float(i + 1) / float(max(1, total_steps))
             anneal = max(0.25, 1.0 - progress)
             current_temperature = max(1e-6, float(temperature) * anneal) if stochastic else max(1e-6, float(temperature))
-            probs = F.softmax((logits / current_temperature).float(), dim=1).to(dtype=logits.dtype)
+            probs = F.softmax((logits.float() / current_temperature), dim=1).to(dtype=logits.dtype)
             prediction, confidence = self._sample_predictions(
                 probs,
                 stochastic=stochastic,
@@ -1270,7 +1270,10 @@ class DiscreteMaskedRoomModel(nn.Module):
                 remask_counts = torch.ceil(candidate_counts.to(dtype=torch.float32) * float(corrector_mask_ratio)).to(
                     dtype=torch.long
                 )
-                remask_counts = torch.minimum(remask_counts.clamp_min(1), candidate_counts).clamp_min(0)
+                if corrector_mask_ratio > 0.0:
+                    remask_counts = torch.minimum(remask_counts.clamp_min(1), candidate_counts).clamp_min(0)
+                else:
+                    remask_counts = torch.zeros_like(remask_counts)
                 flat_scores = current_confidence.flatten(1).masked_fill(~candidates.flatten(1), torch.inf)
                 order = torch.argsort(flat_scores, dim=1, descending=False)
                 ranks = torch.empty_like(order)

@@ -1371,6 +1371,114 @@ def test_train_step_skips_nonfinite_diffusion_loss():
     assert trainer.global_step == 0
 
 
+def test_train_step_errors_on_nonfinite_loss_for_publication_policy():
+    trainer = DiffusionTrainer.__new__(DiffusionTrainer)
+    trainer.device = torch.device("cpu")
+    trainer.config = SimpleNamespace(
+        alpha_visual=1.0,
+        alpha_logic=0.1,
+        logic_loss_mode="predicted_latent",
+        grad_clip_norm=1.0,
+        epochs=1,
+        nonfinite_policy="error",
+    )
+    trainer.diffusion = _DummyTrainingLossModule(float("nan"))
+    trainer.condition_encoder = _TinyModule()
+    trainer.logic_net = _DummyLogicNet()
+    trainer.ema_diffusion = _DummyEvalModel()
+    trainer.optimizer = torch.optim.SGD(
+        list(trainer.diffusion.parameters()) + list(trainer.condition_encoder.parameters()),
+        lr=1e-3,
+    )
+    trainer._accelerator = None
+    trainer.global_step = 0
+    trainer.encode_to_latent = lambda real_maps: torch.zeros(
+        (real_maps.shape[0], 4, 2, 2), dtype=torch.float32
+    )
+    trainer.get_dummy_conditioning = lambda batch_size: torch.zeros(
+        (batch_size, 1, 8), dtype=torch.float32
+    )
+
+    with pytest.raises(FloatingPointError, match="non-finite diffusion loss"):
+        DiffusionTrainer.train_step(
+            trainer,
+            torch.zeros((2, 1, ROOM_HEIGHT, ROOM_WIDTH), dtype=torch.float32),
+        )
+
+    assert trainer.global_step == 0
+
+
+def test_checkpoint_metric_selection_has_no_logic_tie_break():
+    metrics = {
+        "val_diffusion_loss": 0.25,
+        "val_total_loss": 0.75,
+        "val_solvability": 0.99,
+    }
+
+    assert train_diffusion_module.select_diffusion_checkpoint_metric(
+        metrics,
+        "val_diffusion_loss",
+    ) == pytest.approx(0.25)
+    assert train_diffusion_module.select_diffusion_checkpoint_metric(
+        metrics,
+        "val_total_loss",
+    ) == pytest.approx(0.75)
+    with pytest.raises(ValueError, match="checkpoint metric"):
+        train_diffusion_module.select_diffusion_checkpoint_metric(metrics, "val_solvability")
+
+
+def test_validation_rng_guard_preserves_all_training_random_streams():
+    train_diffusion_module.random.seed(17)
+    np.random.seed(17)
+    torch.manual_seed(17)
+    expected = (
+        train_diffusion_module.random.random(),
+        float(np.random.random()),
+        float(torch.rand(()).item()),
+    )
+
+    train_diffusion_module.random.seed(17)
+    np.random.seed(17)
+    torch.manual_seed(17)
+    with train_diffusion_module.preserve_training_rng_state():
+        for _ in range(5):
+            train_diffusion_module.random.random()
+            np.random.random()
+            torch.rand(())
+
+    actual = (
+        train_diffusion_module.random.random(),
+        float(np.random.random()),
+        float(torch.rand(()).item()),
+    )
+    assert actual == pytest.approx(expected)
+
+    evaluation_draws = []
+    for outside_seed in (3, 999):
+        train_diffusion_module.random.seed(outside_seed)
+        np.random.seed(outside_seed)
+        torch.manual_seed(outside_seed)
+        with train_diffusion_module.preserve_training_rng_state(evaluation_seed=1234):
+            evaluation_draws.append(
+                (
+                    train_diffusion_module.random.random(),
+                    float(np.random.random()),
+                    float(torch.rand(()).item()),
+                )
+            )
+    assert evaluation_draws[0] == pytest.approx(evaluation_draws[1])
+
+    with train_diffusion_module.preserve_training_rng_state():
+        first_seed = train_diffusion_module.seed_validation_diffusion_batch(42, 3)
+        first_draw = float(torch.rand(()).item())
+        torch.rand(10)
+        second_seed = train_diffusion_module.seed_validation_diffusion_batch(42, 3)
+        second_draw = float(torch.rand(()).item())
+        assert first_seed == second_seed
+        assert first_draw == pytest.approx(second_draw)
+        assert train_diffusion_module.seed_validation_diffusion_batch(42, 4) != first_seed
+
+
 def test_train_step_accumulates_gradients_before_optimizer_step():
     trainer = DiffusionTrainer.__new__(DiffusionTrainer)
     trainer.device = torch.device("cpu")

@@ -334,6 +334,7 @@ def _build_puzzle_stage_tokens(
     device: torch.device,
     dtype: torch.dtype,
     scale: float,
+    room_shape: Optional[Tuple[int, int]] = None,
 ) -> Optional[torch.Tensor]:
     if feature_dim <= 0:
         return None
@@ -347,6 +348,13 @@ def _build_puzzle_stage_tokens(
     door_norm = min(1.0, float(max(0, controlled_door_count)) / 4.0)
     required_sign = 1.0 if bool(sequence_required) else -1.0
 
+    # Use the actual room dimensions for anchor normalisation.  Hardcoding
+    # ROOM_HEIGHT / ROOM_WIDTH produces out-of-range encodings when rooms are
+    # not the standard 16×11 Zelda size (e.g. 16×16 metroidvania layouts).
+    rh, rw = room_shape if room_shape is not None else (ROOM_HEIGHT, ROOM_WIDTH)
+    row_denom = max(1, int(rh) - 1)
+    col_denom = max(1, int(rw) - 1)
+
     tokens: List[torch.Tensor] = []
     for stage in stages:
         kind = str(stage.get("kind", "step_on_puzzle")).strip().lower()
@@ -354,10 +362,14 @@ def _build_puzzle_stage_tokens(
         kind_norm = -1.0 + 2.0 * (kind_id / max(1, len(_PUZZLE_STAGE_KIND_IDS) - 1))
         stage_index = int(stage.get("stage_index", len(tokens)))
         stage_progress = float(stage_index) / max(1, total_stages - 1) if total_stages > 1 else 0.0
-        anchor = stage.get("local_anchor", stage.get("anchor", [ROOM_HEIGHT // 2, ROOM_WIDTH // 2]))
+        anchor = stage.get("local_anchor", stage.get("anchor", [rh // 2, rw // 2]))
         try:
-            row = float(anchor[0]) / max(1, ROOM_HEIGHT - 1)
-            col = float(anchor[1]) / max(1, ROOM_WIDTH - 1)
+            row = float(anchor[0]) / row_denom
+            col = float(anchor[1]) / col_denom
+            # Clamp to [0, 1] in case anchor coordinates come from a mismatched
+            # room_shape (defensive — callers should pass the correct shape).
+            row = max(0.0, min(1.0, row))
+            col = max(0.0, min(1.0, col))
         except Exception:
             row = 0.5
             col = 0.5
@@ -387,12 +399,26 @@ def apply_puzzle_stage_control_to_conditioning(
     puzzle_stage_condition: Optional[Mapping[str, Any]],
     graph_conditioning_mode: str,
     scale: float = DEFAULT_PUZZLE_STAGE_TOKEN_SCALE,
+    room_shape: Optional[Tuple[int, int]] = None,
 ) -> torch.Tensor:
     """
     Append deterministic stage-sequence control tokens for learned puzzle plans.
 
     This keeps the conditioner parameter shapes unchanged while giving retrained
     models explicit access to ordered multi-step puzzle structure.
+
+    Args:
+        conditioning: The existing conditioning tensor ``[N, D]``.
+        puzzle_stage_condition: Mapping containing stage sequence, gate family,
+            controlled doors, etc.
+        graph_conditioning_mode: How tokens are combined (``"node_sequence"``
+            concatenates; any other value adds a pooled bias).
+        scale: Scale applied to stage tokens before combining.
+        room_shape: ``(height, width)`` of the target room in tiles.  When
+            provided, anchor coordinates are normalised against the *actual*
+            room dimensions instead of the hardcoded Zelda defaults.  Pass
+            ``None`` to retain the previous ``ROOM_HEIGHT`` / ``ROOM_WIDTH``
+            behaviour for backward compatibility.
     """
     if not isinstance(conditioning, torch.Tensor) or conditioning.dim() != 2:
         return conditioning
@@ -413,6 +439,7 @@ def apply_puzzle_stage_control_to_conditioning(
         device=conditioning.device,
         dtype=conditioning.dtype,
         scale=float(scale),
+        room_shape=room_shape,
     )
     if stage_tokens is None:
         return conditioning

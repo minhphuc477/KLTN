@@ -6,6 +6,7 @@ from typing import Any
 
 from src.simulation.dstar_lite import DStarLiteSolver
 from src.simulation.search_base import GameStateSearchConfig, GameStateSearchResult
+from src.simulation.search_status import oracle_status_from_outcome
 
 
 class DStarLiteGameStateSolver:
@@ -23,6 +24,21 @@ class DStarLiteGameStateSolver:
             allow_diagonals=bool(self.config.allow_diagonals),
         )
         success, path, states = solver.solve(self.env.state.copy())
+        if success:
+            termination_status = "solved"
+            failure_reason = ""
+        elif self.env.start_pos is None or self.env.goal_pos is None:
+            termination_status = "invalid"
+            failure_reason = "No start or goal found in map"
+        elif int(states or 0) >= int(self.config.timeout):
+            termination_status = "budget_exhausted"
+            failure_reason = "D* Lite/A* shared state budget reached"
+        else:
+            termination_status = "incomplete"
+            failure_reason = (
+                "D* Lite comparison search stopped without a solution or a retained "
+                "complete-frontier certificate"
+            )
         return GameStateSearchResult(
             success=bool(success),
             path=list(path or []),
@@ -43,6 +59,13 @@ class DStarLiteGameStateSolver:
                     "full_state_astar_fallback"
                     if getattr(solver, "used_fallback", False)
                     else "reversible_position_graph"
+                ),
+                "failure_reason": failure_reason,
+                "termination_status": termination_status,
+                "solver_status": oracle_status_from_outcome(
+                    bool(success),
+                    failure_reason,
+                    termination_status,
                 ),
             },
         )

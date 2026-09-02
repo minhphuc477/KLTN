@@ -53,7 +53,6 @@ from src.utils.checkpoint import (
     atomic_torch_save,
     enforce_checkpoint_storage_budget,
     log_checkpoint_artifact,
-    prune_checkpoints,
     resolve_resume_checkpoint,
     safe_torch_load,
     write_checkpoint_metadata,
@@ -140,6 +139,9 @@ class FastSamplerTrainingConfig:
         checkpoint_dir: str = "./checkpoints/fast_sampler",
         device: str = "auto",
         seed: int = 42,
+        cudnn_benchmark: bool = True,
+        cudnn_deterministic: bool = False,
+        deterministic_algorithms: bool = False,
         quick: bool = False,
     ):
         self.base_diffusion_checkpoint = str(base_diffusion_checkpoint)
@@ -220,6 +222,9 @@ class FastSamplerTrainingConfig:
         else:
             self.device = str(device)
         self.seed = int(seed)
+        self.cudnn_benchmark = bool(cudnn_benchmark)
+        self.cudnn_deterministic = bool(cudnn_deterministic)
+        self.deterministic_algorithms = bool(deterministic_algorithms)
         self.quick = bool(quick)
         if self.topology_supervision_mode not in {"runtime_aligned", "oracle_room_grid"}:
             raise ValueError("topology_supervision_mode must be 'runtime_aligned' or 'oracle_room_grid'.")
@@ -296,6 +301,9 @@ def fast_sampler_training_kwargs_from_resolved_config(config: Dict[str, Any]) ->
         "checkpoint_dir": stage["checkpoint_dir"],
         "device": runtime["device"],
         "seed": runtime["seed"],
+        "cudnn_benchmark": runtime["cudnn_benchmark"],
+        "cudnn_deterministic": runtime["cudnn_deterministic"],
+        "deterministic_algorithms": runtime["deterministic_algorithms"],
         "quick": runtime["quick"],
     }
 
@@ -453,7 +461,7 @@ class ConsistencyLoRATrainer:
         if not isinstance(base_cfg_raw, dict):
             raise ValueError(f"Base diffusion checkpoint {checkpoint_path!r} is missing config metadata.")
 
-        cfg_kwargs = _filter_constructor_kwargs(DiffusionTrainingConfig.__init__, base_cfg_raw)
+        cfg_kwargs = _filter_constructor_kwargs(DiffusionTrainingConfig._init_from_values, base_cfg_raw)
         ignored_keys = sorted(set(base_cfg_raw) - set(cfg_kwargs))
         if ignored_keys:
             preview = ", ".join(ignored_keys[:8])
@@ -474,7 +482,7 @@ class ConsistencyLoRATrainer:
         del checkpoint
 
         bundle = DiffusionTrainer(base_config)
-        bundle.load_checkpoint(checkpoint_path)
+        bundle.warm_start_from_checkpoint(checkpoint_path)
         bundle.vqvae.eval()
         bundle.condition_encoder.eval()
         bundle.logic_net.eval()
@@ -1159,6 +1167,7 @@ def _create_fast_sampler_dataloaders(
         dataset,
         validation_fraction=config.validation_fraction,
         seed=config.seed,
+        require_group_metadata=True,
     )
     train_loader = DataLoader(
         train_dataset,
@@ -1283,7 +1292,14 @@ def reevaluate_fast_sampler_checkpoint_candidates(
 
 
 def train_fast_sampler(config: FastSamplerTrainingConfig) -> ConsistencyLoRATrainer:
-    resolved_seed = seed_everything(int(getattr(config, "seed", 42)))
+    resolved_seed = seed_everything(
+        int(getattr(config, "seed", 42)),
+        cudnn_benchmark=bool(getattr(config, "cudnn_benchmark", True)),
+        cudnn_deterministic=bool(getattr(config, "cudnn_deterministic", False)),
+        deterministic_algorithms=bool(
+            getattr(config, "deterministic_algorithms", False)
+        ),
+    )
     logger.info("Fast-sampler trainer seeds initialized: seed=%d", resolved_seed)
     trainer = ConsistencyLoRATrainer(config)
     checkpoint_dir = Path(config.checkpoint_dir)
@@ -1419,7 +1435,11 @@ def train_fast_sampler(config: FastSamplerTrainingConfig) -> ConsistencyLoRATrai
         latest_metrics = dict(metrics)
         latest_metrics["best_metric_name"] = str(best_metric_name)
         latest_metrics["best_metric_value"] = float(best_metric_value)
-        latest_metrics["best_val_loss"] = float(best_metric_value if best_metric_name == "val_loss" else val_metrics["val_loss"])
+        _prev_best_val = float(getattr(trainer, "_historical_best_val_loss", float("inf")))
+        _curr_epoch_val = float(val_metrics.get("val_loss", _prev_best_val))
+        _new_best_val = min(_prev_best_val, _curr_epoch_val)
+        setattr(trainer, "_historical_best_val_loss", _new_best_val)
+        latest_metrics["best_val_loss"] = float(_new_best_val)
         trainer.save_resume_checkpoint(str(checkpoint_dir / LATEST_RESUME_FILENAME), latest_metrics)
         enforce_checkpoint_storage_budget(
             logger,

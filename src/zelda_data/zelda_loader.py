@@ -31,6 +31,7 @@ from .zelda_core import (
     ZeldaDungeonAdapter
 )
 from src.core.definitions import (
+    CHAR_TO_SEMANTIC,
     GRAPH_EDGE_FEATURE_DIM,
     GRAPH_NODE_FLOOR_FEATURE_INDEX,
     GRAPH_NODE_FEATURE_DIM,
@@ -75,19 +76,8 @@ from src.zelda_data.splits import DEFAULT_TRAIN_DUNGEONS, normalize_dungeon_ids,
 
 logger = logging.getLogger(__name__)
 
-# Simple ASCII mapping for basic text files (legacy support).
-TILE_MAPPING = {
-    'F': 0,
-    'W': 1,
-    'D': 2,
-    'K': 3,
-    'L': 4,
-    'E': 5,
-    'S': 6,
-    'G': 7,
-    '.': 0,
-    '-': -1,
-}
+# ASCII mapping for basic text files, synchronized directly with canonical CHAR_TO_SEMANTIC.
+TILE_MAPPING = dict(CHAR_TO_SEMANTIC)
 
 VGLC_AVAILABLE = True
 logger.info("VGLC adapter available via zelda_core")
@@ -307,16 +297,21 @@ def _extract_graph_from_dungeon(
         for node_id in canonical_node_order(graph)
         if node_id in node_id_to_idx
     ]
-    tpe_tensor = compute_tpe_features(
-        graph=graph.subgraph(filtered_nodes).copy(),
-        node_order=filtered_nodes,
-        node_to_idx={node_id: i for i, node_id in enumerate(filtered_nodes)},
-        node_features=torch.tensor(node_features_arr, dtype=torch.float32),
-        device=torch.device("cpu"),
-        parse_label_tokens=_parse_label_tokens_local,
-        coerce_bool=_coerce_bool_local,
-        coerce_difficulty=_coerce_difficulty_local,
-    )
+    if len(filtered_nodes) <= 1:
+        # Can't compute Laplacian eigenvectors on trivial graph - use zeros
+        tpe_dim = int(GRAPH_TPE_DIM)
+        tpe_tensor = torch.zeros((max(1, len(filtered_nodes)), tpe_dim), dtype=torch.float32)
+    else:
+        tpe_tensor = compute_tpe_features(
+            graph=graph.subgraph(filtered_nodes).copy(),
+            node_order=filtered_nodes,
+            node_to_idx={node_id: i for i, node_id in enumerate(filtered_nodes)},
+            node_features=torch.tensor(node_features_arr, dtype=torch.float32),
+            device=torch.device("cpu"),
+            parse_label_tokens=_parse_label_tokens_local,
+            coerce_bool=_coerce_bool_local,
+            coerce_difficulty=_coerce_difficulty_local,
+        )
     start_node = next(
         (
             node_id
@@ -1284,13 +1279,30 @@ def graph_collate_fn(batch):
     if isinstance(batch[0], (list, tuple)) and len(batch[0]) == 2:
         images = torch.stack([item[0] for item in batch])
         graphs = []
-        for item in batch:
-            graph = dict(item[1])
-            if "batch_idx" not in graph:
-                node_features = graph.get("node_features")
-                if isinstance(node_features, torch.Tensor) and node_features.dim() >= 1:
-                    graph["batch_idx"] = torch.zeros(int(node_features.shape[0]), dtype=torch.long)
+        for _, raw_graph in batch:
+            graph = dict(raw_graph)
+            node_features = graph.get("node_features")
+            num_nodes = 0
+            if isinstance(node_features, torch.Tensor) and node_features.dim() >= 1:
+                num_nodes = int(node_features.shape[0])
+            # Each graph dict is processed independently by _encode_graph_conditioning,
+            # so batch_idx must be all-zeros (single graph, graph-local scope).
+            # Using the global batch position `i` as fill_value would make _dense_batch
+            # allocate max(batch_idx)+1 = i+1 slots, causing B=i+1 vs batch_size=1 mismatch.
+            existing_batch_idx = graph.get("batch_idx")
+            needs_reset = (
+                "batch_idx" not in graph
+                or not isinstance(existing_batch_idx, torch.Tensor)
+                or (existing_batch_idx.numel() > 0 and int(existing_batch_idx.max()) > 0)
+            )
+            if needs_reset:
+                graph["batch_idx"] = torch.zeros(num_nodes, dtype=torch.long)
+
+            # Keep edge_index graph-local (nodes 0..N-1).
+            # Do NOT offset by a cumulative node_offset – graphs are stored as a list
+            # and each is encoded independently, never concatenated into one PyG batch.
             graphs.append(graph)
+
         return images, graphs
     else:
         # No graph data -- plain image batch

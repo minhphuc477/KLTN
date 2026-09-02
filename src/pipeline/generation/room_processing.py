@@ -4197,31 +4197,49 @@ def _compute_room_condition(
     node_tokens: Optional[torch.Tensor] = None
     condition_dim = int(getattr(pipeline.condition_encoder, "output_dim", 256))
     style_id = graph_context.get("style_id")
+    active_generator_mode = str(
+        room_generator_mode or getattr(pipeline, "room_generator_mode", "latent_diffusion")
+    ).strip().lower()
+    global_graph_conditioning_enabled = bool(
+        active_generator_mode == "discrete_masked"
+        or getattr(pipeline, "diffusion_condition_global_graph_enabled", True)
+    )
+    use_graph_node_cross_attention = bool(
+        global_graph_conditioning_enabled
+        and getattr(pipeline, "use_graph_node_cross_attention", False)
+    )
     try:
-        node_dim, edge_dim = pipeline._condition_feature_dims()
-        validate_feature_dims(
-            node_features=graph_context.get('node_features'),
-            edge_features=graph_context.get('edge_features'),
-            expected_node_dim=node_dim,
-            expected_edge_dim=edge_dim,
-        )
-        condition_out = pipeline.condition_encoder(
-            neighbor_latents=neighbor_latents,
-            reference_room_maps=reference_room_maps,
-            boundary_constraints=boundary_constraints,
-            position=position,
-            node_features=graph_context.get('node_features'),
-            edge_index=graph_context.get('edge_index'),
-            edge_features=graph_context.get('edge_features'),
-            edge_rrwp=graph_context.get('edge_rrwp'),
-            tpe=graph_context.get('tpe'),
-            current_node_distance=graph_context.get('current_node_distance'),
-            node_mask=graph_context.get('node_mask'),
-            current_node_idx=graph_context.get('current_node_idx'),
-            style_id=style_id,
-            return_global_tokens=pipeline.use_graph_node_cross_attention,
-        )
-        if pipeline.use_graph_node_cross_attention:
+        if global_graph_conditioning_enabled:
+            node_dim, edge_dim = pipeline._condition_feature_dims()
+            validate_feature_dims(
+                node_features=graph_context.get('node_features'),
+                edge_features=graph_context.get('edge_features'),
+                expected_node_dim=node_dim,
+                expected_edge_dim=edge_dim,
+            )
+            condition_out = pipeline.condition_encoder(
+                neighbor_latents=neighbor_latents,
+                reference_room_maps=reference_room_maps,
+                boundary_constraints=boundary_constraints,
+                position=position,
+                node_features=graph_context.get('node_features'),
+                edge_index=graph_context.get('edge_index'),
+                edge_features=graph_context.get('edge_features'),
+                edge_rrwp=graph_context.get('edge_rrwp'),
+                tpe=graph_context.get('tpe'),
+                current_node_distance=graph_context.get('current_node_distance'),
+                node_mask=graph_context.get('node_mask'),
+                current_node_idx=graph_context.get('current_node_idx'),
+                style_id=style_id,
+                return_global_tokens=use_graph_node_cross_attention,
+            )
+        else:
+            condition_out = pipeline.condition_encoder.encode_local_only(
+                neighbor_latents=neighbor_latents,
+                boundary_constraints=boundary_constraints,
+                position=position,
+            )
+        if use_graph_node_cross_attention:
             if not isinstance(condition_out, tuple) or len(condition_out) != 2:
                 raise ValueError(
                     "Condition encoder must return (conditioning, global_tokens) when "
@@ -4236,12 +4254,12 @@ def _compute_room_condition(
         )
     except (AttributeError, RuntimeError, ValueError, TypeError) as e:
         pipeline._bump_diagnostic("condition_encoder_fallback")
-        if pipeline.strict_checkpoint_mode:
+        if bool(getattr(pipeline, "condition_strict_schema", True)):
             raise RuntimeError(
-                f"Condition encoding failed in strict mode: {e}"
+                f"Condition encoding failed under the strict schema: {e}"
             ) from e
         logger.warning(f"Condition encoding failed: {e}, using zero condition")
-        if pipeline.use_graph_node_cross_attention:
+        if use_graph_node_cross_attention:
             num_nodes = 0
             node_features = graph_context.get("node_features")
             if isinstance(node_features, torch.Tensor) and node_features.dim() >= 2:
@@ -4252,18 +4270,19 @@ def _compute_room_condition(
             condition = torch.zeros(1, condition_dim, device=pipeline.device)
         node_tokens = None
 
-    if pipeline.use_graph_node_cross_attention and isinstance(node_tokens, torch.Tensor):
+    if use_graph_node_cross_attention and isinstance(node_tokens, torch.Tensor):
         try:
             if node_tokens.dim() == 2:
                 node_tokens = node_tokens.unsqueeze(0)
             condition = torch.cat([condition.unsqueeze(1), node_tokens], dim=1)
         except (AttributeError, RuntimeError, ValueError, TypeError) as e:
             pipeline._bump_diagnostic("graph_node_cross_attention_fallback")
+            if bool(getattr(pipeline, "condition_strict_schema", True)):
+                raise RuntimeError(
+                    f"Graph-node conditioning assembly failed under the strict schema: {e}"
+                ) from e
             logger.debug("Falling back to single conditioning vector: %s", e)
 
-    active_generator_mode = str(
-        room_generator_mode or getattr(pipeline, "room_generator_mode", "latent_diffusion")
-    ).strip().lower()
     puzzle_structure_condition_enabled = (
         pipeline.masked_room_puzzle_structure_condition_enabled
         if active_generator_mode == "discrete_masked"
@@ -4277,7 +4296,7 @@ def _compute_room_condition(
                 graph_conditioning_mode="node_sequence",
             ).unsqueeze(0)
         elif condition.dim() == 2:
-            if bool(pipeline.use_graph_node_cross_attention):
+            if use_graph_node_cross_attention:
                 condition = apply_puzzle_structure_control_to_conditioning(
                     condition,
                     puzzle_structure_enabled=bool(graph_context.get("puzzle_room_structure_enabled", True)),
@@ -4312,7 +4331,7 @@ def _compute_room_condition(
                 scale=puzzle_stage_token_scale,
             ).unsqueeze(0)
         elif condition.dim() == 2:
-            if bool(pipeline.use_graph_node_cross_attention):
+            if use_graph_node_cross_attention:
                 condition = apply_puzzle_stage_control_to_conditioning(
                     condition,
                     puzzle_stage_condition=graph_context.get("puzzle_stage_condition"),

@@ -76,6 +76,7 @@ class DStarLiteSolver:
         self._grid_snapshot: Optional[np.ndarray] = None
         self._textbook_core_active = False
         self._last_compute_budget_exhausted = False
+        self._last_compute_iterations = 0
 
         self.last_opened_doors: Set[Tuple[int, int]] = set()
         self.last_pushed_blocks: Set[Tuple[Tuple[int, int], Tuple[int, int]]] = set()
@@ -249,6 +250,7 @@ class DStarLiteSolver:
     def compute_shortest_path(self) -> bool:
         """Run textbook backward D* Lite until the current start is consistent."""
         self._last_compute_budget_exhausted = False
+        self._last_compute_iterations = 0
         if self.current_start_state is None:
             return False
         start_hash = game_state_key(self.current_start_state)
@@ -287,6 +289,7 @@ class DStarLiteSolver:
                 for predecessor in self._get_successors(state):
                     self.update_vertex(predecessor, game_state_key(predecessor))
             iterations += 1
+            self._last_compute_iterations = iterations
 
         logger.warning("D* Lite reached its update budget (%d)", self.timeout)
         self._last_compute_budget_exhausted = True
@@ -335,21 +338,28 @@ class DStarLiteSolver:
     def _fallback_to_astar(
         self,
         start_state: GameState,
+        *,
+        prior_iterations: int = 0,
     ) -> Tuple[bool, List[Tuple[int, int]], int]:
         from .validator import StateSpaceAStar
 
         self.used_fallback = True
+        spent = max(0, int(prior_iterations))
+        remaining_budget = max(0, int(self.timeout) - spent)
+        if remaining_budget <= 0:
+            return False, [], spent
         previous_state = self.env.state
         self.env.state = start_state.copy()
         try:
             solver = StateSpaceAStar(
                 self.env,
-                timeout=self.timeout,
+                timeout=remaining_budget,
                 heuristic_mode=self.heuristic_mode,
                 priority_options={"allow_diagonals": self.allow_diagonals},
                 search_mode="astar",
             )
-            return solver.solve()
+            success, path, states = solver.solve()
+            return success, path, spent + int(states)
         finally:
             self.env.state = previous_state
 
@@ -381,7 +391,10 @@ class DStarLiteSolver:
         path = self._extract_path(start_state) if success else []
         if not path or path[-1] != self.env.goal_pos:
             logger.warning("Backward D* Lite could not certify a path; using state-space A*")
-            return self._fallback_to_astar(start_state)
+            return self._fallback_to_astar(
+                start_state,
+                prior_iterations=self._last_compute_iterations,
+            )
 
         self.current_path = path
         self.path_index = 0
@@ -435,7 +448,10 @@ class DStarLiteSolver:
             return False, [], self.states_updated
         path = self._extract_path(current_state) if success else []
         if not path or path[-1] != self.env.goal_pos:
-            return self._fallback_to_astar(current_state)
+            return self._fallback_to_astar(
+                current_state,
+                prior_iterations=self._last_compute_iterations,
+            )
 
         self.current_path = path
         self.path_index = 0

@@ -16,8 +16,8 @@ from typing import Any, DefaultDict, Dict, Iterable, List, Mapping, Optional, Se
 import numpy as np
 
 from src.core.definitions import SEMANTIC_PALETTE
-from src.simulation.cognitive_bounded_search import AgentPersona, solve_with_pcbs
-from src.simulation.validator import ACTION_DELTAS, BLOCKING_IDS, ZeldaLogicEnv
+from src.simulation.cognitive_bounded_search import solve_with_pcbs
+from src.simulation.validator import ACTION_DELTAS, ZeldaLogicEnv
 
 GridPos = Tuple[int, int]
 

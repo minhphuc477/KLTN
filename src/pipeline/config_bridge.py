@@ -297,6 +297,10 @@ def pipeline_kwargs_from_resolved_config(config: Dict[str, Any]) -> Dict[str, An
             ),
             "condition_use_rrwp_edge_features": condition_source.get("condition_use_rrwp_edge_features", diffusion.get("condition_use_rrwp_edge_features", True)),
             "condition_strict_schema": condition_source.get("condition_strict_schema", diffusion.get("condition_strict_schema", True)),
+            "diffusion_condition_global_graph_enabled": diffusion.get(
+                "condition_global_graph_enabled",
+                True,
+            ),
             "topology_refinement_mode": diffusion["topology_refinement_mode"],
             "diffusion_attention_mode": diffusion["attention_mode"],
             "diffusion_hedgehog_feature_dim": diffusion["hedgehog_feature_dim"],
@@ -335,6 +339,10 @@ def pipeline_kwargs_from_resolved_config(config: Dict[str, Any]) -> Dict[str, An
                 ),
                 "condition_use_rrwp_edge_features": condition_source.get("condition_use_rrwp_edge_features", diffusion.get("condition_use_rrwp_edge_features", True)),
                 "condition_strict_schema": condition_source.get("condition_strict_schema", diffusion.get("condition_strict_schema", True)),
+                "condition_global_graph_enabled": diffusion.get(
+                    "condition_global_graph_enabled",
+                    True,
+                ),
             },
             "diffusion_fallback_config": {
                 "latent_dim": diffusion["latent_dim"],

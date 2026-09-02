@@ -1,4 +1,4 @@
-﻿"""Small integration layer between `visual_extractor` and the solver stack.
+"""Small integration layer between `visual_extractor` and the solver stack.
 
 Purpose (minimal, testable):
 - convert a single-room screenshot -> semantic room grid + confidence
@@ -37,19 +37,57 @@ def visual_extract_to_room(image_path: str, templates_dir: str, tile_px: int = 1
     return ids, conf
 
 
-def infer_inventory_from_room(semantic_grid: np.ndarray, conf: Optional[np.ndarray] = None) -> Set[str]:
+def infer_inventory_from_room(
+    semantic_grid: np.ndarray,
+    conf: Optional[np.ndarray] = None,
+    template_to_semantic: Optional[dict] = None,
+) -> Set[str]:
     """Return a small set of inventory tokens detected in the room.
 
     Currently recognizes: 'small_key', 'bomb', 'item' (generic).
-    Uses SEMANTIC_PALETTE constants.
+
+    Args:
+        semantic_grid: A 2-D integer grid. Can be either:
+            * A **semantic grid** (values are SEMANTIC_PALETTE IDs, e.g. 30 for
+              KEY) — pass ``template_to_semantic=None`` in this case.
+            * A **raw template-index grid** (values are visual template indices
+              returned by :func:`extract_grid`) — in this case supply the
+              ``template_to_semantic`` mapping so the function can translate
+              indices before comparing against SEMANTIC_PALETTE constants.
+        conf:  Optional confidence mask (same shape). Not currently used for
+              filtering but reserved for future threshold-gated detection.
+        template_to_semantic: Optional dict mapping ``int`` template indices to
+              ``int`` SEMANTIC_PALETTE IDs.  Build this from tileset metadata.
+              When ``None`` the grid is assumed to already contain semantic IDs.
+
+    Returns:
+        A set of inventory token strings (e.g. {'small_key', 'item'}).
     """
-    items = set()
-    if np.any(semantic_grid == SEMANTIC_PALETTE.get('KEY', 30)):
+    items: Set[str] = set()
+
+    # If we received raw template indices, remap to semantic IDs first so that
+    # comparisons against SEMANTIC_PALETTE work correctly.
+    if template_to_semantic is not None:
+        # Build a vectorised lookup table for speed (handles unknown indices by
+        # mapping them to -1 which will never match a valid palette entry).
+        max_idx = int(semantic_grid.max()) if semantic_grid.size > 0 else 0
+        lut = np.full(max_idx + 1, -1, dtype=np.int32)
+        for tpl_idx, sem_id in template_to_semantic.items():
+            if 0 <= int(tpl_idx) <= max_idx:
+                lut[int(tpl_idx)] = int(sem_id)
+        grid = lut[np.clip(semantic_grid.astype(np.int32), 0, max_idx)]
+    else:
+        grid = semantic_grid
+
+    key_id = int(SEMANTIC_PALETTE.get('KEY', 30))
+    item_id = int(SEMANTIC_PALETTE.get('ITEM', 33))
+
+    if np.any(grid == key_id):
         items.add('small_key')
-    if np.any(semantic_grid == SEMANTIC_PALETTE.get('ITEM', 33)):
+    if np.any(grid == item_id):
         items.add('item')
-    # bombs/items are not uniquely encoded in VGLC; heuristically detect 'bomb' by nearby BLOCK+ITEM pattern
-    # (left as simple detection for now)
+    # bombs/items are not uniquely encoded in VGLC; heuristically detect 'bomb'
+    # by nearby BLOCK+ITEM pattern (left as simple detection for now).
     return items
 
 
@@ -82,4 +120,3 @@ def make_stitched_for_single_room(room_grid: np.ndarray, room_pos: Tuple[int, in
                             room_positions=room_positions,
                             start_global=start_global,
                             triforce_global=trif_global)
-

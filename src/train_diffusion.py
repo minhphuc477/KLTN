@@ -18,7 +18,8 @@ import argparse
 import inspect
 import logging
 import math
-from contextlib import nullcontext
+import random
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import Optional, Dict, Any, Tuple, List, Set, Mapping
 
@@ -74,7 +75,6 @@ from src.utils.checkpoint import (
     LATEST_RESUME_FILENAME,
     MetricsLogger,
     enforce_checkpoint_storage_budget,
-    prune_checkpoints,
     resolve_resume_checkpoint,
     safe_torch_load,
 )
@@ -110,6 +110,37 @@ from src.training.diffusion_checkpoint_contracts import (
 
 logger = logging.getLogger(__name__)
 CARDINAL_DIRECTIONS = ("N", "S", "E", "W")
+VALIDATION_SEED_OFFSET = 1_000_003
+
+
+@contextmanager
+def preserve_training_rng_state(*, evaluation_seed: Optional[int] = None):
+    """Run deterministic diagnostics without changing later training draws."""
+    python_state = random.getstate()
+    numpy_state = np.random.get_state()
+    cuda_devices = list(range(torch.cuda.device_count())) if torch.cuda.is_available() else []
+    try:
+        with torch.random.fork_rng(devices=cuda_devices, enabled=True):
+            if evaluation_seed is not None:
+                normalized_seed = int(evaluation_seed)
+                random.seed(normalized_seed)
+                np.random.seed(normalized_seed % (2**32))
+                torch.manual_seed(normalized_seed)
+                if torch.cuda.is_available():
+                    torch.cuda.manual_seed_all(normalized_seed)
+            yield
+    finally:
+        random.setstate(python_state)
+        np.random.set_state(numpy_state)
+
+
+def seed_validation_diffusion_batch(training_seed: int, batch_index: int) -> int:
+    """Seed one validation-loss batch identically across epochs and model arms."""
+    seed = int(training_seed) + VALIDATION_SEED_OFFSET + int(batch_index)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    return seed
 
 # ---------------------------------------------------------------------------
 # Optional heavy-path libraries (graceful fallback when not installed)
@@ -148,6 +179,25 @@ def compute_teacher_validation_total_loss(
     if include_logic_loss and float(alpha_logic) > 0.0:
         total += float(alpha_logic) * float(val_logic_loss)
     return float(total)
+
+
+def select_diffusion_checkpoint_metric(
+    validation_metrics: Mapping[str, Any],
+    metric_name: str,
+) -> float:
+    """Read the predeclared checkpoint metric without cross-objective tie breaks."""
+    normalized = str(metric_name).strip().lower()
+    if normalized not in {"val_diffusion_loss", "val_total_loss"}:
+        raise ValueError(
+            "Diffusion checkpoint metric must be 'val_diffusion_loss' or "
+            f"'val_total_loss', got {metric_name!r}."
+        )
+    if normalized not in validation_metrics:
+        raise KeyError(f"Validation did not report required checkpoint metric {normalized!r}.")
+    value = float(validation_metrics[normalized])
+    if math.isnan(value):
+        raise FloatingPointError(f"Checkpoint metric {normalized!r} is NaN.")
+    return value
 
 
 # =============================================================================
@@ -258,6 +308,13 @@ class DiffusionTrainer:
         # Freeze VQ-VAE
         self.vqvae.eval()
         self.vqvae.requires_grad_(False)
+
+        if not bool(getattr(config, "condition_global_graph_enabled", True)):
+            # The publication local-context baseline must not update dormant
+            # graph/style/fusion parameters.  Keeping only the local encoder
+            # trainable also avoids DDP unused-parameter failures.
+            self.condition_encoder.requires_grad_(False)
+            self.condition_encoder.local_encoder.requires_grad_(True)
 
         if not bool(getattr(config, "logic_net_trainable", True)):
             self.logic_net.eval()
@@ -883,6 +940,11 @@ class DiffusionTrainer:
         loss.backward()
 
     def _unscale_gradients_if_needed(self) -> None:
+        if self._accelerator is not None:
+            # Accelerate handles gradient unscaling internally inside clip_grad_norm_.
+            # Calling manual GradScaler unscale_ here would double-unscale gradients
+            # (dividing by scale^2) and destroy FP16 gradient magnitudes.
+            return
         scaler = getattr(self, "_grad_scaler", None)
         if scaler is not None and bool(getattr(scaler, "is_enabled", lambda: False)()):
             scaler.unscale_(self.optimizer)
@@ -1297,6 +1359,54 @@ class DiffusionTrainer:
                 "LogicNet will not infer ambiguous provider-to-lock assignments."
             )
     
+    def _encode_local_conditioning(self, graph_dict: dict) -> torch.Tensor:
+        """Encode only neighbor, boundary, and position context.
+
+        This is the separately trained N baseline.  It intentionally excludes
+        graph nodes, edges, TPE/RRWP features, styles, and spatial graph data.
+        """
+        boundary_constraints = graph_dict.get("boundary_constraints")
+        if boundary_constraints is None:
+            boundary_constraints = torch.zeros(1, 8, device=self.device)
+        elif not isinstance(boundary_constraints, torch.Tensor):
+            boundary_constraints = torch.as_tensor(
+                boundary_constraints,
+                dtype=torch.float32,
+                device=self.device,
+            )
+        else:
+            boundary_constraints = boundary_constraints.to(
+                self.device,
+                dtype=torch.float32,
+            )
+        if boundary_constraints.dim() == 1:
+            boundary_constraints = boundary_constraints.unsqueeze(0)
+
+        room_position = graph_dict.get("room_position")
+        if room_position is None:
+            room_position = torch.zeros(1, 2, device=self.device)
+        elif not isinstance(room_position, torch.Tensor):
+            room_position = torch.as_tensor(
+                room_position,
+                dtype=torch.float32,
+                device=self.device,
+            )
+        else:
+            room_position = room_position.to(self.device, dtype=torch.float32)
+        if room_position.dim() == 1:
+            room_position = room_position.unsqueeze(0)
+
+        neighbor_latents = (
+            self._encode_neighbor_maps_to_latents(graph_dict.get("neighbor_maps"))
+            if bool(getattr(self.config, "use_teacher_forced_neighbor_latents", True))
+            else {direction: None for direction in CARDINAL_DIRECTIONS}
+        )
+        return self.condition_encoder.encode_local_only(
+            neighbor_latents=neighbor_latents,
+            boundary_constraints=boundary_constraints,
+            position=room_position,
+        )
+
     def _encode_graph_conditioning(
         self,
         graph_dict: dict,
@@ -1315,6 +1425,9 @@ class DiffusionTrainer:
             If graph_conditioning_mode='node_sequence': [N+1, context_dim]
             with a canonical room-anchor token prepended.
         """
+        if not bool(getattr(self.config, "condition_global_graph_enabled", True)):
+            return self._encode_local_conditioning(graph_dict)
+
         node_features = graph_dict['node_features'].to(self.device)
         edge_index = graph_dict['edge_index'].to(self.device)
         
@@ -2054,9 +2167,9 @@ class DiffusionTrainer:
         Standard in all modern diffusion training (Nichol & Dhariwal, 2021).
         """
         with torch.no_grad():
-            for p_ema, p in zip(self.ema_diffusion.parameters(),
-                                self.diffusion.parameters()):
-                p_ema.data.mul_(self.ema_decay).add_(p.data, alpha=1.0 - self.ema_decay)
+            for p_ema, p in zip(self.ema_diffusion.parameters(), self.diffusion.parameters()):
+                if torch.is_floating_point(p_ema) and torch.is_floating_point(p):
+                    p_ema.mul_(self.ema_decay).add_(p, alpha=1.0 - self.ema_decay)
             average_module_parameters(
                 self.ema_diffusion,
                 context=getattr(self, "distributed_context", None),
@@ -2120,6 +2233,12 @@ class DiffusionTrainer:
                     "Further `%s` non-finite warnings will be rate-limited.",
                     key,
                 )
+
+    def _handle_nonfinite(self, key: str, message: str) -> None:
+        """Apply the configured fail-closed or compatibility non-finite policy."""
+        if str(getattr(self.config, "nonfinite_policy", "skip")).strip().lower() == "error":
+            raise FloatingPointError(message)
+        self._warn_nonfinite(key, message)
 
     def _gradients_are_finite(self) -> bool:
         """Check all trainable optimizer modules before stepping."""
@@ -2440,8 +2559,13 @@ class DiffusionTrainer:
                 -1.0,
                 1.0,
             )
-        if not self._tensor_is_finite(predicted_x0):
-            self._warn_nonfinite(
+        predicted_x0_is_finite = all_ranks_true(
+            self._tensor_is_finite(predicted_x0),
+            device=self.device,
+            context=getattr(self, "distributed_context", None),
+        )
+        if not predicted_x0_is_finite:
+            self._handle_nonfinite(
                 "auxiliary_pred_x0",
                 "Diffusion training: non-finite predicted x0 for auxiliary supervision; skipping auxiliary losses for this batch.",
             )
@@ -2510,7 +2634,7 @@ class DiffusionTrainer:
             context=getattr(self, "distributed_context", None),
         )
         if not diffusion_loss_is_finite:
-            self._warn_nonfinite(
+            self._handle_nonfinite(
                 "diffusion_loss",
                 "Diffusion training: non-finite diffusion loss detected; skipping optimizer step for this batch.",
             )
@@ -2606,12 +2730,17 @@ class DiffusionTrainer:
                         real_maps,
                     )
 
-            if self._tensor_is_finite(logic_loss):
+            logic_loss_is_finite = all_ranks_true(
+                self._tensor_is_finite(logic_loss),
+                device=self.device,
+                context=getattr(self, "distributed_context", None),
+            )
+            if logic_loss_is_finite:
                 if isinstance(logic_loss, torch.Tensor) and logic_loss.numel() != 1:
                     logic_loss = logic_loss.mean()
                 solvability_proxy = self._logic_loss_to_solvability_proxy(logic_loss)
             else:
-                self._warn_nonfinite(
+                self._handle_nonfinite(
                     "logic_loss",
                     "Diffusion training: non-finite logic loss detected; disabling logic loss for this batch.",
                 )
@@ -2646,7 +2775,7 @@ class DiffusionTrainer:
             context=getattr(self, "distributed_context", None),
         )
         if not total_loss_is_finite:
-            self._warn_nonfinite(
+            self._handle_nonfinite(
                 "total_loss",
                 "Diffusion training: non-finite total loss detected; skipping optimizer step for this batch.",
             )
@@ -2681,11 +2810,40 @@ class DiffusionTrainer:
 
         graph_skip_reason = str(logic_info.get('global_graph_skipped', '') or '')
         graph_loss_attempted = bool(logic_enabled and logic_loss_weight > 0.0)
+        weighted_visual = float(self.config.alpha_visual) * float(diffusion_loss.detach().item())
+        weighted_logic = float(logic_loss_weight) * float(logic_loss.detach().item())
+        weighted_logic_tile = float(getattr(self.config, "alpha_logic_tile", 0.0)) * float(
+            logic_tile_loss.detach().item()
+        )
+        weighted_wfc_pseudo = float(getattr(self.config, "alpha_wfc_pseudo", 0.0)) * float(
+            wfc_pseudo_loss.detach().item()
+        )
+        weighted_stage_semantics = float(
+            getattr(self.config, "puzzle_stage_semantics_loss_weight", 0.0)
+        ) * float(puzzle_stage_semantic_loss.detach().item())
+        contribution_l1 = sum(
+            abs(value)
+            for value in (
+                weighted_visual,
+                weighted_logic,
+                weighted_logic_tile,
+                weighted_wfc_pseudo,
+                weighted_stage_semantics,
+            )
+        )
         metrics = {
             'loss': total_loss.item(),
             'diffusion_loss': diffusion_loss.item(),
             'logic_loss': logic_loss.item(),
             'logic_tile_loss': logic_tile_loss.item(),
+            'weighted_visual_loss': weighted_visual,
+            'weighted_logic_loss': weighted_logic,
+            'weighted_logic_tile_loss': weighted_logic_tile,
+            'weighted_wfc_pseudo_loss': weighted_wfc_pseudo,
+            'weighted_puzzle_stage_semantic_loss': weighted_stage_semantics,
+            'logic_objective_fraction_l1': (
+                abs(weighted_logic) / contribution_l1 if contribution_l1 > 0.0 else 0.0
+            ),
             'wfc_pseudo_loss': wfc_pseudo_mean_loss.item(),
             'wfc_pseudo_loss_sum': float(wfc_pseudo_mean_loss.detach().item()) * float(wfc_pseudo_samples),
             'wfc_pseudo_loss_contribution': wfc_pseudo_loss.item(),
@@ -2720,7 +2878,7 @@ class DiffusionTrainer:
         if not self._gradients_are_finite():
             self._amp_update_after_skipped_step()
             self._reset_gradient_accumulation()
-            self._warn_nonfinite(
+            self._handle_nonfinite(
                 "gradient",
                 "Diffusion training: non-finite gradients detected; skipping optimizer step for this batch.",
             )
@@ -2734,7 +2892,7 @@ class DiffusionTrainer:
             if not self._tensor_is_finite(grad_norm):
                 self._amp_update_after_skipped_step()
                 self._reset_gradient_accumulation()
-                self._warn_nonfinite(
+                self._handle_nonfinite(
                     "gradient_norm",
                     "Diffusion training: non-finite gradient norm detected after clipping; skipping optimizer step for this batch.",
                 )
@@ -2985,7 +3143,8 @@ class DiffusionTrainer:
                         for graph_dict in graph_list
                     ]
                     conditioning = self._stack_conditioning_vectors(cond_vectors)
-                    diffusion_graph_data = self._stack_diffusion_graph_batch(graph_list)
+                    if bool(getattr(self.config, "condition_global_graph_enabled", True)):
+                        diffusion_graph_data = self._stack_diffusion_graph_batch(graph_list)
                 except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                     raise RuntimeError(
                         "Graph-conditioned diffusion training could not build its "
@@ -3075,6 +3234,8 @@ class DiffusionTrainer:
         eval_model.eval()
         if getattr(self, "puzzle_stage_semantics_head", None) is not None:
             self.puzzle_stage_semantics_head.eval()
+        if self.condition_encoder is not None and hasattr(self.condition_encoder, "eval"):
+            self.condition_encoder.eval()
 
         if num_diffusion_samples is None:
             num_diffusion_samples = int(getattr(self.config, "validation_num_diffusion_samples", num_samples))
@@ -3102,7 +3263,7 @@ class DiffusionTrainer:
         skipped_nonfinite = 0
         guidance_suppressed_low_tile_accuracy = 0
 
-        for batch_data in dataloader:
+        for validation_batch_index, batch_data in enumerate(dataloader):
             # Handle (images, graph_list) from graph_collate_fn
             if isinstance(batch_data, (list, tuple)) and len(batch_data) >= 2:
                 real_maps = batch_data[0]
@@ -3123,7 +3284,8 @@ class DiffusionTrainer:
                         for graph_dict in graph_list
                     ]
                     conditioning = self._stack_conditioning_vectors(cond_vectors)
-                    diffusion_graph_data = self._stack_diffusion_graph_batch(graph_list)
+                    if bool(getattr(self.config, "condition_global_graph_enabled", True)):
+                        diffusion_graph_data = self._stack_diffusion_graph_batch(graph_list)
                 except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                     raise RuntimeError(
                         "Graph-conditioned diffusion validation could not build its "
@@ -3158,9 +3320,16 @@ class DiffusionTrainer:
                         total_logic_tile_loss += float(tile_loss.detach().item()) * batch_size
                         num_logic_tile_eval += batch_size
                 except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
-                    logger.debug("LogicNet tile-classifier validation failed; omitting tile accuracy: %s", exc)
+                    logger.warning("LogicNet tile-classifier validation failed; omitting tile accuracy: %s", exc, exc_info=True)
 
             if num_diffusion_eval < int(num_diffusion_samples):
+                # Logic-enabled arms perform additional stochastic validation
+                # after this metric. Re-seeding each batch prevents those
+                # diagnostics from shifting later checkpoint-metric noise.
+                seed_validation_diffusion_batch(
+                    int(getattr(self.config, "seed", 0)),
+                    validation_batch_index,
+                )
                 diffusion_loss = self._diffusion_objective_loss(
                     z_0,
                     conditioning,
@@ -3303,7 +3472,7 @@ class DiffusionTrainer:
                                         total_logicnet_score_after_repair += repaired_score * generated_batch
                                     num_repaired_solvability_eval += generated_batch
                             except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
-                                logger.debug("Hard solvability validation failed; omitting metric: %s", exc)
+                                logger.warning("Hard solvability validation failed; omitting metric: %s", exc, exc_info=True)
                         num_generated_eval += generated_batch
 
             if num_generated_eval >= int(num_samples) and num_diffusion_eval >= int(num_diffusion_samples):
@@ -3347,6 +3516,9 @@ class DiffusionTrainer:
             + float(getattr(self.config, "alpha_wfc_pseudo", 0.0)) * val_wfc_pseudo_loss
         )
 
+        if self.condition_encoder is not None and hasattr(self.condition_encoder, "train"):
+            self.condition_encoder.train()
+
         return {
             'val_diffusion_loss': val_diffusion_loss,
             'val_logic_loss': val_logic_loss,
@@ -3366,6 +3538,7 @@ class DiffusionTrainer:
             'val_skipped_nonfinite': float(skipped_nonfinite),
         }
     
+
     def _build_resume_checkpoint_payload(self, metrics: Optional[Dict] = None) -> Dict[str, Any]:
         return _checkpoint_io.build_resume_checkpoint_payload(self, metrics)
 
@@ -3433,7 +3606,14 @@ def train_diffusion(config: DiffusionTrainingConfig) -> DiffusionTrainer:
         enabled=bool(getattr(config, "distributed_enabled", False)),
         backend=str(getattr(config, "distributed_backend", "nccl")),
     )
-    worker_seed = seed_everything(int(getattr(config, "seed", 42)) + int(distributed_context.rank))
+    worker_seed = seed_everything(
+        int(getattr(config, "seed", 42)) + int(distributed_context.rank),
+        cudnn_benchmark=bool(getattr(config, "cudnn_benchmark", True)),
+        cudnn_deterministic=bool(getattr(config, "cudnn_deterministic", False)),
+        deterministic_algorithms=bool(
+            getattr(config, "deterministic_algorithms", False)
+        ),
+    )
     logger.info(
         "Diffusion trainer seeds initialized: base_seed=%d worker_seed=%d rank=%d",
         int(getattr(config, "seed", 42)),
@@ -3473,6 +3653,7 @@ def train_diffusion(config: DiffusionTrainingConfig) -> DiffusionTrainer:
             base_dataset,
             validation_fraction=float(getattr(config, "validation_fraction", 0.0)),
             seed=int(getattr(config, "seed", 42)),
+            require_group_metadata=True,
         )
         use_dungeon_batch_mode = (
             bool(getattr(config, "dungeon_batch_mode", True))
@@ -3632,14 +3813,17 @@ def train_diffusion(config: DiffusionTrainingConfig) -> DiffusionTrainer:
         metrics_logger = (
             MetricsLogger(
                 log_dir=str(checkpoint_dir / 'logs'),
-                experiment_name='diffusion_training',
+                experiment_name=getattr(config, "experiment_name", "diffusion_training"),
             )
             if distributed_context.is_main_process
             else None
         )
 
         best_solvability = 0.0
-        best_teacher_loss = float("inf")
+        checkpoint_metric_name = str(
+            getattr(config, "best_checkpoint_metric", "val_diffusion_loss")
+        ).strip().lower()
+        best_checkpoint_value = float("inf")
         metrics: Dict[str, float] = {}
         if resume_path is not None:
             latest_metrics = dict(getattr(trainer, "_loaded_checkpoint_metrics", {}) or {})
@@ -3649,12 +3833,23 @@ def train_diffusion(config: DiffusionTrainingConfig) -> DiffusionTrainer:
                     latest_metrics.get("val_solvability", 0.0),
                 )
             )
-            best_teacher_loss = float(
-                latest_metrics.get(
-                    "best_teacher_loss",
-                    latest_metrics.get("val_total_loss", float("inf")),
+            saved_metric_name = str(latest_metrics.get("best_checkpoint_metric_name", ""))
+            if saved_metric_name == checkpoint_metric_name:
+                best_checkpoint_value = float(
+                    latest_metrics.get("best_checkpoint_value", float("inf"))
                 )
-            )
+            elif checkpoint_metric_name == "val_total_loss":
+                # Backward compatibility for checkpoints written before the
+                # selection metric was recorded explicitly.
+                best_checkpoint_value = float(
+                    latest_metrics.get("best_teacher_loss", float("inf"))
+                )
+            else:
+                logger.warning(
+                    "Resume checkpoint has no compatible best %s history; "
+                    "best-model selection restarts from the resumed epoch.",
+                    checkpoint_metric_name,
+                )
 
         for epoch in range(int(getattr(trainer, "epoch", 0)) + 1, config.epochs + 1):
             trainer.epoch = int(epoch)
@@ -3663,11 +3858,18 @@ def train_diffusion(config: DiffusionTrainingConfig) -> DiffusionTrainer:
 
             if distributed_context.is_main_process:
                 assert val_loader is not None
-                val_metrics = trainer.validate(
-                    val_loader,
-                    num_samples=config.validation_num_samples,
-                    num_diffusion_samples=config.validation_num_diffusion_samples,
-                )
+                # Reuse the same held-out noise/timestep stream at every epoch
+                # and in every model arm with the same training seed. This
+                # reduces checkpoint-selection noise without perturbing the
+                # subsequent training stream.
+                with preserve_training_rng_state(
+                    evaluation_seed=int(config.seed) + VALIDATION_SEED_OFFSET,
+                ):
+                    val_metrics = trainer.validate(
+                        val_loader,
+                        num_samples=config.validation_num_samples,
+                        num_diffusion_samples=config.validation_num_diffusion_samples,
+                    )
                 metrics = {
                     'epoch': epoch,
                     'lr': trainer.scheduler.get_last_lr()[0],
@@ -3688,17 +3890,16 @@ def train_diffusion(config: DiffusionTrainingConfig) -> DiffusionTrainer:
                     f"logic_loss_{'enabled' if epoch >= config.warmup_epochs and config.alpha_logic > 0 else 'disabled'}"
                 )
 
-                current_teacher_loss = float(val_metrics.get("val_total_loss", float("inf")))
-                current_solvability = float(val_metrics['val_solvability'])
-                is_better_teacher = (
-                    current_teacher_loss < (best_teacher_loss - 1e-8)
-                    or (
-                        abs(current_teacher_loss - best_teacher_loss) <= 1e-8
-                        and current_solvability > best_solvability
-                    )
+                current_checkpoint_value = select_diffusion_checkpoint_metric(
+                    val_metrics,
+                    checkpoint_metric_name,
                 )
-                if is_better_teacher:
-                    best_teacher_loss = current_teacher_loss
+                current_solvability = float(val_metrics['val_solvability'])
+                # Keep the earliest checkpoint on exact ties. Using a logic
+                # metric as a tie-break would favor logic-enabled arms under a
+                # criterion unavailable to N/G.
+                if current_checkpoint_value < (best_checkpoint_value - 1e-8):
+                    best_checkpoint_value = current_checkpoint_value
                     trainer.save_checkpoint(
                         str(checkpoint_dir / "best_model.pth"),
                         metrics,
@@ -3714,7 +3915,8 @@ def train_diffusion(config: DiffusionTrainingConfig) -> DiffusionTrainer:
 
                 latest_metrics = dict(metrics)
                 latest_metrics["best_solvability"] = float(best_solvability)
-                latest_metrics["best_teacher_loss"] = float(best_teacher_loss)
+                latest_metrics["best_checkpoint_metric_name"] = checkpoint_metric_name
+                latest_metrics["best_checkpoint_value"] = float(best_checkpoint_value)
                 trainer.save_checkpoint(
                     str(checkpoint_dir / LATEST_RESUME_FILENAME),
                     latest_metrics,

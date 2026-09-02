@@ -39,6 +39,30 @@ _NEIGHBOR_OPPOSITE_SLICES = {
 }
 
 
+def _str_node_id(nid: Any) -> str:
+    """Normalize node IDs to strings for robust graph dictionary lookups."""
+    if isinstance(nid, str):
+        return nid
+    return str(nid)
+
+
+def _resolve_graph_node_id(graph: nx.Graph, node_id: Any) -> Optional[Any]:
+    """Return the graph-owned form of a possibly stringified node ID."""
+    if node_id in graph:
+        return node_id
+    text_id = str(node_id)
+    if text_id in graph:
+        return text_id
+    if isinstance(node_id, str):
+        try:
+            integer_id = int(node_id)
+        except ValueError:
+            return None
+        if integer_id in graph:
+            return integer_id
+    return None
+
+
 class PuzzleStageSemanticsValidationError(RuntimeError):
     """Raised when an explicitly enabled selective semantics gate rejects a room."""
 
@@ -433,6 +457,7 @@ def generate_room_batch(
         if any(int(cond.dim()) != expected_dim for cond in batch_conditions):
             dims = [int(cond.dim()) for cond in batch_conditions]
             raise ValueError(f"Inconsistent condition tensor ranks inside batch: {dims}")
+        batch_conditions = [c.to(pipeline.device) for c in batch_conditions]
         condition_batch = torch.cat(batch_conditions, dim=0)
     first_room_graph_context = per_room_inputs[0]['graph_context']
     room_anchor_flags = {
@@ -492,9 +517,10 @@ def generate_room_batch(
     # Map each sampled room latent back to its dungeon graph node.
     node_to_idx = graph_data.get('node_to_idx')
     if isinstance(node_to_idx, dict) and room_ids:
+        node_to_idx = {_str_node_id(k): v for k, v in node_to_idx.items()}
         current_node_idx_batch = []
         for room_id in room_ids:
-            idx = node_to_idx.get(room_id, -1)
+            idx = node_to_idx.get(_str_node_id(room_id), node_to_idx.get(room_id, -1))
             current_node_idx_batch.append(int(idx))
         if all(idx >= 0 for idx in current_node_idx_batch):
             graph_ctx_for_guidance['current_node_idx'] = torch.tensor(
@@ -503,10 +529,11 @@ def generate_room_batch(
                 dtype=torch.long,
             )
 
+
     if pipeline.use_current_node_distance_features:
         current_node_distance_batch: List[torch.Tensor] = []
         for inp in per_room_inputs:
-            value = inp['graph_context']['current_node_distance']
+            value = inp['graph_context'].get('current_node_distance')
             if not isinstance(value, torch.Tensor):
                 continue
             tensor = value.to(pipeline.device, dtype=torch.float32)
@@ -554,8 +581,8 @@ def generate_room_batch(
             )
             anchored_layouts.append((anchored_tokens, anchored_mask))
             boundary_anchor_count += int(applied)
-        fixed_tokens = torch.cat([layout[0] for layout in anchored_layouts], dim=0)
-        fixed_mask = torch.cat([layout[1] for layout in anchored_layouts], dim=0)
+        fixed_tokens = torch.cat([layout[0].to(pipeline.device) for layout in anchored_layouts], dim=0)
+        fixed_mask = torch.cat([layout[1].to(pipeline.device) for layout in anchored_layouts], dim=0)
         if boundary_anchor_count > 0:
             pipeline._bump_diagnostic("masked_room_neighbor_boundary_tokens_applied")
         masked_sample_output = pipeline.masked_room_model.sample(
@@ -901,6 +928,11 @@ def generate_room(
             "boundary_constraints": boundary_constraints.to(pipeline.device, dtype=torch.float32),
         }
     mission_graph_for_room = graph_data.get("mission_graph") if isinstance(graph_data, dict) else None
+    graph_room_id = (
+        _resolve_graph_node_id(mission_graph_for_room, room_id)
+        if isinstance(mission_graph_for_room, nx.Graph)
+        else None
+    )
 
     sampled_tokens: Optional[torch.Tensor] = None
     masked_sampling_metrics: Dict[str, float] = {}
@@ -1114,6 +1146,22 @@ def generate_room(
         enforce_reject=True,
     )
 
+    # Preserve the generator's actual discrete proposal before any topology
+    # clamp or semantic logit bias mutates ``logits`` in place.  Publication
+    # comparisons rely on this being a genuine pre-constraint stage rather
+    # than a second copy of the constrained decode.
+    if effective_room_generator_mode == "discrete_masked" and sampled_tokens is not None:
+        raw_neural_grid = sampled_tokens.detach().cpu().numpy()[0].astype(np.int32, copy=False).copy()
+    else:
+        raw_neural_grid = (
+            logits.argmax(dim=1)
+            .detach()
+            .cpu()
+            .numpy()[0]
+            .astype(np.int32, copy=False)
+            .copy()
+        )
+
     post_decode_started_at = time.perf_counter()
 
     # BLOCK II.a: Topology-Enforced Constrained Decoding
@@ -1121,11 +1169,11 @@ def generate_room(
     # before argmax. This keeps the topology constraint inside the decoder
     # instead of stamping a mismatched discrete tile after generation.
     door_tiles_forced = 0
-    if isinstance(mission_graph_for_room, nx.Graph) and room_id in mission_graph_for_room:
+    if graph_room_id is not None:
         try:
             neg_large = float(-1e4)
             pos_large = float(1e4)
-            semantics = pipeline._extract_room_topology_semantics(mission_graph_for_room, room_id)
+            semantics = pipeline._extract_room_topology_semantics(mission_graph_for_room, graph_room_id)
             required_doors = semantics.get("required_doors", {})
             for direction, is_required in required_doors.items():
                 if not is_required:
@@ -1203,10 +1251,6 @@ def generate_room(
         ] = float(constrained_confidence) - float(raw_confidence)
 
     neural_grid = logits.argmax(dim=1).detach().cpu().numpy()[0]  # (16, 11)
-    if effective_room_generator_mode == "discrete_masked" and sampled_tokens is not None:
-        raw_neural_grid = sampled_tokens.detach().cpu().numpy()[0].astype(np.int32, copy=False).copy()
-    else:
-        raw_neural_grid = np.asarray(neural_grid, dtype=np.int32).copy()
     neural_grid, neural_invalid_count, neural_invalid_ids = pipeline._sanitize_semantic_grid(
         neural_grid,
         strip_void=True,
@@ -1341,10 +1385,10 @@ def generate_room(
         start, goal = normalized_start_goal if normalized_start_goal is not None else pipeline._normalize_start_goal_coords(start_goal_coords)
         repair_started_at = time.perf_counter()
         try:
-            if isinstance(mission_graph_for_room, nx.Graph) and room_id in mission_graph_for_room:
+            if graph_room_id is not None:
                 room_plan_mask = pipeline._build_room_plan_trace(
                     mission_graph_for_room,
-                    room_id,
+                    graph_room_id,
                     neural_grid,
                     start_goal=(start, goal),
                 )
@@ -1493,10 +1537,10 @@ def generate_room(
     elif start_goal_coords is not None:
         start, goal = normalized_start_goal if normalized_start_goal is not None else pipeline._normalize_start_goal_coords(start_goal_coords)
         try:
-            if isinstance(mission_graph_for_room, nx.Graph) and room_id in mission_graph_for_room:
+            if graph_room_id is not None:
                 room_plan_mask = pipeline._build_room_plan_trace(
                     mission_graph_for_room,
-                    room_id,
+                    graph_room_id,
                     neural_grid,
                     start_goal=(start, goal),
                 )
@@ -1529,8 +1573,11 @@ def generate_room(
         )
 
     overlay_start_goal = normalized_start_goal
-    if overlay_start_goal is None and isinstance(mission_graph_for_room, nx.Graph) and room_id in mission_graph_for_room:
-        overlay_start_goal = pipeline._extract_room_start_goal(mission_graph_for_room, room_id)
+    if overlay_start_goal is None and graph_room_id is not None:
+        overlay_start_goal = pipeline._extract_room_start_goal(
+            mission_graph_for_room,
+            graph_room_id,
+        )
 
     neural_grid, _, _, neural_post_boundary_preserved_count, neural_post_boundary_preserved_ids = (
         pipeline._strip_volatile_room_semantics(
@@ -1931,32 +1978,51 @@ def generate_room(
             # work queues. Flush queued masked-room work before the recursive teacher rerun
             # so VQ-VAE decode always sees tensors on a consistent stream.
             pipeline._synchronize_cuda_device()
+
+        # Disable LoRA for teacher fallback so it uses clean teacher weights
+        lora_disabled = False
+        if hasattr(pipeline.diffusion, "disable_adapters"):
+            pipeline.diffusion.disable_adapters()
+            lora_disabled = True
+        elif hasattr(pipeline.diffusion, "use_lora") and pipeline.diffusion.use_lora:
+            pipeline.diffusion.use_lora = False
+            lora_disabled = True
+
         teacher_started_at = time.perf_counter()
-        teacher_result = pipeline.generate_room(
-            neighbor_latents=neighbor_latents,
-            graph_context=graph_context,
-            room_id=room_id,
-            boundary_constraints=boundary_constraints,
-            position=position,
-            reference_room_maps=reference_room_maps,
-            guidance_scale=guidance_scale,
-            logic_guidance_scale=logic_guidance_scale,
-            num_diffusion_steps=max(int(pipeline.default_num_diffusion_steps), int(num_diffusion_steps)),
-            use_fast_sampling=False,
-            latent_sampler="diffusion",
-            categorical_codebook_size=categorical_codebook_size,
-            use_ddim=use_ddim,
-            apply_repair=apply_repair,
-            start_goal_coords=start_goal_coords,
-            seed=seed,
-            # The teacher can have a different stage-conditioning contract from
-            # the rejected MaskGIT candidate. Recompute its condition instead
-            # of feeding it tokens from the other generator family.
-            precomputed_condition=None,
-            allow_teacher_fallback=False,
-            room_generator_override="latent_diffusion",
-        )
+        try:
+            teacher_result = pipeline.generate_room(
+                neighbor_latents=neighbor_latents,
+                graph_context=graph_context,
+                room_id=room_id,
+                boundary_constraints=boundary_constraints,
+                position=position,
+                reference_room_maps=reference_room_maps,
+                guidance_scale=guidance_scale,
+                logic_guidance_scale=logic_guidance_scale,
+                num_diffusion_steps=max(int(pipeline.default_num_diffusion_steps), int(num_diffusion_steps)),
+                use_fast_sampling=False,
+                latent_sampler="diffusion",
+                categorical_codebook_size=categorical_codebook_size,
+                use_ddim=use_ddim,
+                apply_repair=apply_repair,
+                start_goal_coords=start_goal_coords,
+                seed=seed,
+                # The teacher can have a different stage-conditioning contract from
+                # the rejected MaskGIT candidate. Recompute its condition instead
+                # of feeding it tokens from the other generator family.
+                precomputed_condition=None,
+                allow_teacher_fallback=False,
+                room_generator_override="latent_diffusion",
+            )
+        finally:
+            # Always re-enable LoRA regardless of whether generate_room succeeded or raised.
+            if lora_disabled:
+                if hasattr(pipeline.diffusion, "enable_adapters"):
+                    pipeline.diffusion.enable_adapters()
+                elif hasattr(pipeline.diffusion, "use_lora"):
+                    pipeline.diffusion.use_lora = True
         teacher_time_sec = float(time.perf_counter() - teacher_started_at)
+
         teacher_result.metrics["teacher_fallback_used"] = 1.0
         teacher_result.metrics[f"teacher_fallback_source_{teacher_fallback_source}"] = 1.0
         teacher_result.metrics["teacher_fallback_time_sec"] = teacher_time_sec

@@ -1688,6 +1688,34 @@ def test_dual_stream_encoder_keeps_style_and_reference_features_separate(monkeyp
     assert torch.allclose(spy.seen[:, 2 * output_dim:], torch.ones(1, output_dim))
 
 
+def test_dual_stream_encoder_rejects_malformed_style_batches():
+    from src.core.condition_encoder import DualStreamConditionEncoder
+
+    encoder = DualStreamConditionEncoder(
+        latent_dim=4,
+        node_feature_dim=4,
+        edge_feature_dim=3,
+        hidden_dim=16,
+        output_dim=8,
+        num_gnn_layers=1,
+        gnn_type="gps",
+        num_attention_heads=4,
+        use_reference_room_maps=False,
+    )
+
+    with pytest.raises(ValueError, match="style_id must be a scalar or"):
+        encoder(
+            neighbor_latents={"N": None, "S": None, "E": None, "W": None},
+            boundary_constraints=torch.zeros(1, 8),
+            position=torch.zeros(1, 2),
+            node_features=torch.zeros(2, 4),
+            edge_index=torch.empty(2, 0, dtype=torch.long),
+            edge_features=torch.empty(0, 3),
+            current_node_idx=0,
+            style_id=torch.zeros(1, 1, dtype=torch.long),
+        )
+
+
 @pytest.mark.parametrize("gnn_type", ["gcn", "sage"])
 def test_global_stream_encoder_rejects_rrwp_for_backbones_that_ignore_edge_attributes(gnn_type):
     from src.core.condition_encoder import GlobalStreamEncoder

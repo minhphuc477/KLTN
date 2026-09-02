@@ -84,7 +84,7 @@ class EvolutionaryTopologyGenerator:
         enable_rule_credit_assignment: bool = False,
         enforce_generation_constraints: bool = True,
         allow_candidate_repairs: bool = False,
-        graph_oracle_max_states: int = 200_000,
+        graph_oracle_max_states: int = 15_000,
     ):
         """
         Initialize evolutionary generator.
@@ -922,7 +922,7 @@ class EvolutionaryTopologyGenerator:
         for _ in range(2):
             if not rule.can_apply(repaired, context):
                 break
-            candidate = rule.apply(repaired, context)
+            candidate = rule.apply(copy.deepcopy(repaired), context)
             if constraint_grammar is not None:
                 candidate = constraint_grammar.fix_lock_key_ordering(candidate)
                 candidate = constraint_grammar.repair_progression_constraints(candidate)
@@ -2526,9 +2526,20 @@ class EvolutionaryTopologyGenerator:
     def _mutate_with_rate(self, genome: List[int], mutation_rate: float) -> List[int]:
         """
         Mutate genome with an explicit mutation rate (used by emitters).
+
+        Precondition-aware: candidate rule IDs whose rules cannot legally fire
+        at the current genome position (based on executor precondition metadata)
+        are assigned zero probability, steering mutations toward topologically
+        valid rule swaps and reducing post-hoc fitness rejection rates.
+
+        If the executor does not expose precondition data, the method falls back
+        to the original probability-weighted random selection.
         """
         mutated = genome.copy()
         local_rate = float(np.clip(float(mutation_rate), 0.0, 1.0))
+        # Cache executor precondition lookup if available (avoids repeated hasattr)
+        _check_preconditions = getattr(self.executor, "check_rule_preconditions_by_id", None)
+
         for i in range(len(mutated)):
             if self.rng.random() >= local_rate:
                 continue
@@ -2548,6 +2559,12 @@ class EvolutionaryTopologyGenerator:
                     mixed_prob = (self.transition_mix * trans_prob) + ((1.0 - self.transition_mix) * base_prob)
                 else:
                     mixed_prob = base_prob
+                # Precondition gate: if the executor can tell us this rule
+                # cannot legally apply at genome position i (e.g., requires a
+                # node type that won't exist after preceding rules), zero its
+                # weight to avoid generating invariant-violating genomes.
+                if _check_preconditions is not None and not _check_preconditions(rid, genome[:i]):
+                    mixed_prob = 0.0
                 probs.append(float(max(0.0, mixed_prob)))
 
             total = float(sum(probs))
@@ -2555,7 +2572,8 @@ class EvolutionaryTopologyGenerator:
                 probs = [float(self._global_rule_probs.get(rid, 0.0)) for rid in candidate_ids]
                 total = float(sum(probs))
             if total <= 0.0:
-                mutated[i] = self.rng.randint(self.min_rule_id, self.max_rule_id)
+                if self.min_rule_id <= self.max_rule_id:
+                    mutated[i] = self.rng.randint(self.min_rule_id, self.max_rule_id)
                 continue
             probs = [p / total for p in probs]
             mutated[i] = int(self.rng.choices(candidate_ids, weights=probs, k=1)[0])
@@ -2723,6 +2741,8 @@ class EvolutionaryTopologyGenerator:
             if not gate_candidate_pool:
                 gate_candidate_pool = list(self._gate_pressure_rule_ids)
             for idx in replace_idx:
+                if not gate_candidate_pool:
+                    continue
                 pressured[idx] = int(self.rng.choice(gate_candidate_pool))
 
         if self._pedagogical_rule_ids and float(pedagogical_deficit) > 0.0:

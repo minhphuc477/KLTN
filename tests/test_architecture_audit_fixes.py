@@ -229,6 +229,7 @@ def test_generate_room_constrained_decode_uses_exact_door_type():
     row_start = int(spec["row_start"])
     row_end = int(spec["row_end"]) + 1
 
+    assert np.all(result.raw_neural_grid[row_start:row_end, col] == int(SEMANTIC_PALETTE["FLOOR"]))
     assert np.all(result.neural_grid[row_start:row_end, col] == int(SEMANTIC_PALETTE["DOOR_LOCKED"]))
 
 
@@ -1798,6 +1799,7 @@ def test_compute_room_condition_keeps_batch_dim_stable_when_puzzle_control_runs_
     monkeypatch,
 ):
     pipeline = _conditioning_only_pipeline()
+    pipeline.condition_strict_schema = False
     pipeline.diffusion_puzzle_structure_condition_enabled = True
 
     graph_context = {

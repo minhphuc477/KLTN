@@ -53,7 +53,6 @@ from src.utils.checkpoint import (
     atomic_torch_save,
     enforce_checkpoint_storage_budget,
     log_checkpoint_artifact,
-    prune_checkpoints,
     resolve_resume_checkpoint,
     safe_torch_load,
     write_checkpoint_metadata,
@@ -178,6 +177,9 @@ class MaskedRoomTrainingConfig:
         checkpoint_storage_cleanup_target_fraction: float = 0.6,
         device: str = "auto",
         seed: int = 42,
+        cudnn_benchmark: bool = True,
+        cudnn_deterministic: bool = False,
+        deterministic_algorithms: bool = False,
         quick: bool = False,
         semantic_anchor_threshold: float = DEFAULT_SEMANTIC_ANCHOR_THRESHOLD,
     ):
@@ -335,6 +337,9 @@ class MaskedRoomTrainingConfig:
         )
         self.device = ("cuda" if torch.cuda.is_available() else "cpu") if device == "auto" else str(device)
         self.seed = int(seed)
+        self.cudnn_benchmark = bool(cudnn_benchmark)
+        self.cudnn_deterministic = bool(cudnn_deterministic)
+        self.deterministic_algorithms = bool(deterministic_algorithms)
         self.quick = bool(quick)
         self.semantic_anchor_threshold = float(max(0.0, min(1.0, semantic_anchor_threshold)))
 
@@ -524,6 +529,9 @@ def masked_room_training_kwargs_from_resolved_config(config: Dict[str, Any]) -> 
         "checkpoint_storage_cleanup_target_fraction": runtime["checkpoint_storage_cleanup_target_fraction"],
         "device": runtime["device"],
         "seed": runtime["seed"],
+        "cudnn_benchmark": runtime["cudnn_benchmark"],
+        "cudnn_deterministic": runtime["cudnn_deterministic"],
+        "deterministic_algorithms": runtime["deterministic_algorithms"],
         "quick": runtime["quick"],
     }
 
@@ -674,6 +682,7 @@ def _create_masked_room_dataloaders(
         dataset,
         validation_fraction=config.validation_fraction,
         seed=config.seed,
+        require_group_metadata=True,
     )
     eval_source = val_dataset if val_dataset is not None else train_dataset
     eval_split_name = "val" if val_dataset is not None else "train"
@@ -1815,7 +1824,14 @@ class MaskedRoomTrainer:
 
 
 def train_masked_room(config: MaskedRoomTrainingConfig) -> MaskedRoomTrainer:
-    resolved_seed = seed_everything(int(getattr(config, "seed", 42)))
+    resolved_seed = seed_everything(
+        int(getattr(config, "seed", 42)),
+        cudnn_benchmark=bool(getattr(config, "cudnn_benchmark", True)),
+        cudnn_deterministic=bool(getattr(config, "cudnn_deterministic", False)),
+        deterministic_algorithms=bool(
+            getattr(config, "deterministic_algorithms", False)
+        ),
+    )
     logger.info("Masked-room trainer seeds initialized: seed=%d", resolved_seed)
     trainer = MaskedRoomTrainer(config)
     checkpoint_dir = Path(config.checkpoint_dir)
@@ -2017,9 +2033,11 @@ def train_masked_room(config: MaskedRoomTrainingConfig) -> MaskedRoomTrainer:
         latest_metrics = dict(epoch_metrics)
         latest_metrics["best_metric_name"] = str(best_metric_name)
         latest_metrics["best_metric_value"] = float(best_metric_value)
-        latest_metrics["best_val_loss"] = float(
-            best_metric_value if best_metric_name == "val_loss" else epoch_metrics["val_loss"]
-        )
+        _prev_best_val = float(getattr(trainer, "_historical_best_val_loss", float("inf")))
+        _curr_epoch_val = float(epoch_metrics.get("val_loss", _prev_best_val))
+        _new_best_val = min(_prev_best_val, _curr_epoch_val)
+        setattr(trainer, "_historical_best_val_loss", _new_best_val)
+        latest_metrics["best_val_loss"] = float(_new_best_val)
         trainer.save_checkpoint(
             str(checkpoint_dir / LATEST_RESUME_FILENAME),
             latest_metrics,

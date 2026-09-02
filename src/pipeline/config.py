@@ -63,6 +63,7 @@ class ModelConfig:
     condition_reference_hidden_dim: int = 64
     condition_use_rrwp_edge_features: bool = True
     condition_strict_schema: bool = True
+    diffusion_condition_global_graph_enabled: bool = True
     topology_refinement_mode: str = "gat2"
     diffusion_attention_mode: str = "softmax"
     diffusion_hedgehog_feature_dim: int = 32

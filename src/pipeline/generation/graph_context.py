@@ -199,6 +199,7 @@ def _prepare_graph_context(pipeline, graph: nx.Graph, use_tpe: bool = True) -> D
     }
 
 
+
 def get_neighbor_latents(
     pipeline,
     room_id: int,
@@ -218,7 +219,12 @@ def get_neighbor_latents(
         return neighbor_dict
 
     if graph.is_directed():
-        neighbor_ids = [n for n in graph.predecessors(room_id) if n in generated_latents]
+        # Include both predecessors (incoming) and successors (outgoing) so
+        # whichever neighbor was generated first can supply context latents.
+        neighbor_ids = [
+            n for n in (set(graph.predecessors(room_id)) | set(graph.successors(room_id)))
+            if n in generated_latents
+        ]
     else:
         neighbor_ids = [n for n in graph.neighbors(room_id) if n in generated_latents]
 
@@ -234,9 +240,13 @@ def get_neighbor_latents(
             unresolved.append(nid)
 
     # Stable fallback assignment when spatial metadata is missing or ambiguous.
-    for direction, nid in zip(['N', 'W', 'E', 'S'], unresolved):
-        if neighbor_dict[direction] is None:
-            neighbor_dict[direction] = generated_latents[nid].to(pipeline.device)
+    for nid in unresolved:
+        for direction in ['N', 'W', 'E', 'S']:
+            if neighbor_dict[direction] is None:
+                neighbor_dict[direction] = generated_latents[nid].to(pipeline.device)
+                break
+        else:
+            logger.warning("All neighbor direction slots taken; dropping room %s from context", nid)
 
     return neighbor_dict
 
@@ -829,7 +839,12 @@ def _build_room_graph_context(
         'start_node_id': int(node_to_idx.get(start_node, 0)) if start_node is not None else 0,
         'target_idx': int(node_to_idx.get(target_node, -1)) if target_node is not None else -1,
         'key_lock_pairs': list(graph_data.get('key_lock_pairs', []) or []),
-        'puzzle_room_structure_enabled': bool(pipeline.default_puzzle_room_structure_enabled),
+        'puzzle_room_structure_enabled': bool(
+            attrs.get(
+                "puzzle_room_structure_enabled",
+                pipeline.default_puzzle_room_structure_enabled,
+            )
+        ),
         'puzzle_stage_condition': puzzle_stage_condition,
         **({'current_node_distance': current_node_distance} if pipeline.use_current_node_distance_features else {}),
         **({'style_id': int(style_id)} if style_id is not None else {}),

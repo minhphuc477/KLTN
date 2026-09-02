@@ -973,6 +973,141 @@ def test_opened_graph_warp_remains_discoverable_without_another_key():
     assert destinations[0][2] == "key_locked"
 
 
+def test_antiparallel_directed_locks_have_distinct_open_state():
+    grid = np.full((16, 22), int(SEMANTIC_PALETTE["FLOOR"]), dtype=np.int64)
+    graph = nx.DiGraph()
+    graph.add_edge(0, 1, edge_type="key_locked")
+    graph.add_edge(1, 0, edge_type="key_locked")
+    room_positions = {(0, 0): (0, 0), (0, 1): (0, 11)}
+    env = ZeldaLogicEnv(
+        grid,
+        graph=graph,
+        room_positions=room_positions,
+        room_to_node={(0, 0): 0, (0, 1): 1},
+        node_to_room={0: (0, 0), 1: (0, 1)},
+    )
+    solver = StateSpaceAStar(env)
+    state = GameState(position=(1, 1), keys=1)
+
+    opened, after_forward = solver.apply_graph_edge_transition(
+        state, (1, 1), (1, 12), "key_locked"
+    )
+    after_forward.position = (1, 12)
+    reverse_opened, _ = solver.apply_graph_edge_transition(
+        after_forward, (1, 12), (1, 1), "key_locked"
+    )
+
+    assert opened is True
+    assert after_forward.opened_graph_edges == {(0, 1)}
+    assert reverse_opened is False
+
+
+def test_converter_mirrored_lock_shares_open_state():
+    grid = np.full((16, 22), int(SEMANTIC_PALETTE["FLOOR"]), dtype=np.int64)
+    graph = nx.DiGraph()
+    graph.add_edge(0, 1, edge_type="key_locked")
+    graph.add_edge(
+        1,
+        0,
+        edge_type="key_locked",
+        metadata={"implied_reverse": True},
+    )
+    room_positions = {(0, 0): (0, 0), (0, 1): (0, 11)}
+    env = ZeldaLogicEnv(
+        grid,
+        graph=graph,
+        room_positions=room_positions,
+        room_to_node={(0, 0): 0, (0, 1): 1},
+        node_to_room={0: (0, 0), 1: (0, 1)},
+    )
+    solver = StateSpaceAStar(env)
+    state = GameState(position=(1, 1), keys=1)
+
+    opened, after_forward = solver.apply_graph_edge_transition(
+        state, (1, 1), (1, 12), "key_locked"
+    )
+    after_forward.position = (1, 12)
+    reverse_opened, after_reverse = solver.apply_graph_edge_transition(
+        after_forward, (1, 12), (1, 1), "key_locked"
+    )
+
+    assert opened is True
+    assert reverse_opened is True
+    assert after_reverse.keys == 0
+    assert len(after_reverse.opened_graph_edges) == 1
+
+
+def test_graph_only_astar_does_not_traverse_directed_edge_backward():
+    grid = np.full((16, 22), int(SEMANTIC_PALETTE["WALL"]), dtype=np.int64)
+    grid[1, 1] = int(SEMANTIC_PALETTE["START"])
+    grid[1, 12] = int(SEMANTIC_PALETTE["TRIFORCE"])
+    graph = nx.DiGraph()
+    graph.add_edge(1, 0, edge_type="open")
+    room_positions = {(0, 0): (0, 0), (0, 1): (0, 11)}
+    env = ZeldaLogicEnv(
+        grid,
+        graph=graph,
+        room_positions=room_positions,
+        room_to_node={(0, 0): 0, (0, 1): 1},
+        node_to_room={0: (0, 0), 1: (0, 1)},
+    )
+    solver = StateSpaceAStar(
+        env,
+        priority_options={"representation": "graph"},
+    )
+
+    success, path, _states = solver.solve()
+
+    assert success is False
+    assert path == []
+
+
+def test_virtual_graph_path_applies_every_resource_gate():
+    grid = np.full((16, 22), int(SEMANTIC_PALETTE["FLOOR"]), dtype=np.int64)
+    graph = nx.DiGraph()
+    graph.add_node(0)
+    graph.add_node(10, is_virtual=True)
+    graph.add_node(11, is_virtual=True)
+    graph.add_node(1)
+    graph.add_edge(0, 10, edge_type="key_locked")
+    graph.add_edge(10, 11, edge_type="key_locked")
+    graph.add_edge(11, 1, edge_type="open")
+    room_positions = {(0, 0): (0, 0), (0, 1): (0, 11)}
+    env = ZeldaLogicEnv(
+        grid,
+        graph=graph,
+        room_positions=room_positions,
+        room_to_node={(0, 0): 0, (0, 1): 1},
+        node_to_room={0: (0, 0), 1: (0, 1)},
+    )
+    solver = StateSpaceAStar(
+        env,
+        priority_options={"rules_profile": "extended"},
+    )
+
+    blocked = solver.get_controlled_virtual_destinations(
+        (1, 1),
+        GameState(position=(1, 1), keys=1),
+    )
+    available = solver.get_controlled_virtual_destinations(
+        (1, 1),
+        GameState(position=(1, 1), keys=2),
+    )
+
+    assert blocked == []
+    assert len(available) == 1
+    destination, _cost, transition = available[0]
+    allowed, final_state = solver.apply_graph_edge_transition(
+        GameState(position=(1, 1), keys=2),
+        (1, 1),
+        destination,
+        transition,
+    )
+    assert allowed is True
+    assert final_state.keys == 0
+    assert final_state.opened_graph_edges == {(0, 10), (10, 11)}
+
+
 def test_solver_comparison_uses_canonical_bomb_and_item_transitions():
     from src.simulation.solver_comparison import SolverComparison
     from src.simulation.validator import GameState, ZeldaLogicEnv

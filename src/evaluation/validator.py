@@ -42,9 +42,10 @@ logger = logging.getLogger(__name__)
 
 def _is_start_node(data: Dict[str, Any], label_parts: List[str]) -> bool:
     """Accept both legacy `s` labels and current START-typed mission-graph nodes."""
-    node_type = str(data.get("type", "")).strip().lower()
+    lowered_parts = {part.strip().lower() for part in label_parts}
+    node_type = str(data.get("node_type", data.get("type", ""))).strip().lower()
     return (
-        "s" in label_parts
+        bool({"s", "start"} & lowered_parts)
         or bool(data.get("is_start", False))
         or node_type in {"start", "start_pointer"}
     )
@@ -52,9 +53,10 @@ def _is_start_node(data: Dict[str, Any], label_parts: List[str]) -> bool:
 
 def _is_goal_node(data: Dict[str, Any], label_parts: List[str]) -> bool:
     """Accept both legacy `t` labels and current GOAL-typed mission-graph nodes."""
-    node_type = str(data.get("type", "")).strip().lower()
+    lowered_parts = {part.strip().lower() for part in label_parts}
+    node_type = str(data.get("node_type", data.get("type", ""))).strip().lower()
     return (
-        "t" in label_parts
+        bool({"t", "goal", "triforce"} & lowered_parts)
         or bool(data.get("has_triforce", False))
         or bool(data.get("is_triforce", False))
         or bool(data.get("is_goal", False))
@@ -241,7 +243,7 @@ class AgentSimulator:
             label = data.get('label', '')
             label_parts = [p.strip() for p in label.split(',')] if label else []
             lowered_parts = {part.lower() for part in label_parts}
-            node_type = str(data.get('type', '')).strip().lower()
+            node_type = str(data.get('node_type', data.get('type', ''))).strip().lower()
             is_boss_key_node = (
                 'K' in label_parts
                 or bool(data.get('has_boss_key', False))
@@ -249,12 +251,14 @@ class AgentSimulator:
             )
             is_item_node = (
                 'I' in label_parts
+                or 'item' in lowered_parts
                 or bool(data.get('has_item', False))
                 or node_type in {'item', 'key_item', 'macro_item', 'protection_item'}
             )
 
             if (
                 ('k' in label_parts)
+                or ('key' in lowered_parts)
                 or bool(data.get('has_key', False))
                 or node_type == 'key'
             ) and not is_boss_key_node:
@@ -809,7 +813,7 @@ class AgentSimulator:
         self,
         start_node: Optional[int] = None,
         goal_node: Optional[int] = None,
-        max_states: int = 100000,
+        max_states: int = 15000,
     ) -> ValidationResult:
         """
         Find path from start to goal using A* with state-space search.
@@ -1113,7 +1117,7 @@ class SolvabilityChecker:
         room_data: Optional[Dict[int, np.ndarray]] = None,
         start_node: Optional[int] = None,
         goal_node: Optional[int] = None,
-        max_states: int = 100000,
+        max_states: int = 15000,
     ) -> ValidationResult:
         """
         Check if dungeon is solvable.
@@ -1152,7 +1156,7 @@ class SolvabilityChecker:
         self,
         graph: nx.DiGraph,
         start_node: Optional[Any] = None,
-        max_states: int = 100000,
+        max_states: int = 15000,
     ) -> Tuple[bool, Set[Any]]:
         """
         Check whether every room has a resource-valid route from start.
@@ -1173,7 +1177,7 @@ class SolvabilityChecker:
         self,
         graph: nx.DiGraph,
         start_node: Optional[Any] = None,
-        max_states: int = 100000,
+        max_states: int = 15000,
     ) -> Dict[str, Any]:
         """Return a tri-state-safe all-room reachability proof."""
         simulator = AgentSimulator(graph=graph)

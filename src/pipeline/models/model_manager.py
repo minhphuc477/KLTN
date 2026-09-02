@@ -577,6 +577,12 @@ def load_diffusion(pipeline, checkpoint_path: Optional[str]) -> LatentDiffusionM
         float(checkpoint_config.get("cfg_scale", fallback_config.get("cfg_scale", 3.0))),
     )
     setattr(model, "training_objective", training_objective)
+    pipeline.diffusion_condition_global_graph_enabled = bool(
+        checkpoint_config.get(
+            "condition_global_graph_enabled",
+            fallback_config.get("condition_global_graph_enabled", True),
+        )
+    )
     if training_objective == "flow_matching":
         logger.info(
             "Loaded a diffusion checkpoint trained with flow_matching; generation will prefer "

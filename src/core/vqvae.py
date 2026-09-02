@@ -619,6 +619,7 @@ class FSQuantizer(nn.Module):
         return torch.tensor(basis, dtype=torch.long)
 
     def _round_ste(self, bounded: Tensor) -> Tuple[Tensor, Tensor]:
+        bounded = torch.nan_to_num(bounded, nan=0.0, posinf=1.0, neginf=-1.0)
         levels = self.levels.to(device=bounded.device, dtype=bounded.dtype).view(1, -1, 1, 1)
         scaled = (bounded + 1.0) * 0.5 * (levels - 1.0)
         rounded = torch.minimum(torch.round(scaled).clamp_min(0.0), levels - 1.0)
@@ -1008,7 +1009,7 @@ class Decoder(nn.Module):
         
         # Resize to target if needed
         if target_size is not None:
-            h = F.interpolate(h, size=target_size, mode='bilinear', align_corners=False)
+            h = F.interpolate(h, size=target_size, mode='nearest')
         
         return h
 
@@ -1663,6 +1664,9 @@ class SemanticVQVAE2(nn.Module):
         if not self.use_codebook or self.bottom_quantizer is None:
             raise RuntimeError("decode_indices is only available when use_codebook=True.")
         z_q = self.bottom_quantizer.encode_indices(indices).permute(0, 3, 1, 2).contiguous()
+        if getattr(self, "top_quantizer", None) is not None and getattr(self, "fusion", None) is not None:
+            top_context = torch.zeros_like(z_q)
+            z_q = self.fusion(torch.cat([z_q, top_context], dim=1))
         return self.decode(z_q, target_size)
 
     def forward_with_losses(self, x: Tensor) -> Tuple[Tensor, Tensor, Dict[str, Tensor]]:

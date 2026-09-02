@@ -31,8 +31,9 @@ Output:
 
 import logging
 import math
-from typing import Dict, List, Tuple, Optional, Any
+from typing import Any, Dict, List, Optional, Set, Tuple
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -55,8 +56,16 @@ logger = logging.getLogger(__name__)
 # Canonical graph-feature channel positions emitted by
 # ``src.pipeline.graph_features.encode_*_feature_vector``. These names keep
 # logic semantics explicit without changing the checkpoint feature widths.
-GRAPH_NODE_KEY_FEATURE_INDEX = 1
-GRAPH_NODE_GOAL_FEATURE_INDEX = 3
+#
+# Node feature layout (from extract_node_feature_vector in graph_features.py):
+#   base_features = [enemy_signal, key_signal, item_signal,
+#                    has_triforce, has_boss, puzzle_signal]
+#   extended_features = [...]
+GRAPH_NODE_KEY_FEATURE_INDEX = 1    # small-key / key provider node
+GRAPH_NODE_ITEM_FEATURE_INDEX = 2   # item / macro-item provider node
+GRAPH_NODE_GOAL_FEATURE_INDEX = 3   # triforce / goal node
+GRAPH_NODE_BOSS_FEATURE_INDEX = 4   # boss provider node (for boss-locked gates)
+
 
 GRAPH_EDGE_OPEN_FEATURE_INDEX = 0
 GRAPH_EDGE_KEY_LOCK_FEATURE_INDEX = 1
@@ -81,7 +90,15 @@ GRAPH_EDGE_TRAVERSAL_PENALTIES = {
     GRAPH_EDGE_SWITCH_FEATURE_INDEX: 0.5,
 }
 
-
+# Maps each resource-bearing edge lock type to the node feature channel that
+# encodes the corresponding provider room.  Structural locks (bombable walls,
+# switches, one-way shutters) are NOT listed because they have no pick-up
+# resource and therefore cannot be supervised by key_lock_pairs.
+_RESOURCE_LOCK_EDGE_TO_NODE_FEATURE: Dict[int, int] = {
+    GRAPH_EDGE_KEY_LOCK_FEATURE_INDEX:  GRAPH_NODE_KEY_FEATURE_INDEX,   # small key
+    GRAPH_EDGE_BOSS_LOCK_FEATURE_INDEX: GRAPH_NODE_BOSS_FEATURE_INDEX,  # boss key
+    GRAPH_EDGE_ITEM_LOCK_FEATURE_INDEX: GRAPH_NODE_ITEM_FEATURE_INDEX,  # macro item
+}
 class LogicGraphContractError(Exception):
     """Raised when graph metadata cannot define the requested logic objective."""
 
@@ -185,6 +202,8 @@ def conservative_soft_min(
     count = finite_mask.sum(dim=dim).clamp_min(1).to(dtype=values.dtype)
     result = -tau * torch.logsumexp(-masked / tau, dim=dim)
     result = result + tau * torch.log(count)
+    all_inf = (~finite_mask).all(dim=dim)
+    result = torch.where(all_inf, torch.zeros_like(result), result)
     return result.to(dtype=x.dtype)
 
 
@@ -604,9 +623,10 @@ class SparseDifferentiablePathfinder(DifferentiablePathfinder):
             include_self=True,
         )
         finite_edge = candidates < (inf - 1e-6)
+        hard_min_safe = hard_min.clamp(max=float(self.inf_distance) - 1.0)
         centered = torch.where(
             finite_edge,
-            candidates - hard_min.index_select(0, dst),
+            candidates - hard_min_safe.index_select(0, dst),
             torch.zeros_like(candidates),
         )
         stabilized = (
@@ -1600,6 +1620,7 @@ class LogicNet(nn.Module):
         # before the first optimizer step and after checkpoint restoration.
         self._sync_temperature_modules(self.initial_temperature)
         self.register_load_state_dict_post_hook(self._restore_temperature_after_load)
+        self._logged_warning_keys: Set[str] = set()
 
     @staticmethod
     def _project_tile_logits_to_room(tile_logits: Tensor) -> Tensor:
@@ -1881,8 +1902,26 @@ class LogicNet(nn.Module):
             if value.dim() >= 1 and int(value.shape[0]) > batch_idx:
                 return value[batch_idx]
             return value
-        if isinstance(value, (list, tuple)) and len(value) > batch_idx:
-            return value[batch_idx]
+        if isinstance(value, (list, tuple)):
+            if not value:
+                return value
+            # Detect unbatched key-lock pairs for a single graph:
+            # e.g., [(0, 2)], [(0, 2), (1, 3)], or a single pair (0, 2)
+            first = value[0]
+            if len(value) == 2 and isinstance(value[0], (int, np.integer)) and isinstance(value[1], (int, np.integer)):
+                # Single pair tuple (key, lock)
+                return value if batch_idx == 0 else []
+            if (
+                isinstance(first, (list, tuple))
+                and len(first) == 2
+                and isinstance(first[0], (int, np.integer))
+                and isinstance(first[1], (int, np.integer))
+            ):
+                # Single-graph list of pairs [(key_1, lock_1), (key_2, lock_2)]
+                return value if batch_idx == 0 else []
+            if len(value) > batch_idx:
+                return value[batch_idx]
+            return value
         return value
 
     @staticmethod
@@ -2438,8 +2477,23 @@ class LogicNet(nn.Module):
             node_count=n,
             device=device,
         )
+        valid_mask = current_indices < n
+        valid_indices = current_indices[valid_mask]
+        if valid_indices.numel() < current_indices.numel():
+            warn_key = "node_indices_out_of_sequence"
+            logged_keys = getattr(self, "_logged_warning_keys", None)
+            if logged_keys is None:
+                self._logged_warning_keys = set()
+                logged_keys = self._logged_warning_keys
+            if warn_key not in logged_keys:
+                logged_keys.add(warn_key)
+                logger.warning(
+                    "LogicNet: %d node indices out of sequence length %d; truncating.",
+                    current_indices.numel() - valid_indices.numel(), n
+                )
+
         node_passability = torch.ones(n, device=device, dtype=dtype)
-        node_passability = node_passability.index_copy(0, current_indices, room_pass[: current_indices.numel()])
+        node_passability = node_passability.index_copy(0, valid_indices, room_pass[:current_indices.numel()][valid_mask])
 
         adj, weights = self._build_adjacency_and_weights(
             node_count=n,
@@ -2471,56 +2525,82 @@ class LogicNet(nn.Module):
 
         distances = self.graph_pathfinder(adj, weights, source_mask)
 
-        pairs_were_supplied = key_lock_pairs is not None
+        pairs_were_supplied = bool(key_lock_pairs)
         resource_pair_inference_ambiguous = False
         pairs: List[Tuple[int, int]] = []
         if isinstance(key_lock_pairs, (list, tuple)):
-            for pair in key_lock_pairs:
-                if not isinstance(pair, (list, tuple)) or len(pair) != 2:
-                    continue
-                k = self._coerce_optional_int(pair[0])
-                lock_idx = self._coerce_optional_int(pair[1])
-                if (
-                    k is not None
-                    and lock_idx is not None
-                    and 0 <= k < n
-                    and 0 <= lock_idx < n
-                ):
+            # Support a single pair tuple/list such as (0, 2) or [0, 2]
+            if (
+                len(key_lock_pairs) == 2
+                and isinstance(key_lock_pairs[0], (int, np.integer))
+                and isinstance(key_lock_pairs[1], (int, np.integer))
+            ):
+                k = self._coerce_optional_int(key_lock_pairs[0])
+                lock_idx = self._coerce_optional_int(key_lock_pairs[1])
+                if k is not None and lock_idx is not None and 0 <= k < n and 0 <= lock_idx < n:
                     pairs.append((k, lock_idx))
-        if (
-            not pairs_were_supplied
-            and not pairs
-            and isinstance(node_features, torch.Tensor)
-            and node_features.dim() == 2
-            and node_features.shape[1] > GRAPH_NODE_KEY_FEATURE_INDEX
-        ):
-            key_nodes = torch.nonzero(
-                node_features[:n, GRAPH_NODE_KEY_FEATURE_INDEX] > 0.5,
-                as_tuple=False,
-            ).flatten().tolist()
-            locked_targets: List[int] = []
+            else:
+                for pair in key_lock_pairs:
+                    if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+                        continue
+                    k = self._coerce_optional_int(pair[0])
+                    lock_idx = self._coerce_optional_int(pair[1])
+                    if (
+                        k is not None
+                        and lock_idx is not None
+                        and 0 <= k < n
+                        and 0 <= lock_idx < n
+                    ):
+                        pairs.append((k, lock_idx))
+        if not pairs and isinstance(node_features, torch.Tensor) and node_features.dim() == 2:
+            # --- Per-lock-type heuristic inference ---
+            # Only attempt inference when the assignment is unambiguous (1:1).
+            # We handle each resource lock type independently so that, e.g., a
+            # dungeon with one boss-locked door but no small-key locks is not
+            # incorrectly marked ambiguous because the boss provider is at node
+            # feature index 4, not index 1.
+            #
+            # Structural locks (bombable, switch) have no pick-up resource and
+            # are silently skipped – they cannot be supervised by key_lock_pairs.
+            nf_width = int(node_features.shape[1])
+            ef: Optional[torch.Tensor] = None
             if isinstance(edge_features, torch.Tensor) and isinstance(edge_index, torch.Tensor) and edge_index.numel() > 0:
-                ef = edge_features
-                if ef.dim() == 1:
-                    ef = ef.unsqueeze(-1)
-                if ef.shape[1] > GRAPH_EDGE_KEY_LOCK_FEATURE_INDEX:
-                    locked = torch.nonzero(
-                        ef[:, GRAPH_EDGE_KEY_LOCK_FEATURE_INDEX] > 0.5,
-                        as_tuple=False,
-                    ).flatten()
-                    for edge_i in locked.tolist():
-                        if edge_i < edge_index.shape[1]:
-                            dst = int(edge_index[1, edge_i].item())
-                            if 0 <= dst < n:
-                                locked_targets.append(dst)
-            unique_locked_targets = sorted(set(locked_targets))
-            # Inference is only defensible when the assignment is unique. An
-            # index-order zip across multiple keys and locks invents causal
-            # supervision that is not present in the graph metadata.
-            if len(key_nodes) == 1 and len(unique_locked_targets) == 1:
-                pairs.append((int(key_nodes[0]), int(unique_locked_targets[0])))
-            elif key_nodes or unique_locked_targets:
-                resource_pair_inference_ambiguous = True
+                ef = edge_features if edge_features.dim() == 2 else edge_features.unsqueeze(-1)
+
+            for edge_feat_idx, node_feat_idx in _RESOURCE_LOCK_EDGE_TO_NODE_FEATURE.items():
+                # Skip if edge feature channel is not present in this graph.
+                if ef is None or int(ef.shape[1]) <= edge_feat_idx:
+                    continue
+                lock_edge_mask = ef[:, edge_feat_idx] > 0.5
+                if not bool(lock_edge_mask.any()):
+                    continue
+                # Collect destination nodes behind this lock type.
+                lock_targets: List[int] = []
+                for edge_i in lock_edge_mask.nonzero(as_tuple=False).flatten().tolist():
+                    if edge_i < int(edge_index.shape[1]):
+                        dst = int(edge_index[1, edge_i].item())
+                        if 0 <= dst < n:
+                            lock_targets.append(dst)
+                unique_lock_targets = sorted(set(lock_targets))
+
+                # Find provider nodes for this lock type.
+                if nf_width <= node_feat_idx:
+                    # Node feature channel absent – cannot infer provider.
+                    if unique_lock_targets:
+                        resource_pair_inference_ambiguous = True
+                    continue
+                provider_nodes = torch.nonzero(
+                    node_features[:n, node_feat_idx] > 0.5,
+                    as_tuple=False,
+                ).flatten().tolist()
+
+                # Inference is only defensible when the assignment is unique.
+                # An index-order zip across multiple providers and locks
+                # invents causal supervision absent from the graph metadata.
+                if len(provider_nodes) == 1 and len(unique_lock_targets) == 1:
+                    pairs.append((int(provider_nodes[0]), int(unique_lock_targets[0])))
+                elif provider_nodes or unique_lock_targets:
+                    resource_pair_inference_ambiguous = True
 
         lock_loss = zero
         lock_info: Dict[str, Any] = {}
@@ -2535,14 +2615,16 @@ class LogicNet(nn.Module):
                     "LogicNet cannot supervise a graph with locked edges and "
                     f"{reason}. Supply explicit key_lock_pairs from the mission graph."
                 )
-            distances, lock_loss, lock_info = self._resource_gated_rollout(
-                adjacency=adj,
-                weights=weights,
-                locked_edges=locked_edges,
-                source_mask=source_mask,
-                key_lock_pairs=pairs,
-                dtype=dtype,
-            )
+            else:
+                distances, lock_loss, lock_info = self._resource_gated_rollout(
+                    adjacency=adj,
+                    weights=weights,
+                    locked_edges=locked_edges,
+                    source_mask=source_mask,
+                    key_lock_pairs=pairs,
+                    dtype=dtype,
+                )
+
         elif pairs:
             key_mask = torch.zeros(n, device=device, dtype=dtype)
             lock_mask = torch.zeros(n, device=device, dtype=dtype)

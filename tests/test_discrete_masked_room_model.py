@@ -1236,8 +1236,23 @@ def test_masked_room_resume_checkpoint_round_trip(tmp_path):
 
 
 def test_masked_room_dataloaders_use_real_validation_split(monkeypatch):
-    sample = (torch.zeros(1, ROOM_HEIGHT, ROOM_WIDTH, dtype=torch.float32), {"room_topology_map": torch.zeros(54, ROOM_HEIGHT, ROOM_WIDTH)})
-    fake_dataset = [sample for _ in range(10)]
+    class _GroupedDataset:
+        def __init__(self):
+            self.sample_metadata = [
+                {"dungeon_num": index // 2 + 1}
+                for index in range(10)
+            ]
+
+        def __len__(self):
+            return len(self.sample_metadata)
+
+        def __getitem__(self, _index):
+            return (
+                torch.zeros(1, ROOM_HEIGHT, ROOM_WIDTH, dtype=torch.float32),
+                {"room_topology_map": torch.zeros(54, ROOM_HEIGHT, ROOM_WIDTH)},
+            )
+
+    fake_dataset = _GroupedDataset()
 
     def _fake_create_dataloader(*args, **kwargs):
         _ = (args, kwargs)

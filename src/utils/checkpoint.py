@@ -51,32 +51,39 @@ def safe_torch_load(
     """
     try:
         return torch.load(path, map_location=map_location, weights_only=weights_only)
-    except TypeError as exc:
+    except Exception as exc:
         message = str(exc).lower()
         unsupported_weights_only = (
-            "weights_only" in message
+            isinstance(exc, TypeError)
+            and "weights_only" in message
             and (
                 "unexpected" in message
                 or "keyword" in message
                 or "got an unexpected" in message
             )
         )
-        if not unsupported_weights_only:
+        is_unpickling_error = (
+            "unpicklingerror" in type(exc).__name__.lower()
+            or "unsupportedobjerror" in type(exc).__name__.lower()
+            or "unpickling" in message
+        )
+        if not (unsupported_weights_only or is_unpickling_error):
             raise
         if weights_only:
             allow_unsafe = str(os.environ.get(ALLOW_LEGACY_TORCH_LOAD_ENV, "")).strip().lower()
             if allow_unsafe not in {"1", "true", "yes"}:
                 raise RuntimeError(
-                    "Installed PyTorch does not support weights_only=True. "
                     "Refusing unsafe legacy torch.load for checkpoint "
-                    f"{path!r}. Upgrade PyTorch or set {ALLOW_LEGACY_TORCH_LOAD_ENV}=1 "
-                    "only for trusted local checkpoints."
-                )
+                    f"{path!r}. Set {ALLOW_LEGACY_TORCH_LOAD_ENV}=1 only for "
+                    "trusted local checkpoints."
+                ) from exc
             logger.warning(
-                "Using unsafe legacy torch.load for trusted local checkpoint because %s is set.",
-                ALLOW_LEGACY_TORCH_LOAD_ENV,
+                "Falling back to weights_only=False load for %s due to: %s", path, exc
             )
-        return torch.load(path, map_location=map_location)
+            if unsupported_weights_only:
+                return torch.load(path, map_location=map_location)
+            return torch.load(path, map_location=map_location, weights_only=False)
+        raise
 
 
 def format_bytes(num_bytes: int) -> str:
@@ -253,14 +260,29 @@ def write_checkpoint_metadata(
     if extra:
         metadata["extra"] = dict(extra)
 
-    with open(metadata_path, "w", encoding="utf-8") as f:
+    tmp_path = str(metadata_path) + '.tmp'
+    with open(tmp_path, 'w', encoding='utf-8') as f:
         json.dump(metadata, f, indent=2)
+    os.replace(tmp_path, metadata_path)
     logger.debug("Wrote checkpoint metadata sidecar: %s", metadata_path)
     return metadata_path
 
 
 def atomic_torch_save(payload: Any, path: str | Path) -> Path:
-    """Atomically save a PyTorch payload using a unique sibling temp file."""
+    """Atomically save a PyTorch payload using a unique sibling temp file.
+
+    On **Windows**, ``os.replace`` raises ``PermissionError`` if the
+    destination file is currently held open by another process (e.g. a
+    background validation worker reading ``checkpoint_latest.pth``).  A
+    retry loop handles this gracefully: up to ``_ATOMIC_SAVE_RETRIES``
+    attempts are made with a short sleep between each, so transient locks
+    do not crash the training loop.  Persistent failures after all retries
+    re-raise the last exception to expose the root cause.
+    """
+    import time as _time
+    _ATOMIC_SAVE_RETRIES = 5
+    _ATOMIC_SAVE_SLEEP_S = 0.2
+
     out_path = Path(path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(
@@ -272,7 +294,18 @@ def atomic_torch_save(payload: Any, path: str | Path) -> Path:
     tmp_path = Path(tmp_name)
     try:
         torch.save(payload, tmp_path)
-        os.replace(tmp_path, out_path)
+        last_exc: Optional[Exception] = None
+        for attempt in range(_ATOMIC_SAVE_RETRIES):
+            try:
+                os.replace(tmp_path, out_path)
+                last_exc = None
+                break
+            except PermissionError as exc:
+                # Windows-only: destination is locked by another process.
+                last_exc = exc
+                _time.sleep(_ATOMIC_SAVE_SLEEP_S)
+        if last_exc is not None:
+            raise last_exc
     finally:
         tmp_path.unlink(missing_ok=True)
     return out_path
@@ -343,7 +376,7 @@ class CheckpointManager:
         ...     # Training loop
         ...     manager.save(model, optimizer, epoch, {'loss': train_loss})
     """
-    
+
     def __init__(
         self,
         save_dir: str = "./checkpoints",
@@ -354,26 +387,26 @@ class CheckpointManager:
     ):
         self.save_dir = Path(save_dir)
         self.save_dir.mkdir(parents=True, exist_ok=True)
-        
+
         self.max_checkpoints = max_checkpoints
         self.save_best_only = save_best_only
         self.metric_name = metric_name
         self.mode = str(mode).strip().lower()
         if self.mode not in {"min", "max"}:
             raise ValueError(f"CheckpointManager mode must be 'min' or 'max', got {mode!r}.")
-        
+
         # Track best metric
         self.best_metric = float('inf') if self.mode == 'min' else float('-inf')
         self.best_epoch = -1
-        
+
         # Track all checkpoints for rotation
         self.checkpoint_history: List[Path] = []
-        
+
         # Load existing checkpoint history
         self._load_history()
-        
+
         logger.info(f"CheckpointManager initialized at {save_dir}")
-    
+
     def save(
         self,
         model: nn.Module,
@@ -441,7 +474,7 @@ class CheckpointManager:
         if is_best and current_metric is not None:
             self.best_metric = current_metric
             self.best_epoch = epoch
-        
+
         # Build checkpoint state
         checkpoint = {
             'epoch': epoch,
@@ -449,22 +482,24 @@ class CheckpointManager:
             'optimizer_state_dict': optimizer.state_dict(),
             'metrics': metrics,
             'timestamp': datetime.now().isoformat(),
+            'best_metric': self.best_metric,
+            'best_epoch': self.best_epoch,
         }
-        
+
         if scheduler is not None:
             checkpoint['scheduler_state_dict'] = scheduler.state_dict()
 
         if scaler is not None and callable(getattr(scaler, "state_dict", None)):
             checkpoint['grad_scaler_state_dict'] = scaler.state_dict()
-        
+
         if extra_state is not None:
             checkpoint['extra_state'] = extra_state
-        
+
         # Always update rolling latest checkpoint (progress epoch save)
         latest_path = self.save_dir / "checkpoint_latest.pth"
         atomic_torch_save(checkpoint, str(latest_path))
         logger.info(f"Updated latest progress checkpoint at {latest_path}")
-        
+
         # Save best model separately when metric improves (best epoch save only)
         if is_best and current_metric is not None:
             best_path = self.save_dir / "best_model.pth"
@@ -475,9 +510,9 @@ class CheckpointManager:
                 self.metric_name,
                 current_metric,
             )
-        
+
         return latest_path
-    
+
     def load(
         self,
         model: nn.Module,
@@ -502,24 +537,24 @@ class CheckpointManager:
             Epoch number from checkpoint (0 if no checkpoint found)
         """
         filepath = self.save_dir / filename
-        
+
         if not filepath.exists():
             logger.warning(f"No checkpoint found at {filepath}")
             return 0
-        
+
         # Load checkpoint
         map_location = device if device else 'cpu'
         checkpoint = safe_torch_load(filepath, map_location=map_location)
-        
+
         # Load model state
         model.load_state_dict(checkpoint['model_state_dict'])
         logger.info(f"Loaded model state from epoch {checkpoint['epoch']}")
-        
+
         # Load optimizer state
         if optimizer is not None and 'optimizer_state_dict' in checkpoint:
             optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
             logger.info("Loaded optimizer state")
-        
+
         # Load scheduler state
         if scheduler is not None and 'scheduler_state_dict' in checkpoint:
             scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
@@ -531,9 +566,14 @@ class CheckpointManager:
                 logger.info("Loaded AMP GradScaler state")
             except (RuntimeError, ValueError, TypeError) as exc:
                 logger.warning("Skipping incompatible AMP GradScaler state: %s", exc)
-        
+
+        if 'best_metric' in checkpoint:
+            self.best_metric = checkpoint['best_metric']
+        if 'best_epoch' in checkpoint:
+            self.best_epoch = checkpoint['best_epoch']
+
         return checkpoint['epoch']
-    
+
     def load_best(
         self,
         model: nn.Module,
@@ -541,28 +581,28 @@ class CheckpointManager:
     ) -> int:
         """Load the best model checkpoint."""
         return self.load(model, filename="best_model.pth", device=device)
-    
+
     def get_latest_checkpoint(self) -> Optional[Path]:
         """Get path to latest checkpoint."""
         latest = self.save_dir / "checkpoint_latest.pth"
         return latest if latest.exists() else None
-    
+
     def get_best_checkpoint(self) -> Optional[Path]:
         """Get path to best checkpoint."""
         best = self.save_dir / "best_model.pth"
         return best if best.exists() else None
-    
+
     def _rotate_checkpoints(self) -> None:
         """Remove old checkpoints to stay within max_checkpoints limit."""
         if self.max_checkpoints <= 0:
             return
-        
+
         # Keep special checkpoints
         special = {'checkpoint_latest.pth', 'best_model.pth'}
-        
+
         # Filter to only regular checkpoints
         regular = [p for p in self.checkpoint_history if p.name not in special]
-        
+
         # Remove oldest if over limit
         while len(regular) > self.max_checkpoints:
             oldest = regular.pop(0)
@@ -570,7 +610,7 @@ class CheckpointManager:
                 oldest.unlink()
                 logger.debug(f"Removed old checkpoint: {oldest}")
             self.checkpoint_history.remove(oldest)
-    
+
     def _load_history(self) -> None:
         """Load checkpoint history from directory."""
         if self.save_dir.exists():
@@ -595,7 +635,7 @@ class EarlyStopping:
         ...         print("Early stopping triggered")
         ...         break
     """
-    
+
     def __init__(
         self,
         patience: int = 10,
@@ -607,11 +647,11 @@ class EarlyStopping:
         self.mode = str(mode).strip().lower()
         if self.mode not in {"min", "max"}:
             raise ValueError(f"EarlyStopping mode must be 'min' or 'max', got {mode!r}.")
-        
+
         self.best_metric = float('inf') if self.mode == 'min' else float('-inf')
         self.counter = 0
         self.best_epoch = 0
-    
+
     def __call__(self, metric: float, epoch: int = 0) -> bool:
         """
         Check if training should stop.
@@ -630,22 +670,22 @@ class EarlyStopping:
             improved = metric < self.best_metric - self.min_delta
         else:
             improved = metric > self.best_metric + self.min_delta
-        
+
         if improved:
             self.best_metric = metric
             self.best_epoch = epoch
             self.counter = 0
             return False
-        
+
         self.counter += 1
-        
+
         if self.counter >= self.patience:
             logger.info(f"Early stopping: no improvement for {self.patience} epochs "
                        f"(best: {self.best_metric:.4f} at epoch {self.best_epoch})")
             return True
-        
+
         return False
-    
+
     def reset(self) -> None:
         """Reset early stopping state."""
         self.best_metric = float('inf') if self.mode == 'min' else float('-inf')
@@ -667,7 +707,7 @@ class MetricsLogger:
         ...     logger.log({'epoch': epoch, 'loss': train_loss, 'acc': val_acc})
         >>> logger.save()
     """
-    
+
     def __init__(
         self,
         log_dir: str = "./logs",
@@ -675,10 +715,10 @@ class MetricsLogger:
     ):
         self.log_dir = Path(log_dir)
         self.log_dir.mkdir(parents=True, exist_ok=True)
-        
+
         self.experiment_name = experiment_name
         self.metrics_history: List[Dict[str, Any]] = []
-        
+
         # Create timestamped log file
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.log_file = self.log_dir / f"{experiment_name}_{timestamp}.json"
@@ -708,7 +748,7 @@ class MetricsLogger:
         except (ImportError, RuntimeError, ValueError, TypeError) as exc:
             logger.warning("W&B tracking disabled; JSON metrics remain active: %s", exc)
             return None
-    
+
     def log(self, metrics: Dict[str, Any], step: Optional[int] = None) -> None:
         """
         Log metrics for a training step.
@@ -719,7 +759,7 @@ class MetricsLogger:
         """
         if step is not None:
             metrics['step'] = step
-        
+
         metrics['timestamp'] = datetime.now().isoformat()
         self.metrics_history.append(metrics)
         if self._wandb_run is not None:
@@ -732,15 +772,15 @@ class MetricsLogger:
                 self._wandb_run.log(wandb_metrics, step=step)
             except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                 logger.warning("W&B metric forwarding failed; continuing with JSON logs: %s", exc)
-        
+
         # Auto-save periodically
         if len(self.metrics_history) % 10 == 0:
             self._save_incremental()
-    
+
     def get_history(self, metric_name: str) -> List[float]:
         """Get history of a specific metric."""
         return [m[metric_name] for m in self.metrics_history if metric_name in m]
-    
+
     def get_best(self, metric_name: str, mode: str = 'min') -> Dict[str, Any]:
         """Get the entry with best value for a metric."""
         entries = []
@@ -755,47 +795,43 @@ class MetricsLogger:
                 entries.append(metrics)
         if not entries:
             return {}
-        
-        if mode == 'min':
-            return min(entries, key=lambda x: x[metric_name])
-        return max(entries, key=lambda x: x[metric_name])
-    
-    def save(self) -> Path:
-        """Save all metrics to file."""
-        with open(self.log_file, 'w') as f:
-            json.dump(self.metrics_history, f, indent=2)
-        logger.info(f"Saved metrics to {self.log_file}")
-        return self.log_file
-    
-    def _save_incremental(self) -> None:
-        """Save metrics incrementally."""
+
+    def save(self) -> None:
+        """Atomically save all metrics history to the JSON log file."""
         try:
-            self.save()
-        except (AttributeError, RuntimeError, ValueError, TypeError) as e:
-            logger.warning(f"Failed to save metrics: {e}")
-    
+            tmp_path = str(self.log_file) + '.tmp'
+            with open(tmp_path, 'w', encoding='utf-8') as f:
+                json.dump(self.metrics_history, f, indent=2)
+            os.replace(tmp_path, self.log_file)
+        except (AttributeError, RuntimeError, ValueError, TypeError, OSError) as e:
+            logger.warning("Failed to save metrics to %s: %s", self.log_file, e)
+
+    def _save_incremental(self) -> None:
+        """Incrementally save metrics (same as save, called periodically)."""
+        self.save()
+
     def summary(self) -> str:
         """Generate summary of logged metrics."""
         if not self.metrics_history:
             return "No metrics logged"
-        
+
         lines = [f"Experiment: {self.experiment_name}"]
         lines.append(f"Total entries: {len(self.metrics_history)}")
-        
+
         # Get all metric names
         all_keys = set()
         for m in self.metrics_history:
             all_keys.update(m.keys())
-        
+
         # Skip meta keys
         metric_keys = all_keys - {'timestamp', 'step', 'epoch'}
-        
+
         for key in sorted(metric_keys):
             values = [m[key] for m in self.metrics_history if key in m and isinstance(m[key], (int, float))]
             if values:
                 lines.append(f"  {key}: min={min(values):.4f}, max={max(values):.4f}, "
                            f"last={values[-1]:.4f}")
-        
+
         return '\n'.join(lines)
 
 
@@ -805,49 +841,49 @@ class MetricsLogger:
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
-    
+
     # Test CheckpointManager
     print("Testing CheckpointManager...")
-    
+
     # Create dummy model and optimizer
     model = nn.Linear(10, 5)
     optimizer = optim.Adam(model.parameters())
-    
+
     manager = CheckpointManager('./test_checkpoints', max_checkpoints=3)
-    
+
     # Save several checkpoints
     for epoch in range(5):
         metrics = {'val_loss': 1.0 - epoch * 0.1, 'accuracy': epoch * 0.2}
         manager.save(model, optimizer, epoch, metrics)
-    
+
     # Load latest
     new_model = nn.Linear(10, 5)
     loaded_epoch = manager.load(new_model)
     print(f"Loaded epoch: {loaded_epoch}")
-    
+
     # Test EarlyStopping
     print("\nTesting EarlyStopping...")
     early_stop = EarlyStopping(patience=3)
-    
+
     losses = [1.0, 0.9, 0.8, 0.85, 0.86, 0.87, 0.88]  # Stops improving after index 2
     for i, loss in enumerate(losses):
         if early_stop(loss, i):
             print(f"Stopped at epoch {i}")
             break
-    
+
     # Test MetricsLogger
     print("\nTesting MetricsLogger...")
     metrics_logger = MetricsLogger('./test_logs', 'test_exp')
-    
+
     for i in range(10):
         metrics_logger.log({'epoch': i, 'loss': 1.0 - i * 0.1, 'lr': 0.001})
-    
+
     print(metrics_logger.summary())
     metrics_logger.save()
-    
+
     # Cleanup
     import shutil
     shutil.rmtree('./test_checkpoints', ignore_errors=True)
     shutil.rmtree('./test_logs', ignore_errors=True)
-    
+
     print("\nAll tests passed!")

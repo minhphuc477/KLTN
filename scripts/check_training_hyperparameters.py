@@ -117,7 +117,10 @@ def probe_training_corpus(config: Mapping[str, Any]) -> Tuple[Dict[str, Any], Li
     except Exception as exc:
         _issue(
             issues,
-            "WARNING",
+            # Missing data is a hard blocker: training will fail immediately.
+            # Downgrading to WARNING previously allowed exit code 0, defeating
+            # the purpose of this preflight check.
+            "ERROR",
             "data_probe_failed",
             "dataset.data_dir",
             f"Could not count configured training samples: {type(exc).__name__}: {exc}",
@@ -292,6 +295,21 @@ def build_training_hyperparameter_report(
             diffusion_latent_dim=int(diffusion["latent_dim"]),
             vqvae_latent_dim=int(vqvae["latent_dim"]),
         )
+
+    # All stage modules that consume VQ-VAE latents must agree on latent_dim.
+    # A mismatch here causes shape errors only at model construction / checkpoint
+    # load time, making them hard to diagnose during training.
+    for stage_name, section in (("fast_sampler", fast_sampler), ("masked_room", masked_room)):
+        if "latent_dim" in section and int(section["latent_dim"]) != int(vqvae["latent_dim"]):
+            _issue(
+                issues,
+                "ERROR",
+                "latent_dim_mismatch",
+                f"{stage_name}.latent_dim",
+                f"{stage_name}.latent_dim does not match the tokenizer latent_dim.",
+                f"Keep {stage_name}.latent_dim == vqvae.latent_dim before training or loading checkpoints.",
+                **{f"{stage_name}_latent_dim": int(section["latent_dim"]), "vqvae_latent_dim": int(vqvae["latent_dim"])},
+            )
 
     for section_name, section in (("diffusion", diffusion), ("masked_room", masked_room)):
         context_dim = int(section["context_dim"])

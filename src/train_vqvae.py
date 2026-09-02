@@ -42,7 +42,6 @@ from src.utils.checkpoint import (
     atomic_torch_save,
     enforce_checkpoint_storage_budget,
     log_checkpoint_artifact,
-    prune_checkpoints,
     resolve_resume_checkpoint,
     safe_torch_load,
     write_checkpoint_metadata,
@@ -116,6 +115,9 @@ def vqvae_training_kwargs_from_resolved_config(config: Dict[str, Any]) -> Dict[s
         "test_dungeon_ids": dataset.get("test_dungeons", [9]),
         "variants": dataset.get("variants", [1, 2]),
         "seed": runtime["seed"],
+        "cudnn_benchmark": runtime["cudnn_benchmark"],
+        "cudnn_deterministic": runtime["cudnn_deterministic"],
+        "deterministic_algorithms": runtime["deterministic_algorithms"],
         "auto_resume": runtime["auto_resume"],
         "checkpoint_storage_budget_gb": runtime["checkpoint_storage_budget_gb"],
         "checkpoint_storage_warning_fraction": runtime["checkpoint_storage_warning_fraction"],
@@ -273,8 +275,13 @@ def split_dataset_for_vqvae_validation(
     *,
     validation_fraction: float,
     seed: int | None,
+    require_group_metadata: bool = False,
 ):
-    """Deterministically split data, grouping room samples by dungeon."""
+    """Deterministically split data, grouping room samples by dungeon.
+
+    Publication training sets ``require_group_metadata`` so malformed metadata
+    cannot silently downgrade the split to room-level random sampling.
+    """
     dataset_size = len(dataset)
     fraction = float(max(0.0, validation_fraction))
     if dataset_size < 2 or fraction <= 0.0:
@@ -319,6 +326,12 @@ def split_dataset_for_vqvae_validation(
                 torch.utils.data.Subset(dataset, train_indices),
                 torch.utils.data.Subset(dataset, val_indices),
             )
+
+    if require_group_metadata:
+        raise ValueError(
+            "Grouped internal validation requires complete sample_metadata with "
+            "dungeon_num or dungeon_id for every sample."
+        )
 
     val_size = int(round(dataset_size * fraction))
     val_size = max(1, min(dataset_size - 1, val_size))
@@ -475,7 +488,12 @@ def train_vqvae(args):
     run_started_at = time.time()
 
     if args.seed is not None:
-        resolved_seed = seed_everything(int(args.seed))
+        resolved_seed = seed_everything(
+            int(args.seed),
+            cudnn_benchmark=getattr(args, "cudnn_benchmark", None),
+            cudnn_deterministic=getattr(args, "cudnn_deterministic", None),
+            deterministic_algorithms=getattr(args, "deterministic_algorithms", None),
+        )
         logger.info("VQ-VAE trainer seeds initialized: seed=%d", resolved_seed)
 
     # ------------------------------------------------------------------
@@ -521,6 +539,7 @@ def train_vqvae(args):
         dataset,
         validation_fraction=float(getattr(args, "validation_fraction", 0.0)),
         seed=getattr(args, "seed", None),
+        require_group_metadata=True,
     )
     sample_kind = "rooms" if room_level else "dungeons"
     logger.info("Dataset: %d %s", len(dataset), sample_kind)
@@ -720,7 +739,12 @@ def train_vqvae(args):
                 continue
 
             for k in epoch_metrics:
-                epoch_metrics[k] += metrics.get(k, 0.0)
+                _val = metrics.get(k, 0.0)
+                if isinstance(_val, torch.Tensor):
+                    _val = float(_val.detach().item())
+                else:
+                    _val = float(_val)
+                epoch_metrics[k] += _val
             num_batches += 1
 
             if batch_idx % max(1, len(dataloader) // 5) == 0:

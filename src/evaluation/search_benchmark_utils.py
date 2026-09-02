@@ -12,7 +12,12 @@ from __future__ import annotations
 import math
 from typing import Any, Dict, List, Tuple
 
-from src.simulation.search_status import oracle_status_from_outcome
+from src.simulation.search_status import (
+    oracle_status_from_outcome,
+    proven_unsolvable_from_outcome,
+    search_outcome_is_indeterminate,
+    search_proof_status,
+)
 from src.simulation.validator import SolverDiagnostics, StateSpaceAStar
 
 
@@ -146,7 +151,7 @@ def run_astar_oracle(env: Any, timeout: int, heuristic_mode: str = "balanced") -
         priority_options=priority_options,
         search_mode="astar",
     )
-    success, path, diagnostics = solver.solve_with_diagnostics()
+    success, path, diagnostics = solver.solve_with_verified_diagnostics()
     if not isinstance(diagnostics, SolverDiagnostics):
         diagnostics = SolverDiagnostics(success=bool(success), states_explored=0)
     solver_used = "astar"
@@ -160,43 +165,40 @@ def run_astar_oracle(env: Any, timeout: int, heuristic_mode: str = "balanced") -
     fallback_attempted = False
     fallback_states = 0
 
-    remaining_budget = max(0, state_budget - primary_states)
-    if not bool(success) and remaining_budget > 0:
-        fallback_attempted = True
-        env.reset()
-        fallback = StateSpaceAStar(
-            env,
-            timeout=remaining_budget,
-            heuristic_mode=str(heuristic_mode or "balanced"),
-            priority_options=priority_options,
-            search_mode="dijkstra",
-        )
-        fb_success, fb_path, fb_diag = fallback.solve_with_diagnostics()
-        if isinstance(fb_diag, SolverDiagnostics):
-            fallback_states = int(max(0, fb_diag.states_explored or 0))
-            total_states = min(state_budget, primary_states + fallback_states)
-            total_time_ms += float(max(0.0, fb_diag.time_taken_ms or 0.0))
-            total_pruned += int(max(0, fb_diag.states_pruned_dominated or 0))
-            max_queue_size = max(max_queue_size, int(max(0, fb_diag.max_queue_size or 0)))
-            success = bool(fb_success)
-            path = fb_path
-            diagnostics = fb_diag
-            solver_used = "dijkstra_fallback" if success else "astar_then_dijkstra"
+    route_replay_status = str(diagnostics.route_replay_status or "not_run")
+    route_replay_error = str(diagnostics.route_replay_error or "")
+    replay_path_cost = diagnostics.route_replay_path_cost
 
-    status = oracle_status_from_outcome(bool(success), diagnostics.failure_reason)
+    status = oracle_status_from_outcome(
+        bool(success),
+        diagnostics.failure_reason,
+        diagnostics.termination_status,
+    )
     path_list: List[Tuple[int, int]] = list(path or [])
+    proof_status = search_proof_status(bool(success), diagnostics.termination_status)
     return {
         "success": bool(success),
         "path": path_list,
         "path_length": int(max(0, len(path_list) - 1)),
         "states_explored": int(total_states),
         "status": status,
+        "termination_status": str(diagnostics.termination_status or "unknown"),
+        "proof_status": proof_status,
+        "proven_unsolvable": proven_unsolvable_from_outcome(
+            bool(success), diagnostics.termination_status
+        ),
+        "indeterminate": search_outcome_is_indeterminate(
+            bool(success), diagnostics.termination_status
+        ),
         "failure_reason": str(diagnostics.failure_reason or ""),
         "time_ms": float(total_time_ms),
         "states_pruned_dominated": int(total_pruned),
         "max_queue_size": int(max_queue_size),
         "timeout_flag": int(status == "timeout"),
         "final_inventory": dict(diagnostics.final_inventory or {}),
+        "route_replay_status": route_replay_status,
+        "route_replay_error": route_replay_error,
+        "route_replay_path_cost": replay_path_cost,
         "solver_used": str(solver_used),
         "primary_solver_error": primary_failure,
         "state_budget": int(state_budget),

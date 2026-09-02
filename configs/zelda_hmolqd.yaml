@@ -106,6 +106,8 @@ diffusion:
   save_every: 10  # type=int, default=10, valid>=1
   keep_last: 2  # type=int, default=2, valid>=0; number of retained full-resume checkpoints besides latest_resume/best/final
   validation_fraction: 0.1  # type=float, default=0.1, valid=0..0.5; internal validation split drawn only from train_dungeons, never from Dungeon 9
+  best_checkpoint_metric: val_diffusion_loss  # type=str, default=val_diffusion_loss, valid={val_diffusion_loss,val_total_loss}; select all ablation arms by the same visual objective
+  nonfinite_policy: skip  # type=str, default=skip, valid={skip,error}; publication materialization overrides to error so unequal skipped updates cannot confound arms
   latent_dim: 64  # type=int, default=64, valid>=1
   latent_scale_factor: 1.0  # type=float, default=1.0, valid>0; checkpointed ablation, set from corpus calibration rather than a single batch
   model_channels: 96  # type=int, default=128, valid>=8; recommended small-data-balanced setting for the current Zelda corpus
@@ -127,10 +129,11 @@ diffusion:
   condition_dropout: 0.1  # type=float, default=0.1, valid=0..1
   condition_gnn_type: gps  # type=str, default=gcn, valid={gcn,gat,sage,gps}; GraphGPS-style hybrid graph encoder is the recommended training setting
   condition_use_rrwp_edge_features: true  # type=bool, default=true, valid={true,false}; explicit RRWP edge-feature ablation switch
-  condition_use_reference_room_maps: true  # type=bool, default=false, valid={true,false}; use neighboring room exemplars as a lightweight prompt-free local reference signal
+  condition_use_reference_room_maps: false  # type=bool, default=false, valid={true,false}; optional separate ablation because neighbor latents already carry local room context
   condition_reference_tile_vocab_size: 44  # type=int, default=44, valid>=2; must match dataset.num_classes when enabled
   condition_reference_embedding_dim: 32  # type=int, default=32, valid>=4
   condition_reference_hidden_dim: 64  # type=int, default=64, valid>=4
+  condition_global_graph_enabled: true  # type=bool, default=true; false trains the publication local-context baseline and requires graph_conditioning_mode=pooled with LogicNet disabled
   graph_conditioning_mode: node_sequence  # type=str, default=node_sequence, valid={node_sequence,pooled}
   num_timesteps: 1000  # type=int, default=1000, valid>=10
   schedule_type: cosine  # type=str, default=cosine, valid={linear,cosine}

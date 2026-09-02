@@ -30,8 +30,10 @@ from src.core.definitions import (
 from src.simulation.edge_logic import (
     edge_constraints_from_data,
     edge_type_from_data,
-    combine_edge_types,
     can_traverse_edge_type,
+    graph_edge_state_key,
+    graph_predecessors,
+    graph_successors,
 )
 from src.simulation.validation_helpers import (
     SanityChecker,
@@ -69,6 +71,9 @@ from src.simulation.validation_types import (  # noqa: F401 - compatibility re-e
     ValidationResult,
 )
 
+GraphTransitionPath = Tuple[Tuple[Any, Any, str], ...]
+GraphTransitionSpec = str | GraphTransitionPath
+
 # Configure logging after imports so the module remains statically analyzable.
 logger = logging.getLogger(__name__)
 
@@ -89,8 +94,8 @@ class ZeldaLogicEnv:
     
     This is a "headless" environment - no graphics, just logic.
     """
-    
-    def __init__(self, semantic_grid: np.ndarray, render_mode: bool = False, 
+
+    def __init__(self, semantic_grid: np.ndarray, render_mode: bool = False,
                  graph=None, room_to_node=None, room_positions=None,
                  node_to_room=None,
                  room_puzzle_metadata: Optional[Mapping[str, Any]] = None,
@@ -113,13 +118,13 @@ class ZeldaLogicEnv:
         self.grid = self.original_grid.copy()
         self.height, self.width = self.grid.shape
         self.render_mode = render_mode
-        
+
         # Store solver options (default if not provided)
         self.solver_options = solver_options or SolverOptions()
         self.rules_profile = str(getattr(self.solver_options, 'rules_profile', 'vglc_strict') or 'vglc_strict').strip().lower()
         self.strict_original_mode = self.rules_profile in {'strict_original', 'original', 'nes'}
         self.vglc_strict_mode = self.rules_profile in {'vglc_strict', 'vglc', 'dataset'}
-        
+
         # Store graph connectivity for handling stairs
         self.graph = graph
         self.room_to_node = room_to_node
@@ -141,11 +146,11 @@ class ZeldaLogicEnv:
         self._room_enemy_tiles: Dict[Tuple[int, int], Set[Tuple[int, int]]] = {}
         if self.room_positions:
             self._build_room_enemy_cache()
-        
+
         # Find start and goal positions
         self.start_pos = self._find_position(SEMANTIC_PALETTE['START'])
         self.goal_pos = self._find_position(SEMANTIC_PALETTE['TRIFORCE'])
-        
+
         # Initialize game state with configurable starting inventory
         # Uses solver_options for bombs/keys (allows level-specific configuration)
         self.state = GameState(
@@ -164,7 +169,7 @@ class ZeldaLogicEnv:
         self.won = False
         self.step_count = 0
         self.max_steps = 10000  # Prevent infinite loops
-        
+
         # Initialize rendering if needed
         self._screen = None
         self._font = None
@@ -280,14 +285,14 @@ class ZeldaLogicEnv:
         elif int(tile) == SEMANTIC_PALETTE['ITEM_MINOR']:
             new_state.bomb_count = state.bomb_count + 4
         return new_state, 0.0, {'msg': 'Picked up exposed item', 'item': ID_TO_NAME.get(int(tile), str(tile))}
-    
+
     def _find_position(self, target_id: int) -> Optional[Tuple[int, int]]:
         """Find the first occurrence of a tile ID."""
         positions = np.where(self.grid == target_id)
         if len(positions[0]) > 0:
             return (int(positions[0][0]), int(positions[1][0]))
         return None
-    
+
     def _find_all_positions(self, target_id: int) -> List[Tuple[int, int]]:
         """Find all occurrences of a tile ID."""
         positions = np.where(self.grid == target_id)
@@ -495,7 +500,7 @@ class ZeldaLogicEnv:
         if current_room == target_room:
             return True
         return self._is_room_cleared(current_room, state)
-    
+
     def reset(self) -> GameState:
         """Reset the environment to initial state."""
         self.grid = self.original_grid.copy()
@@ -517,7 +522,7 @@ class ZeldaLogicEnv:
         self.won = False
         self.step_count = 0
         return self.state.copy()
-    
+
     def step(self, action: int) -> Tuple[GameState, float, bool, Dict]:
         """
         Execute one step in the environment.
@@ -533,35 +538,35 @@ class ZeldaLogicEnv:
         """
         if self.done:
             return self.state.copy(), 0.0, True, {'msg': 'Episode already done'}
-        
+
         self.step_count += 1
         if self.step_count >= self.max_steps:
             self.done = True
             return self.state.copy(), -100.0, True, {'msg': 'Max steps exceeded'}
-        
+
         # Get movement delta
         dr, dc = ACTION_DELTAS.get(Action(action), (0, 0))
         current_r, current_c = self.state.position
         new_r, new_c = current_r + dr, current_c + dc
-        
+
         # Check bounds
         if not (0 <= new_r < self.height and 0 <= new_c < self.width):
             return self.state.copy(), -1.0, False, {'msg': 'Out of bounds'}
-        
+
         target_tile = self.grid[new_r, new_c]
         info = {'msg': ''}
         reward = -0.1  # Small step penalty
-        
+
         # Check if movement is possible
         can_move, new_state, step_reward, step_info = self._try_move(
             (new_r, new_c), target_tile
         )
-        
+
         if can_move:
             self.state = new_state
             reward += step_reward
             info.update(step_info)
-            
+
             # Check win condition
             if target_tile == SEMANTIC_PALETTE['TRIFORCE']:
                 self.done = True
@@ -571,9 +576,9 @@ class ZeldaLogicEnv:
         else:
             reward = -1.0
             info['msg'] = step_info.get('msg', 'Blocked')
-        
+
         return self.state.copy(), reward, self.done, info
-    
+
     def _try_move(self, target_pos: Tuple[int, int], target_tile: int
                  ) -> Tuple[bool, GameState, float, Dict]:
         """
@@ -588,7 +593,7 @@ class ZeldaLogicEnv:
         new_state = self.state.copy()
         reward = 0.0
         info = {}
-        
+
         # Blocking tiles - cannot pass
         if target_tile in BLOCKING_IDS:
             return False, self.state, 0.0, {'msg': 'Blocked by wall'}
@@ -604,7 +609,7 @@ class ZeldaLogicEnv:
 
             if self.strict_original_mode and target_tile in {SEMANTIC_PALETTE['ENEMY'], SEMANTIC_PALETTE['BOSS']}:
                 new_state.defeated_enemies = self.state.defeated_enemies | {target_pos}
-            
+
             # Handle item pickup
             if target_tile in PICKUP_IDS and target_pos not in new_state.collected_items:
                 new_state, pickup_reward, pickup_info = self._pickup_item(
@@ -618,9 +623,9 @@ class ZeldaLogicEnv:
                 target_pos=target_pos,
                 target_tile=int(target_tile),
             )
-            
+
             return True, new_state, reward, info
-        
+
         # Conditional tiles - require inventory items
         if target_tile == SEMANTIC_PALETTE['DOOR_LOCKED']:
             if target_pos in new_state.opened_doors:
@@ -645,7 +650,7 @@ class ZeldaLogicEnv:
                 return True, new_state, 10.0, {'msg': 'Unlocked door with key'}
             else:
                 return False, self.state, 0.0, {'msg': 'Door locked - need key'}
-        
+
         if target_tile == SEMANTIC_PALETTE['DOOR_BOMB']:
             if target_pos in new_state.opened_doors:
                 new_state.position = target_pos
@@ -668,7 +673,7 @@ class ZeldaLogicEnv:
                 return True, new_state, 10.0, {'msg': 'Bombed wall'}
             else:
                 return False, self.state, 0.0, {'msg': 'Need bombs'}
-        
+
         if target_tile == SEMANTIC_PALETTE['DOOR_BOSS']:
             if target_pos in new_state.opened_doors:
                 new_state.position = target_pos
@@ -690,7 +695,7 @@ class ZeldaLogicEnv:
                 return True, new_state, 20.0, {'msg': 'Opened boss door'}
             else:
                 return False, self.state, 0.0, {'msg': 'Need boss key'}
-        
+
         if target_tile == SEMANTIC_PALETTE['DOOR_PUZZLE']:
             if not self._can_pass_puzzle_door(new_state, target_pos):
                 return False, self.state, 0.0, {'msg': 'Puzzle door closed - staged puzzle incomplete'}
@@ -702,7 +707,7 @@ class ZeldaLogicEnv:
                 target_tile=int(target_tile),
             )
             return True, new_state, 0.0, {'msg': 'Passed puzzle door'}
-        
+
         # ELEMENT (water/lava) - needs KEY_ITEM (Ladder) to cross.
         # Without the Ladder the tile is impassable.
         if target_tile == SEMANTIC_PALETTE['ELEMENT']:
@@ -780,28 +785,28 @@ class ZeldaLogicEnv:
         # Default: allow movement (handles FLOOR, STAIR, etc. not caught above)
         new_state.position = target_pos
         return True, new_state, 0.0, info
-    
+
     def _pickup_item(self, state: GameState, pos: Tuple[int, int], tile: int
                     ) -> Tuple[GameState, float, Dict]:
         """Handle item pickup."""
         state.collected_items.add(pos)
-        
+
         if tile == SEMANTIC_PALETTE['KEY_SMALL']:
             state.keys += 1
             self.grid[pos] = SEMANTIC_PALETTE['FLOOR']
             return state, 5.0, {'msg': 'Picked up key', 'item': 'key'}
-        
+
         if tile == SEMANTIC_PALETTE['KEY_BOSS']:
             state.has_boss_key = True
             self.grid[pos] = SEMANTIC_PALETTE['FLOOR']
             return state, 15.0, {'msg': 'Picked up boss key', 'item': 'boss_key'}
-        
+
         if tile == SEMANTIC_PALETTE['KEY_ITEM']:
             state.has_item = True
             state.item_names.update(self._item_names_for_position(pos))
             self.grid[pos] = SEMANTIC_PALETTE['FLOOR']
             return state, 10.0, {'msg': 'Picked up key item', 'item': 'key_item'}
-        
+
         if tile == SEMANTIC_PALETTE['ITEM_MINOR']:
             # ITEM_MINOR represents bomb pickups in VGLC Zelda dungeons
             # Without this, dungeons where bombs are behind bombable walls
@@ -809,18 +814,18 @@ class ZeldaLogicEnv:
             state.bomb_count += 4  # Consumable: add 4 bombs
             self.grid[pos] = SEMANTIC_PALETTE['FLOOR']
             return state, 1.0, {'msg': 'Picked up bomb', 'item': 'bomb'}
-        
+
         return state, 0.0, {}
-    
+
     def get_valid_actions(self) -> List[int]:
         """Get list of valid actions from current state."""
         valid = []
         r, c = self.state.position
-        
+
         for action in Action:
             dr, dc = ACTION_DELTAS[action]
             nr, nc = r + dr, c + dc
-            
+
             if 0 <= nr < self.height and 0 <= nc < self.width:
                 tile = self.grid[nr, nc]
                 if tile not in BLOCKING_IDS:
@@ -843,10 +848,10 @@ class ZeldaLogicEnv:
                             valid.append(int(action))
                     else:
                         valid.append(int(action))
-        
+
         return valid
-    
-    def _try_move_pure(self, state: GameState, target_pos: Tuple[int, int], 
+
+    def _try_move_pure(self, state: GameState, target_pos: Tuple[int, int],
                        target_tile: int) -> Tuple[bool, GameState]:
         """
         Pure state-based move attempt (no grid modifications).
@@ -874,7 +879,7 @@ class ZeldaLogicEnv:
 
         new_state = state.copy()
         new_state.position = target_pos
-        
+
         # Handle special tiles based on STATE, not grid modifications
         if target_pos in state.bridged_tiles and int(target_tile) in BRIDGE_FILL_IDS:
             new_state = self._update_puzzle_stage_progress(
@@ -883,7 +888,7 @@ class ZeldaLogicEnv:
                 target_tile=int(SEMANTIC_PALETTE['ELEMENT_FLOOR']),
             )
             return True, new_state
-        
+
         # Check if this door was already opened (in state)
         if target_pos in state.opened_doors:
             # Door is open, can pass freely
@@ -893,7 +898,7 @@ class ZeldaLogicEnv:
                 target_tile=int(target_tile),
             )
             return True, new_state
-        
+
         # Check if this item was already collected (in state)
         if target_pos in state.collected_items:
             # Item already collected, treat as floor
@@ -903,7 +908,7 @@ class ZeldaLogicEnv:
                 target_tile=int(target_tile),
             )
             return True, new_state
-        
+
         # Dynamic occupancy wins over the immutable grid. A block may currently
         # occupy the original position vacated by another block.
         for (from_pos, to_pos) in state.pushed_blocks:
@@ -914,11 +919,11 @@ class ZeldaLogicEnv:
                 dc = target_pos[1] - state.position[1]
                 push_dest_r = target_pos[0] + dr
                 push_dest_c = target_pos[1] + dc
-                
+
                 # Check bounds
                 if not (0 <= push_dest_r < self.height and 0 <= push_dest_c < self.width):
                     return False, state  # Can't push off map
-                
+
                 # Check destination - but also check if another block is there!
                 push_dest_tile = self.grid[push_dest_r, push_dest_c]
                 push_dest = (push_dest_r, push_dest_c)
@@ -973,7 +978,7 @@ class ZeldaLogicEnv:
                 target_tile=int(underlay_tile),
             )
             return True, new_state
-        
+
         # Walkable tiles - free movement
         if target_tile in WALKABLE_IDS:
             if self.strict_original_mode and target_tile in {SEMANTIC_PALETTE['ENEMY'], SEMANTIC_PALETTE['BOSS']}:
@@ -981,7 +986,7 @@ class ZeldaLogicEnv:
             # Handle item pickup (add to collected_items)
             if target_tile in PICKUP_IDS:
                 new_state.collected_items = state.collected_items | {target_pos}
-                
+
                 if target_tile == SEMANTIC_PALETTE['KEY_SMALL']:
                     new_state.keys = state.keys + 1
                 elif target_tile == SEMANTIC_PALETTE['KEY_BOSS']:
@@ -1000,7 +1005,7 @@ class ZeldaLogicEnv:
                 target_tile=int(target_tile),
             )
             return True, new_state
-        
+
         # Conditional tiles - require inventory items
         if target_tile == SEMANTIC_PALETTE['DOOR_LOCKED']:
             if state.keys > 0:
@@ -1013,7 +1018,7 @@ class ZeldaLogicEnv:
                 )
                 return True, new_state
             return False, state
-        
+
         if target_tile == SEMANTIC_PALETTE['DOOR_BOMB']:
             if state.bomb_count > 0:
                 new_state.bomb_count = state.bomb_count - 1  # Consume one bomb
@@ -1025,7 +1030,7 @@ class ZeldaLogicEnv:
                 )
                 return True, new_state
             return False, state
-        
+
         if target_tile == SEMANTIC_PALETTE['DOOR_BOSS']:
             if state.has_boss_key:
                 new_state.opened_doors = state.opened_doors | {target_pos}
@@ -1036,7 +1041,7 @@ class ZeldaLogicEnv:
                 )
                 return True, new_state
             return False, state
-        
+
         if target_tile == SEMANTIC_PALETTE['DOOR_PUZZLE']:
             if not self._can_pass_puzzle_door(state, target_pos):
                 return False, state
@@ -1047,7 +1052,7 @@ class ZeldaLogicEnv:
                 target_tile=int(target_tile),
             )
             return True, new_state
-        
+
         if target_tile == SEMANTIC_PALETTE['DOOR_OPEN']:
             # Already open door
             new_state = self._update_puzzle_stage_progress(
@@ -1056,7 +1061,7 @@ class ZeldaLogicEnv:
                 target_tile=int(target_tile),
             )
             return True, new_state
-        
+
         if target_tile == SEMANTIC_PALETTE['DOOR_SOFT']:
             # One-way door - can pass
             new_state = self._update_puzzle_stage_progress(
@@ -1065,7 +1070,7 @@ class ZeldaLogicEnv:
                 target_tile=int(target_tile),
             )
             return True, new_state
-        
+
         # ELEMENT (water/lava) - needs KEY_ITEM (Ladder) to cross.
         # The Stepladder acts as a 1-tile bridge: the agent can step onto
         # ONE ELEMENT tile but cannot continue onto a second consecutive
@@ -1084,7 +1089,7 @@ class ZeldaLogicEnv:
                 )
                 return True, new_state
             return False, state
-        
+
         # BLOCK tiles - pushable
         if target_tile == SEMANTIC_PALETTE['BLOCK']:
             # Calculate push direction
@@ -1092,14 +1097,14 @@ class ZeldaLogicEnv:
             dc = target_pos[1] - state.position[1]
             push_dest_r = target_pos[0] + dr
             push_dest_c = target_pos[1] + dc
-            
+
             # Check bounds
             if not (0 <= push_dest_r < self.height and 0 <= push_dest_c < self.width):
                 return False, state
-            
+
             # Check if destination is walkable
             push_dest_tile = self.grid[push_dest_r, push_dest_c]
-            
+
             push_dest = (push_dest_r, push_dest_c)
 
             if is_push_destination_available(state, push_dest, int(push_dest_tile)):
@@ -1129,18 +1134,18 @@ class ZeldaLogicEnv:
                 return True, new_state
             else:
                 return False, state
-        
+
         # Default: treat as walkable
         return True, new_state
-    
+
     # ==========================================
     # RENDERING (OPTIONAL - PYGAME)
     # ==========================================
-    
+
     def _init_render(self):
         """Initialize Pygame rendering."""
         _validator_rendering.init_render(self)
-    
+
     def _load_images(self):
         """Load tile images or create colored fallbacks."""
         _validator_rendering.load_images(self)
@@ -1148,7 +1153,7 @@ class ZeldaLogicEnv:
     def render(self):
         """Render current state to screen."""
         _validator_rendering.render(self)
-    
+
     def close(self):
         """Clean up resources."""
         _validator_rendering.close(self)
@@ -1173,7 +1178,7 @@ class StateSpaceAStar:
     - 'dijkstra': f = g (uniform cost, no heuristic)
     - 'greedy': f = h (heuristic only, fast but suboptimal)
     """
-    
+
     def __init__(self, env: ZeldaLogicEnv, timeout: int = 10000000, heuristic_mode: str = "balanced", priority_options: dict = None, search_mode: str = "astar"):
         """
         Initialize the solver.
@@ -1193,11 +1198,13 @@ class StateSpaceAStar:
         self.timeout = timeout
         self.heuristic_mode = heuristic_mode
         self.search_mode = search_mode.lower() if search_mode else 'astar'
+        self.last_termination_status = "not_run"
+        self.last_failure_reason = ""
         self.pickup_positions = self._cache_pickups()
-        
+
         # PERFORMANCE: Cache stair destinations to avoid repeated graph traversals
         self._stair_dest_cache = {}
-        
+
         # VIRTUAL NODE TRAVERSAL: Cache for graph-based room-to-room transitions
         # This enables traversal through "virtual nodes" (graph nodes without physical rooms)
         self._node_to_room = None  # Lazy-initialized reverse mapping
@@ -1303,8 +1310,8 @@ class StateSpaceAStar:
                     d, u = heapq.heappop(pq)
                     if d != dist.get(u, 1e9):
                         continue
-                    for v in set(G.successors(u)) | set(G.predecessors(u)):
-                        edata = G.get_edge_data(u, v, {}) or {}
+                    for v in graph_predecessors(G, u):
+                        edata = G.get_edge_data(v, u, {}) or {}
                         etype = self._edge_type_from_data(edata)
                         cost = 1 if etype in ('locked', 'key_locked') else 0
                         nd = d + cost
@@ -1314,7 +1321,7 @@ class StateSpaceAStar:
                 self.min_locked_needed_node = dist
         except (AttributeError, TypeError, ValueError, KeyError):
             self.min_locked_needed_node = {}
-        
+
         # PERFORMANCE FIX: Cache door and element positions at initialization
         # Avoids O(width x height) scan on every heuristic call
         self._locked_doors_cache = self.env.find_all_positions(SEMANTIC_PALETTE['DOOR_LOCKED'])
@@ -1346,12 +1353,12 @@ class StateSpaceAStar:
                             goal_node = nd
                             break
                 if goal_node is not None:
-                    # BFS from goal node (undirected: union of successors+predecessors)
+                    # Reverse BFS from the goal preserves directed reachability.
                     bfs_q = deque([(goal_node, 0)])
                     self._graph_bfs_dist[goal_node] = 0
                     while bfs_q:
                         u, d = bfs_q.popleft()
-                        for v in set(G.successors(u)) | set(G.predecessors(u)):
+                        for v in graph_predecessors(G, u):
                             if v not in self._graph_bfs_dist:
                                 self._graph_bfs_dist[v] = d + 1
                                 bfs_q.append((v, d + 1))
@@ -1668,12 +1675,10 @@ class StateSpaceAStar:
                 fwd.add(start_node)
                 while q:
                     u = q.popleft()
-                    for v in set(G.successors(u)) | set(G.predecessors(u)):
+                    for v in graph_successors(G, u):
                         if v in fwd:
                             continue
                         ed = G.get_edge_data(u, v, {}) or {}
-                        if not ed:
-                            ed = G.get_edge_data(v, u, {}) or {}
                         et = self._edge_type_from_data(ed)
                         if et == 'soft_locked':
                             # Only traverse if directed edge u->v exists
@@ -1692,13 +1697,11 @@ class StateSpaceAStar:
                 bwd.add(goal_node)
                 while q:
                     u = q.popleft()
-                    for v in set(G.successors(u)) | set(G.predecessors(u)):
+                    for v in graph_predecessors(G, u):
                         if v in bwd:
                             continue
                         # Reversed: to reach u from v, original edge must go v->u
                         ed = G.get_edge_data(v, u, {}) or {}
-                        if not ed:
-                            ed = G.get_edge_data(u, v, {}) or {}
                         et = self._edge_type_from_data(ed)
                         if et == 'soft_locked':
                             # In reverse, we need the original directed edge v->u
@@ -1941,10 +1944,8 @@ class StateSpaceAStar:
         # Two POIs in different rooms are connected if their rooms share a graph edge
         cross_edges: List[Tuple[Tuple[int, int], Tuple[int, int], int, str]] = []
         for nd in G.nodes():
-            for nb in set(G.successors(nd)) | set(G.predecessors(nd)):
+            for nb in graph_successors(G, nd):
                 ed = G.get_edge_data(nd, nb, {}) or {}
-                if not ed:
-                    ed = G.get_edge_data(nb, nd, {}) or {}
                 et = self._edge_type_from_data(ed)
                 # Find door POIs in both rooms that are closest
                 nd_pois = [p for t, p in all_pois.get(nd, []) if t.startswith('door') or t == 'stair']
@@ -2103,20 +2104,8 @@ class StateSpaceAStar:
                     if not ni:
                         continue
                 elif et == 'switch':
-                    if self.strict_original_mode:
-                        current_room = self.env.get_room_for_position(src)
-                        _tmp_state = self._room_level_game_state(
-                            room_pos=current_room,
-                            position=pos,
-                            keys=keys,
-                            bombs=bombs,
-                            has_boss_key=bk,
-                            has_item=has_item,
-                            collected=collected,
-                            opened=opened,
-                        )
-                        if not self.env.is_room_cleared(current_room, _tmp_state):
-                            continue
+                    # This abstraction does not carry activated switch IDs.
+                    continue
                 elif et == 'soft_locked':
                     # Must check directed edge
                     src_nd = pos_to_node.get(src)
@@ -2165,31 +2154,6 @@ class StateSpaceAStar:
     # Heuristic = graph BFS distance x average room diameter.
     # This reduces the search space from thousands of tiles to tens of nodes.
     # ------------------------------------------------------------------
-
-    def _room_level_game_state(
-        self,
-        *,
-        room_pos: Optional[Tuple[int, int]],
-        position: Tuple[int, int],
-        keys: int,
-        bombs: int,
-        has_boss_key: bool,
-        has_item: bool,
-        collected: FrozenSet[Tuple[int, int]],
-        opened: FrozenSet[Tuple[int, int]],
-    ) -> GameState:
-        """Reconstruct a tile-level state consistent with room-level abstraction."""
-        defeated = set(getattr(self.env, "_room_enemy_tiles", {}).get(room_pos, set()))
-        return GameState(
-            position=position,
-            keys=int(keys),
-            bomb_count=int(bombs),
-            has_boss_key=bool(has_boss_key),
-            has_item=bool(has_item),
-            collected_items=set(collected),
-            opened_doors=set(opened),
-            defeated_enemies=defeated,
-        )
 
     def _solve_room_level(self, search_mode: Optional[str] = None) -> Tuple[bool, List[Tuple[int, int]], int]:
         """
@@ -2357,11 +2321,8 @@ class StateSpaceAStar:
                 return True, path, states_explored
 
             # Expand: iterate over all graph neighbors
-            for neighbor in set(G.successors(node)) | set(G.predecessors(node)):
-                # Get edge data (try both directions)
+            for neighbor in graph_successors(G, node):
                 edata = G.get_edge_data(node, neighbor, {}) or {}
-                if not edata:
-                    edata = G.get_edge_data(neighbor, node, {}) or {}
                 etype = self._edge_type_from_data(edata)
 
                 # Check traversability and compute new inventory
@@ -2369,8 +2330,11 @@ class StateSpaceAStar:
                 new_bombs = bombs
                 new_bk = bk
                 new_item = has_item_flag
-                if etype in ('open', 'stair', 'switch'):
+                if etype in ('open', 'stair'):
                     pass  # Free
+                elif etype == 'switch':
+                    # Room-level state does not model activated switch IDs.
+                    continue
                 elif etype == 'soft_locked':
                     # One-way: only allowed from node->neighbor (directed)
                     # Check if the directed edge exists
@@ -2411,12 +2375,10 @@ class StateSpaceAStar:
                     v_queue = deque([(neighbor, etype, new_keys, new_bombs, new_bk, new_item)])
                     while v_queue:
                         vn, _, vk, vb, vbk, vi = v_queue.popleft()
-                        for vn2 in set(G.successors(vn)) | set(G.predecessors(vn)):
+                        for vn2 in graph_successors(G, vn):
                             if vn2 in v_visited:
                                 continue
                             ved = G.get_edge_data(vn, vn2, {}) or {}
-                            if not ved:
-                                ved = G.get_edge_data(vn2, vn, {}) or {}
                             vet = self._edge_type_from_data(ved)
                             # Check traversability
                             tk, tb, tbk, ti = vk, vb, vbk, vi
@@ -2438,20 +2400,7 @@ class StateSpaceAStar:
                                 if not ti:
                                     can = False
                             elif vet == 'switch':
-                                if self.strict_original_mode:
-                                    current_room = n2r.get(vn)
-                                    _tmp_vs = self._room_level_game_state(
-                                        room_pos=current_room,
-                                        position=self._room_node_to_pos.get(node, (0, 0)),
-                                        keys=vk,
-                                        bombs=vb,
-                                        has_boss_key=vbk,
-                                        has_item=vi,
-                                        collected=collected,
-                                        opened=opened,
-                                    )
-                                    if current_room is None or not self.env.is_room_cleared(current_room, _tmp_vs):
-                                        can = False
+                                can = False
                             elif vet == 'soft_locked':
                                 if not G.has_edge(vn, vn2):
                                     can = False
@@ -2598,11 +2547,17 @@ class StateSpaceAStar:
         self.env.reset()
         self.last_solution_cost: Optional[float] = None
         self.last_solution_inventory: Optional[Dict[str, Any]] = None
-        
+        self.last_termination_status = "not_run"
+        self.last_failure_reason = ""
+
         if self.env.goal_pos is None:
+            self.last_termination_status = "invalid"
+            self.last_failure_reason = "No goal (TRIFORCE) found in map"
             return False, [], 0
-        
+
         if self.env.start_pos is None:
+            self.last_termination_status = "invalid"
+            self.last_failure_reason = "No start position found in map"
             return False, [], 0
 
         # -- STRATEGY 1: Room-level hierarchical solver --
@@ -2629,6 +2584,7 @@ class StateSpaceAStar:
                     # -- UPGRADE 3: Store abstract plan for heuristic guidance --
                     self._populate_abstract_plan(h_path)
                     if self.representation == 'graph':
+                        self.last_termination_status = "solved"
                         return True, h_path, h_states
                     logger.debug(
                         'Hierarchical solver produced abstract path in %s mode; '
@@ -2657,6 +2613,7 @@ class StateSpaceAStar:
                 if m_success:
                     logger.debug('Macro-action solver succeeded: %d states', m_states)
                     if self.representation == 'graph':
+                        self.last_termination_status = "solved"
                         return True, m_path, m_states
                     logger.debug(
                         'Macro-action solver produced abstract path in %s mode; '
@@ -2670,27 +2627,29 @@ class StateSpaceAStar:
                 logger.debug('Macro-action solver error: %s, falling back', e)
 
         # -- STRATEGY 2: Tile-level A* (original, with improvements) --
-        
+
         if self.graph_only:
             if not graph_available:
                 logger.debug('Graph-only mode requested but topology graph is unavailable')
+            self.last_termination_status = "incomplete"
+            self.last_failure_reason = "Graph-only front end did not produce a certified route"
             return False, [], graph_states_explored
 
         # Use read-only grid reference (no copies!)
         grid = self.env.original_grid
         height, width = grid.shape
-        
+
         # PERFORMANCE: Pre-allocate dominance tracking dictionary
         self._best_at_pos = {}
         self._best_g_at_pos = {}  # Track best g-score at each position
-        
+
         # Priority queue: (f_score, counter, hash_hint, g_score, state, state_key).
         # hash_hint is only heap metadata; closed/g-score maps use full keys.
         start_state = self.env.state.copy()
         start_key = self._state_key(start_state)
         start_h = self._heuristic(start_state)
         start_g = 0
-        
+
         # Compute initial f-score based on search mode
         if self.search_mode == 'bfs':
             start_f = 0  # BFS: f = depth (starts at 0)
@@ -2700,7 +2659,7 @@ class StateSpaceAStar:
             start_f = start_h  # Greedy: f = h only
         else:
             start_f = start_g + start_h  # A*: f = g + h
-        
+
         open_set = [
             self._make_open_entry(
                 f_score=start_f,
@@ -2711,22 +2670,22 @@ class StateSpaceAStar:
             )
         ]
         heapq.heapify(open_set)
-        
+
         closed_set = set()
         g_scores = {start_key: 0}
         parents: Dict[Any, Optional[Any]] = {start_key: None}
         positions: Dict[Any, Tuple[int, int]] = {start_key: start_state.position}
         depths: Dict[Any, int] = {start_key: 0}
-        
+
         states_explored = 0
         counter = 1  # Tie-breaker for heap
         dominated_states_pruned = 0  # Track pruning statistics
-        
+
         # Movement deltas: cardinal and diagonal both cost 1.0 under the
         # Chebyshev grid model used by all search implementations.
         cardinal_deltas = [(-1, 0), (1, 0), (0, -1), (0, 1)]
         diagonal_deltas = [(-1, -1), (-1, 1), (1, -1), (1, 1)]
-        
+
         while open_set and states_explored < self.timeout:
             entry: Any = heapq.heappop(open_set)
             # Support both simple and priority tuple formats
@@ -2745,7 +2704,7 @@ class StateSpaceAStar:
             current_key = self._state_key(current_state)
             if current_key in closed_set:
                 continue
-            
+
             # STATE DOMINATION PRUNING: keep a Pareto frontier per
             # position/dynamic-block bucket. A single "best" state is invalid
             # when incomparable inventories meet at the same tile.
@@ -2760,10 +2719,10 @@ class StateSpaceAStar:
                 float(current_g),
             )
             self._best_g_at_pos[state_bucket] = min(cost for _state, cost in self._best_at_pos[state_bucket])
-            
+
             closed_set.add(current_key)
             states_explored += 1
-            
+
             # Check win condition
             if current_state.position == self.env.goal_pos:
                 path = self._reconstruct_parent_path(parents, positions, current_key)
@@ -2779,15 +2738,16 @@ class StateSpaceAStar:
                     'doors_opened': len(current_state.opened_doors),
                     'items_collected': len(current_state.collected_items),
                 }
+                self.last_termination_status = "solved"
                 return True, path, states_explored
-            
+
             # Explore neighbors using pure state-based logic (NO grid copies)
             curr_r, curr_c = current_state.position
-            
+
             # Get possible neighbors: adjacent tiles + stair destinations
             # Each neighbor is (pos, tile, cost, is_teleport)
             neighbors = []
-            
+
             # Current tile determines if teleportation is allowed
             # Allow teleportation from:
             # 1. STAIR tiles - traditional warp points
@@ -2805,7 +2765,7 @@ class StateSpaceAStar:
                 SEMANTIC_PALETTE['DOOR_BOMB'],
                 SEMANTIC_PALETTE['DOOR_BOSS'],
             })
-            
+
             # Check if player is at room boundary (within 1 tile of room edge).
             # NOTE: This is only used by extended profile.
             is_at_boundary = False
@@ -2821,7 +2781,7 @@ class StateSpaceAStar:
                             local_c <= 1 or local_c >= ROOM_WIDTH - 2):
                             is_at_boundary = True
                         break
-            
+
             # Profile-specific teleport eligibility:
             # - strict_original: stair-only (NES-like shutter semantics)
             # - vglc_strict: explicit transition tiles only (stairs/doors)
@@ -2832,35 +2792,35 @@ class StateSpaceAStar:
                 can_teleport = is_stair or is_door or is_at_boundary
             if self.strict_original_mode:
                 can_teleport = is_stair
-            
+
             # Standard 4-directional movement (cost = 1.0)
             for dr, dc in cardinal_deltas:
                 new_r, new_c = curr_r + dr, curr_c + dc
-                
+
                 # Bounds check
                 if not (0 <= new_r < height and 0 <= new_c < width):
                     continue
-                
+
                 target_pos = (new_r, new_c)
                 target_tile = grid[new_r, new_c]
                 neighbors.append((target_pos, target_tile, CARDINAL_COST, False, None))
-            
+
             # PERFORMANCE: Diagonal movement only if enabled (disabled by default for 2x speedup)
             # Diagonal movement uses unit Chebyshev cost.
             # CRITICAL: Prevent corner-cutting through walls
             if self.allow_diagonals:
                 for dr, dc in diagonal_deltas:
                     new_r, new_c = curr_r + dr, curr_c + dc
-                    
+
                     # Bounds check
                     if not (0 <= new_r < height and 0 <= new_c < width):
                         continue
-                    
+
                     # Corner-cutting prevention: both adjacent tiles must be walkable
                     # Example: Moving UP-RIGHT requires UP and RIGHT tiles to be passable
                     adj_r_tile = grid[curr_r + dr, curr_c]  # Vertical adjacent
                     adj_c_tile = grid[curr_r, curr_c + dc]  # Horizontal adjacent
-                    
+
                     # If either adjacent tile is a hard wall or conditional door, block diagonal
                     if adj_r_tile in BLOCKING_IDS or adj_c_tile in BLOCKING_IDS:
                         continue  # Can't cut corners through walls
@@ -2874,11 +2834,11 @@ class StateSpaceAStar:
                         continue  # Can't cut corners through pushable blocks
                     if adj_r_tile in WATER_IDS or adj_c_tile in WATER_IDS:
                         continue  # Can't cut corners through water/lava
-                    
+
                     target_pos = (new_r, new_c)
                     target_tile = grid[new_r, new_c]
                     neighbors.append((target_pos, target_tile, DIAGONAL_COST, False, None))
-            
+
             # STAIR HANDLING: Add teleport destinations from graph
             # MUST be standing on STAIR tile to use stairs
             if curr_tile == SEMANTIC_PALETTE['STAIR']:
@@ -2887,7 +2847,7 @@ class StateSpaceAStar:
                     if 0 <= dest_pos[0] < height and 0 <= dest_pos[1] < width:
                         dest_tile = grid[dest_pos[0], dest_pos[1]]
                         neighbors.append((dest_pos, dest_tile, 1, True, "stair"))
-            
+
             # VIRTUAL NODE TRAVERSAL: CONTROLLED VERSION
             # The graph encodes hidden passages and bombable walls that aren't in tile data.
             # We allow traversal ONLY when player is at a transition point (room boundary, stair, or door).
@@ -2906,7 +2866,7 @@ class StateSpaceAStar:
                     if 0 <= dest_pos[0] < height and 0 <= dest_pos[1] < width:
                         dest_tile = grid[dest_pos[0], dest_pos[1]]
                         neighbors.append((dest_pos, dest_tile, cost, True, edge_type))
-            
+
             # GRAPH-BASED ROOM WARPING: Handle non-adjacent room connections
             # The graph encodes staircase/warp connections between rooms that aren't
             # physically adjacent. These represent stairs, hidden passages, or warps.
@@ -2919,32 +2879,32 @@ class StateSpaceAStar:
                     if 0 <= dest_pos[0] < height and 0 <= dest_pos[1] < width:
                         dest_tile = grid[dest_pos[0], dest_pos[1]]
                         neighbors.append((dest_pos, dest_tile, cost, True, edge_type))
-            
+
             # Process all neighbors
             for target_pos, target_tile, base_cost, is_teleport, graph_edge_type in neighbors:
-                
+
                 # CRITICAL: Validate adjacency for non-teleport moves
                 if not is_teleport:
                     dr = abs(target_pos[0] - curr_r)
                     dc = abs(target_pos[1] - curr_c)
                     if dr > 1 or dc > 1 or (dr == 0 and dc == 0):
                         continue  # Not adjacent, skip
-                
+
                 # Determine if move is possible and what state changes occur
                 transition_state = current_state
-                if is_teleport and graph_edge_type not in {None, "stair"}:
+                if is_teleport and graph_edge_type is not None and graph_edge_type != "stair":
                     can_transition, transition_state = self.apply_graph_edge_transition(
                         current_state,
                         current_state.position,
                         target_pos,
-                        str(graph_edge_type),
+                        graph_edge_type,
                     )
                     if not can_transition:
                         continue
                 can_move, new_state = self._try_move_pure(
                     transition_state, target_pos, target_tile
                 )
-                
+
                 if not can_move:
                     continue
 
@@ -2952,12 +2912,12 @@ class StateSpaceAStar:
                     target_pos,
                     default=current_state.current_floor,
                 )
-                
+
                 new_key = self._state_key(new_state)
-                
+
                 if new_key in closed_set:
                     continue
-                
+
                 # COMBAT-AWARE COST CALCULATION
                 # Use variable cost based on tile type and current_g from the heap.
                 current_depth = int(depths.get(current_key, 0))
@@ -2968,10 +2928,10 @@ class StateSpaceAStar:
                 else:
                     move_cost = self._get_movement_cost(target_tile, target_pos, current_state)
                     g_score = current_g + move_cost * base_cost
-                
+
                 if new_key in g_scores and g_score >= g_scores[new_key]:
                     continue
-                
+
                 g_scores[new_key] = g_score
                 h_score = self._heuristic(new_state)
                 # Compute f based on search mode
@@ -3002,13 +2962,23 @@ class StateSpaceAStar:
                     ),
                 )
                 counter += 1
-        
+
         # PERFORMANCE LOGGING: Report pruning statistics
         if dominated_states_pruned > 0:
-            logger.debug('Solver: %d states explored, %d dominated states pruned (%.1f%% reduction)', 
-                        states_explored, dominated_states_pruned, 
+            logger.debug('Solver: %d states explored, %d dominated states pruned (%.1f%% reduction)',
+                        states_explored, dominated_states_pruned,
                         100.0 * dominated_states_pruned / (states_explored + dominated_states_pruned))
-        
+
+        live_frontier = bool(
+            states_explored >= self.timeout
+            and self._has_live_open_entry(open_set, closed_set, g_scores)
+        )
+        self.last_termination_status = "budget_exhausted" if live_frontier else "exhausted"
+        self.last_failure_reason = (
+            f"State budget reached with a live frontier after {states_explored:,} expansions"
+            if live_frontier
+            else "Complete frontier exhaustion: no reachable goal state exists"
+        )
         return False, [], states_explored
 
     @staticmethod
@@ -3073,7 +3043,7 @@ class StateSpaceAStar:
                 current_row, current_col = current_pos
                 delta_row = abs(row - current_row)
                 delta_col = abs(col - current_col)
-                transition_specs: list[Tuple[Optional[str], float]] = []
+                transition_specs: list[Tuple[Optional[GraphTransitionSpec], float]] = []
 
                 if delta_row + delta_col == 1:
                     transition_specs.append((None, float(CARDINAL_COST)))
@@ -3135,19 +3105,19 @@ class StateSpaceAStar:
                         + self._get_graph_warp_destinations(current_pos, state)
                     )
                     transition_specs.extend(
-                        (str(edge_type), float(cost))
+                        (edge_type, float(cost))
                         for destination, cost, edge_type in graph_destinations
                         if tuple(destination) == target_pos
                     )
 
                 for edge_type, base_cost in dict.fromkeys(transition_specs):
                     transition_state = state
-                    if edge_type not in {None, "stair"}:
+                    if edge_type is not None and edge_type != "stair":
                         allowed, transition_state = self.apply_graph_edge_transition(
                             state,
                             current_pos,
                             target_pos,
-                            str(edge_type),
+                            edge_type,
                         )
                         if not allowed:
                             continue
@@ -3213,9 +3183,9 @@ class StateSpaceAStar:
         """
         import time
         start_time = time.perf_counter()
-        
+
         self.env.reset()
-        
+
         # Early exit conditions
         if self.env.goal_pos is None:
             return False, [], SolverDiagnostics(
@@ -3223,22 +3193,22 @@ class StateSpaceAStar:
                 failure_reason="No goal (TRIFORCE) found in map",
                 termination_status="invalid",
             )
-        
+
         if self.env.start_pos is None:
             return False, [], SolverDiagnostics(
                 success=False, states_explored=0,
                 failure_reason="No start position found in map",
                 termination_status="invalid",
             )
-        
+
         # Use read-only grid reference
         grid = self.env.original_grid
         height, width = grid.shape
-        
+
         # Tracking for diagnostics
         self._best_at_pos = {}
         self._best_g_at_pos = {}
-        
+
         # Priority queue
         start_state = self.env.state.copy()
         start_key = self._state_key(start_state)
@@ -3265,28 +3235,28 @@ class StateSpaceAStar:
             )
         ]
         heapq.heapify(open_set)
-        
+
         closed_set = set()
         g_scores = {start_key: 0.0}
         parents: Dict[Any, Optional[Any]] = {start_key: None}
         positions: Dict[Any, Tuple[int, int]] = {start_key: start_state.position}
         depths: Dict[Any, int] = {start_key: 0}
-        
+
         states_explored = 0
         counter = 1
         dominated_states_pruned = 0
         max_queue_size = 1
         final_state = None
-        
+
         # Movement deltas
         cardinal_deltas = [(-1, 0), (1, 0), (0, -1), (0, 1)]
         diagonal_deltas = [(-1, -1), (-1, 1), (1, -1), (1, 1)]
-        
+
         while open_set and states_explored < self.timeout:
             max_queue_size = max(max_queue_size, len(open_set))
-            
+
             entry: Any = heapq.heappop(open_set)
-            
+
             # Parse entry format
             if len(entry) == 6:
                 _, _, _hash_hint, current_g, current_state, path_key = entry
@@ -3297,11 +3267,11 @@ class StateSpaceAStar:
                 current_g = g_scores.get(self._state_key(current_state), 0.0)
             else:
                 continue
-            
+
             current_key = self._state_key(current_state)
             if current_key in closed_set:
                 continue
-            
+
             state_bucket = (current_state.position, dynamic_geometry_key(current_state))
             frontier = self._best_at_pos.get(state_bucket, [])
             if self._pareto_frontier_dominates(frontier, current_state, float(current_g)):
@@ -3313,11 +3283,11 @@ class StateSpaceAStar:
                 float(current_g),
             )
             self._best_g_at_pos[state_bucket] = min(cost for _state, cost in self._best_at_pos[state_bucket])
-            
+
             closed_set.add(current_key)
             states_explored += 1
             final_state = current_state
-            
+
             # Check win condition
             if current_state.position == self.env.goal_pos:
                 elapsed_ms = (time.perf_counter() - start_time) * 1000
@@ -3344,11 +3314,11 @@ class StateSpaceAStar:
                     },
                     termination_status="solved",
                 )
-            
+
             # Explore neighbors (same logic as solve())
             curr_r, curr_c = current_state.position
             neighbors = []
-            
+
             # Determine teleportation eligibility (same as solve())
             curr_tile = grid[curr_r, curr_c]
             is_stair = (curr_tile == SEMANTIC_PALETTE['STAIR'])
@@ -3377,12 +3347,12 @@ class StateSpaceAStar:
                 can_teleport = is_stair or is_door or is_at_boundary
             if self.strict_original_mode:
                 can_teleport = is_stair
-            
+
             for dr, dc in cardinal_deltas:
                 new_r, new_c = curr_r + dr, curr_c + dc
                 if 0 <= new_r < height and 0 <= new_c < width:
                     neighbors.append(((new_r, new_c), grid[new_r, new_c], CARDINAL_COST, None))
-            
+
             if self.allow_diagonals:
                 for dr, dc in diagonal_deltas:
                     new_r, new_c = curr_r + dr, curr_c + dc
@@ -3400,13 +3370,13 @@ class StateSpaceAStar:
                     if adj_r_tile in WATER_IDS or adj_c_tile in WATER_IDS:
                         continue
                     neighbors.append(((new_r, new_c), grid[new_r, new_c], DIAGONAL_COST, None))
-            
+
             # Stair handling
             if grid[curr_r, curr_c] == SEMANTIC_PALETTE['STAIR']:
                 for dest_pos in self._get_stair_destinations(current_state.position):
                     if 0 <= dest_pos[0] < height and 0 <= dest_pos[1] < width:
                         neighbors.append((dest_pos, grid[dest_pos[0], dest_pos[1]], 1, "stair"))
-            
+
             # VIRTUAL NODE TRAVERSAL: CONTROLLED VERSION (same as solve())
             if can_teleport and not self.strict_original_mode:
                 virtual_destinations = self._get_controlled_virtual_destinations(
@@ -3416,7 +3386,7 @@ class StateSpaceAStar:
                     if 0 <= dest_pos[0] < height and 0 <= dest_pos[1] < width:
                         dest_tile = grid[dest_pos[0], dest_pos[1]]
                         neighbors.append((dest_pos, dest_tile, cost, edge_type))
-            
+
             # GRAPH-BASED ROOM WARPING (same as solve())
             if can_teleport and not self.strict_original_mode:
                 warp_destinations = self._get_graph_warp_destinations(
@@ -3426,15 +3396,15 @@ class StateSpaceAStar:
                     if 0 <= dest_pos[0] < height and 0 <= dest_pos[1] < width:
                         dest_tile = grid[dest_pos[0], dest_pos[1]]
                         neighbors.append((dest_pos, dest_tile, cost, edge_type))
-            
+
             for target_pos, target_tile, base_cost, graph_edge_type in neighbors:
                 transition_state = current_state
-                if graph_edge_type not in {None, "stair"}:
+                if graph_edge_type is not None and graph_edge_type != "stair":
                     can_transition, transition_state = self.apply_graph_edge_transition(
                         current_state,
                         current_state.position,
                         target_pos,
-                        str(graph_edge_type),
+                        graph_edge_type,
                     )
                     if not can_transition:
                         continue
@@ -3446,11 +3416,11 @@ class StateSpaceAStar:
                     target_pos,
                     default=current_state.current_floor,
                 )
-                
+
                 new_key = self._state_key(new_state)
                 if new_key in closed_set:
                     continue
-                
+
                 if self.search_mode == 'bfs':
                     current_depth = int(depths.get(current_key, 0))
                     g_score = float(current_depth + 1)
@@ -3458,10 +3428,10 @@ class StateSpaceAStar:
                     current_depth = int(depths.get(current_key, 0))
                     move_cost = self._get_movement_cost(target_tile, target_pos, current_state)
                     g_score = current_g + move_cost * base_cost
-                
+
                 if new_key in g_scores and g_score >= g_scores[new_key]:
                     continue
-                
+
                 g_scores[new_key] = g_score
                 h_score = self._heuristic(new_state)
                 if self.search_mode == 'bfs':
@@ -3477,7 +3447,7 @@ class StateSpaceAStar:
                 parents[new_key] = current_key
                 positions[new_key] = new_state.position
                 depths[new_key] = current_depth + 1
-                
+
                 heapq.heappush(
                     open_set,
                     self._make_open_entry(
@@ -3490,10 +3460,10 @@ class StateSpaceAStar:
                     ),
                 )
                 counter += 1
-        
+
         # Search failed - determine reason
         elapsed_ms = (time.perf_counter() - start_time) * 1000
-        
+
         live_frontier = (
             states_explored >= self.timeout
             and self._has_live_open_entry(open_set, closed_set, g_scores)
@@ -3504,7 +3474,7 @@ class StateSpaceAStar:
             failure_reason = "No path: all reachable states explored without finding goal"
         else:
             failure_reason = "Unknown failure"
-        
+
         return False, [], SolverDiagnostics(
             success=False,
             states_explored=states_explored,
@@ -3531,6 +3501,68 @@ class StateSpaceAStar:
             termination_status="budget_exhausted" if live_frontier else "exhausted",
         )
 
+    def solve_with_verified_diagnostics(
+        self,
+    ) -> Tuple[bool, List[Tuple[int, int]], SolverDiagnostics]:
+        """Solve and require a replayable route certificate on success."""
+        success, path, diagnostics = self.solve_with_diagnostics()
+        if not success:
+            return False, [], diagnostics
+        if str(diagnostics.termination_status) != "solved":
+            diagnostics.success = False
+            diagnostics.failure_reason = (
+                "Solver reported a route with contradictory termination status "
+                f"{diagnostics.termination_status!r}."
+            )
+            diagnostics.termination_status = "validator_error"
+            return False, [], diagnostics
+
+        replay_ok, replay_error, replay_state, replay_cost = self.verify_position_path(path)
+        reported_cost = diagnostics.path_cost
+        if (
+            replay_ok
+            and replay_cost is not None
+            and reported_cost is not None
+            and not math.isclose(
+                float(replay_cost),
+                float(reported_cost),
+                rel_tol=1e-9,
+                abs_tol=1e-9,
+            )
+        ):
+            replay_ok = False
+            replay_error = (
+                "replayed route cost does not match the solver cost: "
+                f"replay={float(replay_cost):.12g}, "
+                f"solver={float(reported_cost):.12g}"
+            )
+
+        diagnostics.route_replay_status = "verified" if replay_ok else "failed"
+        diagnostics.route_replay_error = str(replay_error or "")
+        diagnostics.route_replay_path_cost = replay_cost
+        if not replay_ok:
+            diagnostics.success = False
+            diagnostics.failure_reason = (
+                "Post-route replay rejected the reconstructed solution: "
+                f"{diagnostics.route_replay_error}"
+            )
+            diagnostics.termination_status = "route_replay_failed"
+            return False, [], diagnostics
+
+        if replay_state is not None:
+            diagnostics.final_inventory = {
+                'keys': replay_state.keys,
+                'bomb_count': replay_state.bomb_count,
+                'has_bomb': replay_state.has_bomb,
+                'has_boss_key': replay_state.has_boss_key,
+                'has_item': replay_state.has_item,
+                'item_names': sorted(str(name) for name in replay_state.item_names),
+                'current_floor': replay_state.current_floor,
+                'doors_opened': len(replay_state.opened_doors),
+                'items_collected': len(replay_state.collected_items),
+            }
+        return True, list(path), diagnostics
+
     def _cache_pickups(self) -> List[Tuple[int, int]]:
         """Pre-compute pickup locations to support persona heuristics."""
         pickups: List[Tuple[int, int]] = []
@@ -3547,7 +3579,7 @@ class StateSpaceAStar:
         self,
         current_pos: Tuple[int, int],
         state: GameState,
-    ) -> List[Tuple[Tuple[int, int], int, str]]:
+    ) -> List[Tuple[Tuple[int, int], int, GraphTransitionSpec]]:
         """Public wrapper for controlled virtual-node transitions."""
         return self._get_controlled_virtual_destinations(current_pos, state)
 
@@ -3555,7 +3587,7 @@ class StateSpaceAStar:
         self,
         current_pos: Tuple[int, int],
         state: GameState,
-    ) -> List[Tuple[Tuple[int, int], int, str]]:
+    ) -> List[Tuple[Tuple[int, int], int, GraphTransitionSpec]]:
         """Public wrapper for non-adjacent graph warp transitions."""
         return self._get_graph_warp_destinations(current_pos, state)
 
@@ -3564,9 +3596,22 @@ class StateSpaceAStar:
         state: GameState,
         current_pos: Tuple[int, int],
         target_pos: Tuple[int, int],
-        edge_type: str,
+        edge_type: GraphTransitionSpec,
     ) -> Tuple[bool, GameState]:
         """Apply inventory/open-state effects for a graph teleport edge."""
+        if not isinstance(edge_type, str):
+            transition_state = state
+            for source_node, target_node, step_type in edge_type:
+                allowed, transition_state = self._apply_graph_edge_transition_nodes(
+                    transition_state,
+                    source_node,
+                    target_node,
+                    step_type,
+                )
+                if not allowed:
+                    return False, state
+            return True, transition_state
+
         current_room = self.env.get_room_for_position(current_pos)
         target_room = self.env.get_room_for_position(target_pos)
         current_node = (
@@ -3596,12 +3641,7 @@ class StateSpaceAStar:
         edge_type: str,
     ) -> Tuple[bool, GameState]:
         """Authoritative graph-edge gate transition using graph node IDs."""
-        edge_key = tuple(
-            sorted(
-                (current_node, target_node),
-                key=lambda value: (type(value).__name__, str(value)),
-            )
-        )
+        edge_key = graph_edge_state_key(self.env.graph, current_node, target_node)
         normalized = str(edge_type or "open").strip().lower()
         raw_edge_data = self.env.graph.get_edge_data(current_node, target_node, {}) or {}
         edge_data: Dict[str, Any]
@@ -3646,8 +3686,19 @@ class StateSpaceAStar:
             inventory = {str(name).upper() for name in state.item_names}
             return bool(state.has_item and ("*" in inventory or required in inventory))
 
-        if normalized in {"open", "path", "stair", "soft_locked", "one_way", "switch", "puzzle"}:
+        if normalized in {"open", "path", "stair", "soft_locked", "one_way"}:
             return True, state.copy()
+
+        if normalized in {"switch", "puzzle"}:
+            if edge_key in state.opened_graph_edges:
+                return True, state.copy()
+            # Tile-level puzzle completion and mission-graph switch activation
+            # are different state spaces. A room ID is not a puzzle-door tile,
+            # so treating node_to_room[target] as a tile position is unsound.
+            # Without an explicit bridge between those states, fail closed and
+            # let ordinary tile movement or the mission progression oracle
+            # establish reachability.
+            return False, state
         if normalized in {"hazard", "hazard_protected"}:
             if not _has_required_item(edge_data.get("protection_item_id")):
                 return False, state
@@ -3690,7 +3741,7 @@ class StateSpaceAStar:
             edge_type,
         )
         return bool(allowed)
-    
+
     def _get_stair_destinations(self, current_pos: Tuple[int, int]) -> List[Tuple[int, int]]:
         """
         Find stair destinations using graph connectivity (CACHED).
@@ -3705,11 +3756,11 @@ class StateSpaceAStar:
         # PERFORMANCE: Check cache first
         if current_pos in self._stair_dest_cache:
             return self._stair_dest_cache[current_pos]
-        
+
         if not self.env.graph or not self.env.room_to_node or not self.env.room_positions:
             self._stair_dest_cache[current_pos] = []
             return []
-        
+
         # Find which room contains current position
         current_room = None
         for room_pos, (r_off, c_off) in self.env.room_positions.items():
@@ -3718,46 +3769,46 @@ class StateSpaceAStar:
             if r_off <= current_pos[0] < r_end and c_off <= current_pos[1] < c_end:
                 current_room = room_pos
                 break
-        
+
         if current_room is None:
             self._stair_dest_cache[current_pos] = []
             return []
-        
+
         current_node = self.env.room_to_node.get(current_room)
         if current_node is None:
             self._stair_dest_cache[current_pos] = []
             return []
-        
+
         # Build reverse mapping: node -> room
         node_to_room = {v: k for k, v in self.env.room_to_node.items()}
-        
+
         # FIXED: Only look at DIRECT neighbors connected by stair edges
         # A stair connects to ONE specific room, not all rooms in the dungeon
         destinations = []
-        
+
         # Check successors for stair edges
-        for neighbor_node in self.env.graph.successors(current_node):
+        for neighbor_node in (self.env.graph.successors(current_node) if self.env.graph.has_node(current_node) else []):
             edge_data = self.env.graph.get_edge_data(current_node, neighbor_node, {}) or {}
             edge_label = edge_data.get('label', '')
             edge_type = edge_data.get('edge_type', '')
-            
+
             # Only follow stair edges based on canonical constraints.
             constraints = parse_edge_type_tokens(label=edge_label, edge_type=edge_type)
             is_stair_edge = 'stair' in constraints
-            
+
             if not is_stair_edge:
                 continue
-            
+
             # Check if neighbor has a physical room
             neighbor_room = node_to_room.get(neighbor_node)
             if neighbor_room is None or neighbor_room not in self.env.room_positions:
                 continue
-            
+
             # Find stair tile in neighbor room
             r_off, c_off = self.env.room_positions[neighbor_room]
             r_end = min(r_off + ROOM_HEIGHT, self.env.height)
             c_end = min(c_off + ROOM_WIDTH, self.env.width)
-            
+
             found_dest = False
             for r in range(r_off, r_end):
                 for c in range(c_off, c_end):
@@ -3767,7 +3818,7 @@ class StateSpaceAStar:
                         break
                 if found_dest:
                     break
-            
+
             # Fallback: any walkable tile if no stair found
             if not found_dest:
                 for r in range(r_off, r_end):
@@ -3778,13 +3829,13 @@ class StateSpaceAStar:
                             break
                     if found_dest:
                         break
-        
+
         # PERFORMANCE: Cache result for future lookups
         self._stair_dest_cache[current_pos] = destinations
         return destinations
-    
-    def _get_controlled_virtual_destinations(self, current_pos: Tuple[int, int], 
-                                              state: GameState) -> List[Tuple[Tuple[int, int], int, str]]:
+
+    def _get_controlled_virtual_destinations(self, current_pos: Tuple[int, int],
+                                              state: GameState) -> List[Tuple[Tuple[int, int], int, GraphTransitionSpec]]:
         """
         Find CONTROLLED virtual node destinations from current position.
         
@@ -3812,7 +3863,7 @@ class StateSpaceAStar:
         # Quick check: do we have graph connectivityx
         if not self.env.graph or not self.env.room_to_node or not self.env.room_positions:
             return []
-        
+
         # Find which room contains current position
         current_room = None
         for room_pos, (r_off, c_off) in self.env.room_positions.items():
@@ -3821,93 +3872,104 @@ class StateSpaceAStar:
             if r_off <= current_pos[0] < r_end and c_off <= current_pos[1] < c_end:
                 current_room = room_pos
                 break
-        
+
         if current_room is None:
             return []
-        
+
         current_node = self.env.room_to_node.get(current_room)
         if current_node is None:
             return []
-        
+
         # Get node_to_room mapping
         if self._node_to_room is None:
             if hasattr(self.env, 'node_to_room') and self.env.node_to_room:
                 self._node_to_room = self.env.node_to_room
             else:
                 self._node_to_room = {v: k for k, v in self.env.room_to_node.items()}
-        
+
         destinations = []
-        
+
         # Check all direct neighbors of current node
-        for neighbor in self.env.graph.successors(current_node):
+        for neighbor in (self.env.graph.successors(current_node) if self.env.graph.has_node(current_node) else []):
             neighbor_data = self.env.graph.nodes.get(neighbor, {})
-            
+
             # ONLY process if this is a virtual node (hidden passage / hub)
             if not neighbor_data.get('is_virtual', False):
                 continue
-            
+
             # FIXED: Allow entry from ANY physical node with a direct edge to the
             # virtual node, not just the virtual_parent. The graph explicitly
             # encodes which rooms can access each virtual node via edges.
             # The edge type check below provides the necessary access control.
-            
+
             # Get edge requirements to access the virtual node
             edge_data = self.env.graph.get_edge_data(current_node, neighbor, {}) or {}
             edge_type = self._edge_type_from_data(edge_data)
-            
-            # Check if we can traverse this edge based on game state
-            can_traverse = self._can_traverse_graph_edge(
+
+            can_traverse, entry_state = self._apply_graph_edge_transition_nodes(
+                state,
                 current_node,
                 neighbor,
                 edge_type,
-                state,
             )
             if not can_traverse:
                 continue
-            
+
             # BFS through virtual nodes to find all reachable physical rooms
             # Exclude the current node to avoid trivial loops back to self
-            virtual_visited = {neighbor, current_node}
-            virtual_queue = deque([(neighbor, edge_type)])
-            
+            entry_path: GraphTransitionPath = ((current_node, neighbor, edge_type),)
+            virtual_queue = deque(
+                [(neighbor, entry_path, entry_state, frozenset({current_node, neighbor}))]
+            )
+            visited_states = {(neighbor, self._state_key(entry_state))}
+
             while virtual_queue:
-                v_node, accumulated_type = virtual_queue.popleft()
-                
-                for exit_node in self.env.graph.successors(v_node):
-                    if exit_node in virtual_visited:
+                v_node, transition_path, path_state, path_nodes = virtual_queue.popleft()
+
+                for exit_node in graph_successors(self.env.graph, v_node):
+                    if exit_node in path_nodes:
                         continue
-                    
+
                     exit_data = self.env.graph.nodes.get(exit_node, {})
                     exit_edge_data = self.env.graph.get_edge_data(v_node, exit_node, {}) or {}
                     exit_type = self._edge_type_from_data(exit_edge_data)
-                    
+                    can_exit, exit_state = self._apply_graph_edge_transition_nodes(
+                        path_state,
+                        v_node,
+                        exit_node,
+                        exit_type,
+                    )
+                    if not can_exit:
+                        continue
+                    exit_path = transition_path + ((v_node, exit_node, exit_type),)
+                    exit_path_nodes = path_nodes | {exit_node}
+
                     if exit_data.get('is_virtual', False):
-                        # Another virtual node - continue BFS if not visited
-                        # Check if we can traverse this virtual-to-virtual edge
-                        if self._can_traverse_graph_edge(v_node, exit_node, exit_type, state):
-                            virtual_visited.add(exit_node)
-                            combined_type = self._combine_edge_types(accumulated_type, exit_type)
-                            virtual_queue.append((exit_node, combined_type))
+                        visit_key = (exit_node, self._state_key(exit_state))
+                        if visit_key not in visited_states:
+                            visited_states.add(visit_key)
+                            virtual_queue.append(
+                                (exit_node, exit_path, exit_state, exit_path_nodes)
+                            )
                     else:
-                        # Physical node - add as destination if we can traverse
                         exit_room = self._node_to_room.get(exit_node)
                         if exit_room is not None and exit_room in self.env.room_positions:
-                            # Check if we can traverse this exit edge
-                            if self._can_traverse_graph_edge(v_node, exit_node, exit_type, state):
-                                virtual_visited.add(exit_node)
-                                dest_pos = self._find_room_entry_point(exit_room)
-                                
-                                if dest_pos is None:
-                                    # TRANSITION ROOM: BFS to find next walkable room
-                                    dest_pos, traversal_cost = self._find_next_walkable_room_via_graph(
-                                        exit_node, visited=virtual_visited | {exit_node}, state=state
-                                    )
-                                    if dest_pos:
-                                        destinations.append((dest_pos, traversal_cost, accumulated_type))
-                                else:
-                                    # Normal room with walkable tiles
-                                    destinations.append((dest_pos, 10, accumulated_type))
-        
+                            dest_pos = self._find_room_entry_point(exit_room)
+
+                            if dest_pos is None:
+                                # TRANSITION ROOM: BFS to find next walkable room
+                                dest_pos, traversal_cost, full_path = self._find_next_walkable_room_via_graph(
+                                    exit_node,
+                                    visited=set(exit_path_nodes),
+                                    state=exit_state,
+                                    transition_path=exit_path,
+                                )
+                                if dest_pos:
+                                    destinations.append((dest_pos, traversal_cost, full_path))
+                            else:
+                                # Normal room with walkable tiles
+                                destinations.append((dest_pos, 10, exit_path))
+
         return destinations
 
     def _can_traverse_edge(self, edge_type: str, state: GameState) -> bool:
@@ -3919,9 +3981,9 @@ class StateSpaceAStar:
             get_room_for_position=self.env.get_room_for_position,
             is_room_cleared=self.env.is_room_cleared,
         )
-    
-    def _get_graph_warp_destinations(self, current_pos: Tuple[int, int], 
-                                      state: GameState) -> List[Tuple[Tuple[int, int], int, str]]:
+
+    def _get_graph_warp_destinations(self, current_pos: Tuple[int, int],
+                                      state: GameState) -> List[Tuple[Tuple[int, int], int, GraphTransitionSpec]]:
         """
         Find non-adjacent room destinations via graph edges (staircases/warps).
         
@@ -3944,7 +4006,7 @@ class StateSpaceAStar:
         """
         if not self.env.graph or not self.env.room_to_node or not self.env.room_positions:
             return []
-        
+
         # Find which room contains current position
         current_room = None
         for room_pos, (r_off, c_off) in self.env.room_positions.items():
@@ -3953,35 +4015,35 @@ class StateSpaceAStar:
             if r_off <= current_pos[0] < r_end and c_off <= current_pos[1] < c_end:
                 current_room = room_pos
                 break
-        
+
         if current_room is None:
             return []
-        
+
         current_node = self.env.room_to_node.get(current_room)
         if current_node is None:
             return []
-        
+
         # Get node_to_room mapping
         if self._node_to_room is None:
             if hasattr(self.env, 'node_to_room') and self.env.node_to_room:
                 self._node_to_room = self.env.node_to_room
             else:
                 self._node_to_room = {v: k for k, v in self.env.room_to_node.items()}
-        
+
         destinations = []
-        
+
         # Check all neighbors of current node
-        for neighbor in self.env.graph.successors(current_node):
+        for neighbor in (self.env.graph.successors(current_node) if self.env.graph.has_node(current_node) else []):
             neighbor_data = self.env.graph.nodes.get(neighbor, {})
-            
+
             # Skip virtual nodes - they're handled by _get_controlled_virtual_destinations
             if neighbor_data.get('is_virtual', False):
                 continue
-            
+
             neighbor_room = self._node_to_room.get(neighbor)
             if neighbor_room is None or neighbor_room not in self.env.room_positions:
                 continue
-            
+
             # Check if this is a non-adjacent room connection. Direct adjacent
             # open/path edges are handled by normal grid movement; direct
             # constrained edges still need this graph transition path because
@@ -4002,31 +4064,46 @@ class StateSpaceAStar:
             # still real gates and must be checked.
             if self.vglc_strict_mode and manhattan_dist > 1 and edge_type != 'stair':
                 continue
-            
+
             # Check if we can traverse this edge
             if not self._can_traverse_graph_edge(current_node, neighbor, edge_type, state):
                 continue
-            
+
             # Find entry point in destination room
             dest_pos = self._find_room_entry_point(neighbor_room)
-            
+
             if dest_pos is None:
                 # TRANSITION ROOM: This room has no walkable tiles (corridor/staircase placeholder)
                 # BFS through the graph to find the next reachable walkable room
-                dest_pos, traversal_cost = self._find_next_walkable_room_via_graph(
-                    neighbor, visited={current_node, neighbor}, state=state
+                allowed, transition_state = self._apply_graph_edge_transition_nodes(
+                    state,
+                    current_node,
+                    neighbor,
+                    edge_type,
+                )
+                if not allowed:
+                    continue
+                transition_path: GraphTransitionPath = (
+                    (current_node, neighbor, edge_type),
+                )
+                dest_pos, traversal_cost, full_path = self._find_next_walkable_room_via_graph(
+                    neighbor,
+                    visited={current_node, neighbor},
+                    state=transition_state,
+                    transition_path=transition_path,
                 )
                 if dest_pos:
-                    destinations.append((dest_pos, traversal_cost, edge_type))
+                    destinations.append((dest_pos, traversal_cost, full_path))
             else:
                 # Normal room with walkable tiles
                 destinations.append((dest_pos, 10, edge_type))
-        
+
         return destinations
-    
-    def _find_next_walkable_room_via_graph(self, start_node: int, visited: set, 
-                                            state: 'GameState', max_cost: int = 30
-                                            ) -> Tuple[Optional[Tuple[int, int]], int]:
+
+    def _find_next_walkable_room_via_graph(self, start_node: int, visited: set,
+                                            state: 'GameState', max_cost: int = 30,
+                                            transition_path: GraphTransitionPath = (),
+                                            ) -> Tuple[Optional[Tuple[int, int]], int, GraphTransitionPath]:
         """
         BFS through graph from a transition node to find the next walkable room.
         
@@ -4042,36 +4119,56 @@ class StateSpaceAStar:
             max_cost: Maximum accumulated cost before giving up
             
         Returns:
-            (dest_pos, cost) tuple, or (None, 0) if no walkable room found
+            (dest_pos, cost, transition_path), or ``(None, 0, ())``.
         """
-        queue = deque([(start_node, 10)])  # (node, accumulated_cost)
-        
+        queue = deque(
+            [(start_node, 10, state, transition_path, frozenset(visited))]
+        )
+        visited_states = {(start_node, self._state_key(state))}
+
         while queue:
-            node, cost = queue.popleft()
-            
-            for next_node in self.env.graph.successors(node):
-                if next_node in visited:
+            node, cost, path_state, path, path_nodes = queue.popleft()
+
+            for next_node in graph_successors(self.env.graph, node):
+                if next_node in path_nodes:
                     continue
-                
-                # Check edge traversability
+
                 edge_data = self.env.graph.get_edge_data(node, next_node, {}) or {}
                 edge_type = self._edge_type_from_data(edge_data)
-                if not self._can_traverse_graph_edge(node, next_node, edge_type, state):
+                allowed, next_state = self._apply_graph_edge_transition_nodes(
+                    path_state,
+                    node,
+                    next_node,
+                    edge_type,
+                )
+                if not allowed:
                     continue
-                
-                visited.add(next_node)
+
+                next_path = path + ((node, next_node, edge_type),)
+                next_path_nodes = path_nodes | {next_node}
                 next_room = self._node_to_room.get(next_node)
-                
+
                 if next_room is not None and next_room in self.env.room_positions:
                     dest_pos = self._find_room_entry_point(next_room)
                     if dest_pos:
-                        return dest_pos, cost + 5  # Found walkable room
-                
+                        return dest_pos, cost + 5, next_path
+
                 # Continue BFS if within cost limit
                 if cost + 5 < max_cost:
-                    queue.append((next_node, cost + 5))
-        
-        return None, 0
+                    visit_key = (next_node, self._state_key(next_state))
+                    if visit_key not in visited_states:
+                        visited_states.add(visit_key)
+                        queue.append(
+                            (
+                                next_node,
+                                cost + 5,
+                                next_state,
+                                next_path,
+                                next_path_nodes,
+                            )
+                        )
+
+        return None, 0, ()
 
     def _get_room_at_position(self, pos: Tuple[int, int]) -> Optional[Tuple[int, int]]:
         """
@@ -4085,15 +4182,15 @@ class StateSpaceAStar:
         """
         if not self.env.room_positions:
             return None
-            
+
         row, col = pos
         for room_pos, (r_off, c_off) in self.env.room_positions.items():
             r_end = min(r_off + ROOM_HEIGHT, self.env.height)
             c_end = min(c_off + ROOM_WIDTH, self.env.width)
-            
+
             if r_off <= row < r_end and c_off <= col < c_end:
                 return room_pos
-        
+
         return None
 
     def _is_at_room_boundary(self, pos: Tuple[int, int]) -> bool:
@@ -4111,23 +4208,23 @@ class StateSpaceAStar:
         """
         if not self.env.room_positions:
             return False
-            
+
         current_room = self._get_room_at_position(pos)
         if current_room is None or current_room not in self.env.room_positions:
             return False
-        
+
         r_off, c_off = self.env.room_positions[current_room]
         r_end = min(r_off + ROOM_HEIGHT, self.env.height)
         c_end = min(c_off + ROOM_WIDTH, self.env.width)
-        
+
         row, col = pos
-        
+
         # Check if within 1 tile of any room edge
         at_top = row <= r_off + 1
         at_bottom = row >= r_end - 2
         at_left = col <= c_off + 1
         at_right = col >= c_end - 2
-        
+
         return at_top or at_bottom or at_left or at_right
 
     def _find_room_entry_point(self, room_pos: Tuple[int, int]) -> Optional[Tuple[int, int]]:
@@ -4144,27 +4241,27 @@ class StateSpaceAStar:
         """
         if room_pos not in self.env.room_positions:
             return None
-        
+
         r_off, c_off = self.env.room_positions[room_pos]
         r_end = min(r_off + ROOM_HEIGHT, self.env.height)
         c_end = min(c_off + ROOM_WIDTH, self.env.width)
-        
+
         # Priority 1: Look for STAIR tiles
         for r in range(r_off, r_end):
             for c in range(c_off, c_end):
                 if self.env.grid[r, c] == SEMANTIC_PALETTE['STAIR']:
                     return (r, c)
-        
+
         # Priority 2: Look for open doors
         for r in range(r_off, r_end):
             for c in range(c_off, c_end):
                 if self.env.grid[r, c] == SEMANTIC_PALETTE['DOOR_OPEN']:
                     return (r, c)
-        
+
         # Priority 3: Find any walkable tile near room center
         center_r = r_off + ROOM_HEIGHT // 2
         center_c = c_off + ROOM_WIDTH // 2
-        
+
         for radius in range(max(ROOM_HEIGHT, ROOM_WIDTH)):
             for dr in range(-radius, radius + 1):
                 for dc in range(-radius, radius + 1):
@@ -4174,24 +4271,9 @@ class StateSpaceAStar:
                     if r_off <= r < r_end and c_off <= c < c_end:
                         if self.env.grid[r, c] in WALKABLE_IDS:
                             return (r, c)
-        
+
         return None
-    
-    def _combine_edge_types(self, type1: str, type2: str) -> str:
-        """
-        Combine two edge types, returning the most restrictive one.
-        
-        Restriction order (most to least): boss > bomb > locked > puzzle > open
-        
-        Args:
-            type1: First edge type
-            type2: Second edge type
-            
-        Returns:
-            The more restrictive edge type
-        """
-        return combine_edge_types(type1, type2)
-    
+
     def _can_traverse_edge_type(self, edge_type: str, state: GameState) -> bool:
         """
         Check if the current state allows traversing an edge of the given type.
@@ -4236,46 +4318,46 @@ class StateSpaceAStar:
         # If position already visited, treat as floor (no repeat cost)
         if target_pos in state.collected_items or target_pos in state.opened_doors:
             return 1.0
-        
+
         # ENEMY: High traversal cost (simulates health/time loss from combat)
         if target_tile == SEMANTIC_PALETTE['ENEMY']:
             return 10.0
-        
+
         # PICKUP items: Slight delay for collection
         if target_tile in PICKUP_IDS:
             return 1.5
-        
+
         # DOORS (locked): Cost depends on whether we have keys
         if target_tile == SEMANTIC_PALETTE['DOOR_LOCKED']:
             if state.keys > 0:
                 return 2.0  # Can open, but takes time
             return float('inf')  # Cannot pass
-        
+
         if target_tile == SEMANTIC_PALETTE['DOOR_BOMB']:
             if state.bomb_count > 0:
                 return 3.0  # Bombing takes time
             return float('inf')
-        
+
         if target_tile == SEMANTIC_PALETTE['DOOR_BOSS']:
             if state.has_boss_key:
                 return 2.0
             return float('inf')
-        
+
         if target_tile == SEMANTIC_PALETTE['DOOR_PUZZLE']:
             return 2.5  # Puzzle solving takes time
-        
+
         # Standard walkable tiles
         if target_tile in WALKABLE_IDS:
             return 1.0
-        
+
         # Blocking tiles
         if target_tile in BLOCKING_IDS:
             return float('inf')
-        
+
         # Default: standard cost
         return 1.0
-    
-    def _try_move_pure(self, state: GameState, target_pos: Tuple[int, int], 
+
+    def _try_move_pure(self, state: GameState, target_pos: Tuple[int, int],
                        target_tile: int) -> Tuple[bool, GameState]:
         """
         Pure state-based move attempt (no grid modifications).
@@ -4284,7 +4366,7 @@ class StateSpaceAStar:
         one canonical transition function.
         """
         return self.env.try_move_pure(state, target_pos, target_tile)
-    
+
     def _heuristic(self, state: GameState) -> float:
         """
         Heuristic function for A*.
@@ -4301,7 +4383,7 @@ class StateSpaceAStar:
         """
         if self.env.goal_pos is None:
             return float('inf')
-        
+
         pos = state.position
         goal = self.env.goal_pos
         if self.allow_diagonals:
@@ -4372,7 +4454,7 @@ class ZeldaValidator:
     
     Coordinates sanity checking, solving, and metrics calculation.
     """
-    
+
     def __init__(self, calibration_map: np.ndarray = None):
         """
         Initialize validator.
@@ -4382,10 +4464,10 @@ class ZeldaValidator:
         """
         self.calibration_map = calibration_map
         self.is_calibrated = False
-        
+
         if calibration_map is not None:
             self._run_calibration()
-    
+
     def _run_calibration(self) -> bool:
         """
         Run calibration test on known-solvable map.
@@ -4394,21 +4476,21 @@ class ZeldaValidator:
         """
         if self.calibration_map is None:
             return True
-        
+
         print("Running calibration test...")
         calib_result = self.validate_single(self.calibration_map)
-        
+
         if not calib_result.is_solvable:
             raise RuntimeError(
                 f"CALIBRATION FAILED: Known-solvable map was not solved! "
                 f"Error: {calib_result.error_message}"
             )
-        
+
         print(f"Calibration passed. Path length: {calib_result.path_length}")
         self.is_calibrated = True
         return True
-    
-    def validate_single(self, semantic_grid: np.ndarray, 
+
+    def validate_single(self, semantic_grid: np.ndarray,
                        render: bool = False,
                        persona_mode: str = "balanced",
                        graph=None,
@@ -4433,7 +4515,7 @@ class ZeldaValidator:
         # Step 1: Sanity Check
         checker = SanityChecker(semantic_grid)
         is_valid, errors = checker.check_all()
-        
+
         if not is_valid:
             return ValidationResult(
                 is_solvable=False,
@@ -4445,7 +4527,7 @@ class ZeldaValidator:
                 error_message="; ".join(errors),
                 termination_status="invalid",
             )
-        
+
         env_kwargs = {
             "render_mode": render,
             "graph": graph,
@@ -4494,18 +4576,14 @@ class ZeldaValidator:
                 )
                 if use_hybrid_frontend:
                     success_i, path_i, states_i = solver.solve()
+                    solver_termination = str(
+                        getattr(solver, "last_termination_status", "incomplete")
+                    )
+                    solver_failure = str(getattr(solver, "last_failure_reason", "") or "")
                     diagnostics_i = SolverDiagnostics(
                         success=bool(success_i),
                         states_explored=int(states_i or 0),
-                        failure_reason=(
-                            ""
-                            if bool(success_i)
-                            else (
-                                f"Timeout: explored {int(states_i or 0):,} states (limit: {int(max(1, solver_timeout)):,})"
-                                if int(states_i or 0) >= int(max(1, solver_timeout))
-                                else "No path: graph-guided A* did not reach goal"
-                            )
-                        ),
+                        failure_reason=solver_failure,
                         path_length=max(0, len(path_i or []) - 1),
                         path_cost=(
                             float(solver.last_solution_cost)
@@ -4515,19 +4593,11 @@ class ZeldaValidator:
                         final_inventory=dict(
                             getattr(solver, "last_solution_inventory", None) or {}
                         ),
-                        termination_status=(
-                            "solved"
-                            if bool(success_i)
-                            else (
-                                "budget_exhausted"
-                                if int(states_i or 0) >= int(max(1, solver_timeout))
-                                else "exhausted"
-                            )
-                        ),
+                        termination_status=solver_termination,
                     )
                 else:
-                    success_i, path_i, diagnostics_i = solver.solve_with_diagnostics()
-                if success_i:
+                    success_i, path_i, diagnostics_i = solver.solve_with_verified_diagnostics()
+                if success_i and diagnostics_i.route_replay_status != "verified":
                     replay_ok, replay_error, replay_final_state, replay_path_cost = (
                         solver.verify_position_path(path_i)
                     )
@@ -4592,7 +4662,9 @@ class ZeldaValidator:
         # Step 3: Exact fallback. Stateful puzzle mechanics increased
         # path-dependence, so use uniform-cost search as the completeness
         # preserving fallback when heuristic A* underperforms.
-        if not success and bool(run_dijkstra_fallback):
+        primary_status = str(getattr(diagnostics, "termination_status", "unknown"))
+        fallback_eligible = primary_status == "route_replay_failed"
+        if not success and bool(run_dijkstra_fallback) and fallback_eligible:
             primary_states = int(getattr(diagnostics, "states_explored", 0) or 0)
             remaining_budget = max(0, int(max(1, solver_timeout)) - primary_states)
             if remaining_budget <= 0:
@@ -4631,8 +4703,11 @@ class ZeldaValidator:
             final_status = str(
                 getattr(fallback_diagnostics, "termination_status", "unknown")
             )
-            budget_exhausted = final_status == "budget_exhausted"
-            replay_failed = final_status == "route_replay_failed"
+            from src.simulation.search_status import (
+                proven_unsolvable_from_outcome,
+            )
+
+            proven_unsolvable = proven_unsolvable_from_outcome(False, final_status)
             return ValidationResult(
                 is_solvable=False,
                 is_valid_syntax=True,
@@ -4641,24 +4716,14 @@ class ZeldaValidator:
                 backtracking_score=0.0,
                 logical_errors=["Exact tile-state oracle failed to find path"],
                 error_message=(
-                    f"Search budget exhausted after exploring {exact_states} states"
-                    if budget_exhausted
-                    else (
-                        str(getattr(diagnostics, "failure_reason", "") or "route replay failed")
-                        if replay_failed
-                        else f"No solution found after exhausting {exact_states} states"
-                    )
+                    str(getattr(diagnostics, "failure_reason", "") or final_status)
                 ),
                 solver_used=solver_used,
                 primary_solver_solved=False,
                 primary_solver_error=primary_failure,
                 states_explored=exact_states,
-                termination_status=(
-                    "budget_exhausted"
-                    if budget_exhausted
-                    else "route_replay_failed" if replay_failed else "exhausted"
-                ),
-                proven_unsolvable=not budget_exhausted and not replay_failed,
+                termination_status=final_status,
+                proven_unsolvable=proven_unsolvable,
                 final_inventory=dict(getattr(diagnostics, "final_inventory", {}) or {}),
                 route_replay_status=str(
                     getattr(diagnostics, "route_replay_status", "not_run")
@@ -4802,7 +4867,7 @@ class ZeldaValidator:
             solver_consistency_path_cost=consistency_path_cost,
             solver_consistency_states_explored=consistency_states_explored,
         )
-    
+
     def check_soft_locks(
         self,
         semantic_grid: np.ndarray,
@@ -4844,21 +4909,21 @@ class ZeldaValidator:
             )
 
         import random
-        
+
         # Create environment
         env = ZeldaLogicEnv(semantic_grid, render_mode=False)
-        
+
         if env.goal_pos is None or env.start_pos is None:
             return False, ["No start or goal position defined"]
-        
+
         # Step 1: Get all reachable walkable tiles from START
         solver = StateSpaceAStar(env, timeout=50000)
         success, winning_path, _ = solver.solve()
-        
+
         if not success:
             # If START->GOAL already fails, map is unsolvable (not a soft-lock issue)
             return True, []  # We don't count this as a soft-lock (it's a regular failure)
-        
+
         # Get all walkable positions
         reachable_spots = []
         h, w = semantic_grid.shape
@@ -4867,52 +4932,52 @@ class ZeldaValidator:
                 tile = semantic_grid[r, c]
                 if tile in WALKABLE_IDS or tile in CONDITIONAL_IDS:
                     reachable_spots.append((r, c))
-        
+
         # Sample random positions to test (limit to reasonable count)
         if len(reachable_spots) > sample_count:
             test_positions = random.sample(reachable_spots, sample_count)
         else:
             test_positions = reachable_spots[:sample_count]
-        
+
         # Add positions from the winning path (these MUST be safe)
         test_positions.extend(winning_path[::len(winning_path)//3] if len(winning_path) > 3 else winning_path)
-        
+
         # Step 2: For each test position, check if we can still reach GOAL
         trap_positions = []
-        
+
         for test_pos in test_positions:
             # Create a modified environment starting from test_pos
             # We need to simulate "player teleported here, can they escapex"
-            
+
             # Simple heuristic: Check if test_pos is on the winning path
             # If not on winning path and isolated, it might be a trap
-            
+
             # Create new env with modified start
             test_env = ZeldaLogicEnv(semantic_grid, render_mode=False)
             test_env.start_pos = test_pos
             test_env.reset()
-            
+
             test_solver = StateSpaceAStar(test_env, timeout=10000)
             can_escape, _, _ = test_solver.solve()
-            
+
             if not can_escape:
                 # This position cannot reach the goal - potential soft-lock!
                 trap_positions.append(test_pos)
-            
+
             test_env.close()
-        
+
         env.close()
-        
+
         # Step 3: Report results
         if trap_positions:
             trap_descriptions = [
-                f"Soft-lock trap at position {pos}: player cannot reach goal from here" 
+                f"Soft-lock trap at position {pos}: player cannot reach goal from here"
                 for pos in trap_positions[:5]  # Limit output
             ]
             return False, trap_descriptions
-        
+
         return True, []
-    
+
     def check_soft_locks_deterministic(self, semantic_grid: np.ndarray,
                                         graph=None, room_to_node=None,
                                         room_positions=None,
@@ -4975,7 +5040,7 @@ class ZeldaValidator:
         is_safe = len(graph_traps) == 0 and len(grid_traps) == 0
         return is_safe, descriptions
 
-    def validate_batch(self, grids: List[np.ndarray], 
+    def validate_batch(self, grids: List[np.ndarray],
                       verbose: bool = True,
                       persona_mode: str = "balanced") -> BatchValidationResult:
         """
@@ -4991,37 +5056,37 @@ class ZeldaValidator:
         results = []
         solvable_count = 0
         valid_count = 0
-        
+
         total_reachability = 0.0
         total_path_length = 0
         total_backtracking = 0.0
-        
+
         paths = []
-        
+
         for i, grid in enumerate(grids):
             if verbose and (i + 1) % 10 == 0:
                 print(f"Validating {i + 1}/{len(grids)}...")
-            
+
             single_result = self.validate_single(grid, render=False, persona_mode=persona_mode)
             results.append(single_result)
-            
+
             if single_result.is_valid_syntax:
                 valid_count += 1
-            
+
             if single_result.is_solvable:
                 solvable_count += 1
                 total_reachability += single_result.reachability
                 total_path_length += single_result.path_length
                 total_backtracking += single_result.backtracking_score
                 paths.append(single_result.path)
-        
+
         # Calculate averages
         n = len(grids)
         n_solvable = max(1, solvable_count)
-        
+
         # Calculate diversity
         diversity = DiversityEvaluator.batch_diversity(grids)
-        
+
         return BatchValidationResult(
             total_maps=n,
             valid_syntax_count=valid_count,
@@ -5033,7 +5098,7 @@ class ZeldaValidator:
             diversity_score=diversity,
             individual_results=results
         )
-    
+
     def validate_batch_multi_persona(self, grids: List[np.ndarray],
                                      personas: List[str] = None,
                                      verbose: bool = True) -> Dict[str, BatchValidationResult]:
@@ -5055,49 +5120,49 @@ class ZeldaValidator:
         """
         if personas is None:
             personas = ["speedrunner", "balanced", "completionist"]
-        
+
         results_by_persona = {}
-        
+
         for persona in personas:
             if verbose:
                 print(f"\n=== Evaluating with '{persona}' persona ===")
-            
+
             batch_result = self.validate_batch(
-                grids, 
-                verbose=verbose, 
+                grids,
+                verbose=verbose,
                 persona_mode=persona
             )
-            
+
             results_by_persona[persona] = batch_result
-            
+
             if verbose:
                 print(f"{persona.capitalize()} Results:")
                 print(f"  Solvability: {batch_result.solvability_rate:.1%}")
                 print(f"  Avg Path Length: {batch_result.avg_path_length:.1f}")
                 print(f"  Avg Reachability: {batch_result.avg_reachability:.1%}")
-        
+
         return results_by_persona
-    
+
     def _visualize_solution(self, env: ZeldaLogicEnv, path: List[Tuple[int, int]]):
         """Show animated solution using Pygame."""
         import time
-        
+
         try:
             import pygame
         except ImportError:
             print("Pygame not available for visualization")
             return
-        
+
         env.reset()
         env.render()
         time.sleep(0.5)
-        
+
         for i, pos in enumerate(path[1:], 1):
             # Determine action
             prev = path[i - 1]
             dr = pos[0] - prev[0]
             dc = pos[1] - prev[1]
-            
+
             if dr == -1:
                 action = 0
             elif dr == 1:
@@ -5106,17 +5171,17 @@ class ZeldaValidator:
                 action = 2
             else:
                 action = 3
-            
+
             env.step(action)
             env.render()
-            
+
             # Handle events
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:  # pylint: disable=no-member
                     return
-            
+
             time.sleep(0.1)
-        
+
         # Show final state
         time.sleep(2)
 
@@ -5217,7 +5282,7 @@ def create_test_map() -> np.ndarray:
     T = SEMANTIC_PALETTE['TRIFORCE']
     K = SEMANTIC_PALETTE['KEY_SMALL']
     L = SEMANTIC_PALETTE['DOOR_LOCKED']
-    
+
     # Demo map with 11 rows x 16 columns for standalone validator smoke tests.
     # Player starts at top-left, gets key, unlocks door, reaches triforce
     # Path: Start -> Key -> Door -> Triforce
@@ -5234,7 +5299,7 @@ def create_test_map() -> np.ndarray:
         [W, F, F, F, F, F, W, W, W, W, W, F, F, F, F, W],
         [W, W, W, W, W, W, W, W, W, W, W, W, W, W, W, W],
     ], dtype=np.int64)
-    
+
     return test_map
 
 
@@ -5244,29 +5309,29 @@ def create_test_map() -> np.ndarray:
 
 if __name__ == "__main__":
     print("=== ZAVE: Zelda AI Validation Environment ===\n")
-    
+
     # Create test map
     demo_map = create_test_map()
     print("Created test map (11 rows x 16 cols)")
     print(f"Start: {np.where(demo_map == SEMANTIC_PALETTE['START'])}")
     print(f"Goal: {np.where(demo_map == SEMANTIC_PALETTE['TRIFORCE'])}")
-    
+
     # Run validation
     validator = ZeldaValidator()
-    
+
     print("\n--- Validating Test Map ---")
     result = validator.validate_single(demo_map, render=False)
-    
+
     print(f"Solvable: {result.is_solvable}")
     print(f"Valid Syntax: {result.is_valid_syntax}")
     print(f"Path Length: {result.path_length}")
     print(f"Reachability: {result.reachability:.2%}")
     print(f"Backtracking: {result.backtracking_score:.2%}")
-    
+
     if result.logical_errors:
         print(f"Logical Errors: {result.logical_errors}")
-    
+
     if result.error_message:
         print(f"Error: {result.error_message}")
-    
+
     print("\n--- Test Complete ---")

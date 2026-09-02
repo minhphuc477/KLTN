@@ -110,6 +110,26 @@ def prepare(args: argparse.Namespace) -> Dict[str, Any]:
             device=pipeline.device,
             dtype=torch.float32,
         )
+        # Validate that both sides of the DPO pair originate from the SAME
+        # MAP-Elites behavior cell.  Pairing rooms from different cells causes
+        # DPO to penalize valid structural diversity (cross-bin feature drift)
+        # rather than optimizing pure layout quality within a fixed behavior bin.
+        preferred_cell = metadata.get("preferred_cell_index", metadata.get("cell_index"))
+        rejected_cell = metadata.get("rejected_cell_index", metadata.get("cell_index"))
+        if preferred_cell is None or rejected_cell is None:
+            # Older archive format without cell_index: proceed but warn.
+            import logging as _log
+            _log.getLogger(__name__).debug(
+                "Pair %d missing cell_index metadata; cannot verify same-cell constraint.", index
+            )
+        elif preferred_cell != rejected_cell:
+            import logging as _log
+            _log.getLogger(__name__).warning(
+                "Pair %d skipped: preferred cell %s != rejected cell %s (cross-bin pair would cause spurious DPO feature drift).",
+                index, preferred_cell, rejected_cell,
+            )
+            continue
+
         with torch.no_grad():
             context = pipeline._compute_room_condition(
                 neighbor_latents=empty_neighbors,

@@ -15,14 +15,14 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from experiments.baselines.common import (
+from experiments.baselines.common import (  # noqa: E402 - direct-script path bootstrap
     BaselineEvalConfig,
     evaluate_generated_grids,
     load_room_grids,
     set_reproducible_seed,
     write_json_report,
 )
-from src.core.definitions import TileID
+from src.core.definitions import TileID  # noqa: E402 - direct-script path bootstrap
 
 Direction = Tuple[int, int]
 DIRECTIONS: Tuple[Direction, ...] = ((-1, 0), (1, 0), (0, -1), (0, 1))
@@ -189,10 +189,21 @@ def generate_wfc_samples(
     num_samples: int,
     seed: int,
     retries: int = 20,
-) -> List[np.ndarray]:
+    return_failure_count: bool = False,
+) -> List[np.ndarray] | Tuple[List[np.ndarray], int]:
+    """Generate WFC samples; gracefully degrades on unsolvable constraints.
+
+    Returns:
+        By default, a list containing exactly ``num_samples`` grids. Samples
+        that cannot collapse after ``retries`` attempts use a FLOOR fallback.
+        When ``return_failure_count`` is true, return ``(samples, failures)``.
+    """
     samples: List[np.ndarray] = []
+    num_failures: int = 0
+    fallback_grid = np.full(output_shape, int(TileID.FLOOR), dtype=np.int32)
     for sample_idx in range(int(num_samples)):
         last_error: Exception | None = None
+        success = False
         for attempt in range(int(retries)):
             try:
                 samples.append(
@@ -202,12 +213,26 @@ def generate_wfc_samples(
                         seed=int(seed) + sample_idx * 1009 + attempt,
                     )
                 )
+                success = True
                 break
             except Exception as exc:
                 last_error = exc
-        else:
-            raise RuntimeError(f"WFC failed after {retries} retries for sample {sample_idx}: {last_error}")
+        if not success:
+            # Log and continue with a FLOOR-filled fallback so the evaluation
+            # loop is not aborted. Keep these degraded samples in the attempted
+            # denominator as invalid outcomes; never exclude them after seeing
+            # the result.
+            print(
+                f"[WFC] WARNING: sample {sample_idx} failed after {retries} "
+                f"retries ({type(last_error).__name__}: {last_error}); "
+                f"inserting FLOOR fallback."
+            )
+            samples.append(fallback_grid.copy())
+            num_failures += 1
+    if return_failure_count:
+        return samples, num_failures
     return samples
+
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -228,11 +253,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise RuntimeError("No Zelda room grids were loaded.")
     model = build_overlapping_pattern_model(reference, pattern_size=args.pattern_size)
     num_generate = 4 if args.dry_run else int(args.num_generate)
-    generated = generate_wfc_samples(
+    generated, num_failures = generate_wfc_samples(
         model,
         output_shape=tuple(reference[0].shape),
         num_samples=num_generate,
         seed=args.seed,
+        return_failure_count=True,
     )
     report = evaluate_generated_grids(
         generated,
@@ -246,6 +272,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     report["wfc"] = {
         "pattern_size": int(args.pattern_size),
         "num_patterns": int(model.num_patterns),
+        "num_failures": int(num_failures),
         "dry_run": bool(args.dry_run),
     }
     output_path = write_json_report(args.output_dir / "wfc_baseline_report.json", report)

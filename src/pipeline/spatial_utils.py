@@ -95,12 +95,12 @@ def coerce_difficulty(value: Any) -> float:
 
 
 def parse_room_coord(value: Any) -> Optional[Tuple[int, int]]:
-    """Parse room-local coordinates from tuple/list/dict/string."""
+    """Parse room-local coordinates (row, col) from tuple/list/dict/string."""
     if value is None:
         return None
     if isinstance(value, dict):
-        row = value.get("row", value.get("r"))
-        col = value.get("col", value.get("c"))
+        row = value.get("y", value.get("row", value.get("r")))
+        col = value.get("x", value.get("col", value.get("c")))
         if isinstance(row, (int, np.integer, float)) and isinstance(col, (int, np.integer, float)):
             return int(row), int(col)
         return None

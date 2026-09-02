@@ -8,6 +8,7 @@ from typing import Any
 
 from src.simulation.bidirectional_astar import BidirectionalAStar
 from src.simulation.search_base import GameStateSearchConfig, GameStateSearchResult
+from src.simulation.search_status import oracle_status_from_outcome
 
 
 class BidirectionalAStarGameStateSolver:
@@ -25,6 +26,21 @@ class BidirectionalAStarGameStateSolver:
             heuristic_mode="balanced",
         )
         success, path, states = solver.solve()
+        if success:
+            termination_status = "solved"
+            failure_reason = ""
+        elif self.env.start_pos is None or self.env.goal_pos is None:
+            termination_status = "invalid"
+            failure_reason = "No start or goal found in map"
+        elif int(states or 0) >= int(self.config.timeout):
+            termination_status = "budget_exhausted"
+            failure_reason = "Bidirectional/A* shared state budget reached"
+        else:
+            termination_status = "incomplete"
+            failure_reason = (
+                "Bidirectional comparison search stopped without a solution or a retained "
+                "complete-frontier certificate"
+            )
         return GameStateSearchResult(
             success=bool(success),
             path=list(path or []),
@@ -40,5 +56,12 @@ class BidirectionalAStarGameStateSolver:
                 "collision_checks": int(getattr(solver, "collision_checks", 0) or 0),
                 "intended_use": "comparison_search",
                 "independent_oracle": False,
+                "failure_reason": failure_reason,
+                "termination_status": termination_status,
+                "solver_status": oracle_status_from_outcome(
+                    bool(success),
+                    failure_reason,
+                    termination_status,
+                ),
             },
         )

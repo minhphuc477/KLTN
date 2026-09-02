@@ -90,6 +90,9 @@ class StateSpaceDFS:
         # Statistics
         self.metrics = DFSMetrics()
         self.states_explored = 0
+        self._last_termination_status = "not_run"
+        self._last_failure_reason = ""
+        self._budget_hit = False
         
         # Read-only grid reference
         self.grid = self.env.original_grid
@@ -105,8 +108,13 @@ class StateSpaceDFS:
             states_explored: Number of states explored
         """
         self.env.reset()
+        self._last_termination_status = "not_run"
+        self._last_failure_reason = ""
+        self._budget_hit = False
         
         if self.env.goal_pos is None or self.env.start_pos is None:
+            self._last_termination_status = "invalid"
+            self._last_failure_reason = "No start or goal found in map"
             return False, [], 0
         
         if self.use_iddfs:
@@ -140,9 +148,11 @@ class StateSpaceDFS:
             logger.debug(f'IDDFS: Trying depth_limit={depth_limit}')
             
             # Run depth-limited DFS
-            success, path = self._dfs_recursive(
+            self._budget_hit = False
+            success, path, cutoff = self._dfs_recursive(
                 self.env.state.copy(),
                 visited=set(),
+                best_remaining_depth={},
                 path=[self.env.start_pos],
                 depth=0,
                 depth_limit=depth_limit,
@@ -153,17 +163,32 @@ class StateSpaceDFS:
             
             if success:
                 logger.debug(f'IDDFS succeeded at depth {len(path)}, explored {total_states} states')
+                self._last_termination_status = "solved"
+                self._last_failure_reason = ""
                 return True, path, total_states
+            if self._budget_hit or total_states >= self.timeout:
+                self._last_termination_status = "budget_exhausted"
+                self._last_failure_reason = "IDDFS state budget reached with unexplored states"
+                return False, [], total_states
+            if not cutoff:
+                self._last_termination_status = "exhausted"
+                self._last_failure_reason = "Complete IDDFS frontier exhaustion: no route exists"
+                return False, [], total_states
             
             depth_limit += 1
         
-        logger.debug(f'IDDFS exhausted: max_depth={self.max_depth}, states={total_states}')
+        self._last_termination_status = "depth_limit"
+        self._last_failure_reason = (
+            f"IDDFS maximum depth {self.max_depth} reached with deeper states remaining"
+        )
+        logger.debug(f'IDDFS depth-limited: max_depth={self.max_depth}, states={total_states}')
         return False, [], total_states
     
     def _dfs_recursive(self, state: GameState, visited: Set[Tuple],
+                      best_remaining_depth: Dict[Tuple, int],
                       path: List[Tuple[int, int]], depth: int, 
                       depth_limit: int,
-                      state_budget: int) -> Tuple[bool, List[Tuple[int, int]]]:
+                      state_budget: int) -> Tuple[bool, List[Tuple[int, int]], bool]:
         """
         Recursive DFS implementation with depth limiting.
         
@@ -178,14 +203,21 @@ class StateSpaceDFS:
             (success, path) tuple
         """
         if self.states_explored >= state_budget:
-            return False, []
+            self._budget_hit = True
+            return False, [], True
         
         state_key = game_state_key(state)
         
         # Cycle detection
         if state_key in visited:
             self.metrics.cycle_detections += 1
-            return False, []
+            return False, [], False
+
+        remaining_depth = int(depth_limit - depth)
+        previous_remaining = best_remaining_depth.get(state_key)
+        if previous_remaining is not None and previous_remaining >= remaining_depth:
+            return False, [], False
+        best_remaining_depth[state_key] = remaining_depth
         
         visited.add(state_key)
         self.states_explored += 1
@@ -197,24 +229,26 @@ class StateSpaceDFS:
         
         # Goal check
         if state.position == self.env.goal_pos:
-            return True, list(path)
+            return True, list(path), False
 
-        if depth >= depth_limit:
-            return False, []
-        
-        # Generate successors
         successors = self._get_successors(state)
+        if depth >= depth_limit:
+            has_deeper_state = any(game_state_key(item) not in visited for item in successors)
+            visited.remove(state_key)
+            return False, [], has_deeper_state
         
         # Try each successor
+        cutoff_occurred = False
         for next_state in successors:
             next_key = game_state_key(next_state)
             if next_key in visited:
                 continue
             
             path.append(next_state.position)
-            success, result_path = self._dfs_recursive(
+            success, result_path, child_cutoff = self._dfs_recursive(
                 next_state,
                 visited,
+                best_remaining_depth,
                 path,
                 depth + 1,
                 depth_limit,
@@ -223,14 +257,15 @@ class StateSpaceDFS:
             path.pop()
             
             if success:
-                return True, result_path
-            else:
-                # Backtrack
-                self.metrics.backtrack_count += 1
+                return True, result_path, False
+            cutoff_occurred = cutoff_occurred or child_cutoff
+            self.metrics.backtrack_count += 1
+            if self._budget_hit:
+                break
         
         # Dead end - backtrack
         visited.remove(state_key)
-        return False, []
+        return False, [], cutoff_occurred
     
     def _solve_iterative_dfs(self) -> Tuple[bool, List[Tuple[int, int]], int]:
         """
@@ -245,6 +280,8 @@ class StateSpaceDFS:
         logger.debug(f'StateSpaceDFS: Starting iterative DFS (max_depth={self.max_depth})')
         
         start_state = self.env.state.copy()
+        self.states_explored = 0
+        self.metrics = DFSMetrics()
         
         # Stack stores states only; paths are reconstructed from parent links.
         stack = [(start_state, 0, 0)]
@@ -252,6 +289,7 @@ class StateSpaceDFS:
         parents: Dict[int, Optional[int]] = {0: None}
         positions: Dict[int, Tuple[int, int]] = {0: start_state.position}
         next_entry_id = 1
+        depth_cutoff = False
 
         def reconstruct_path(end_entry_id: int) -> List[Tuple[int, int]]:
             path: List[Tuple[int, int]] = []
@@ -264,10 +302,6 @@ class StateSpaceDFS:
         
         while stack and self.states_explored < self.timeout:
             state, depth, entry_id = stack.pop()
-            
-            # Depth limit check
-            if depth >= self.max_depth:
-                continue
             
             state_key = game_state_key(state)
             
@@ -287,10 +321,18 @@ class StateSpaceDFS:
             # Goal check
             if state.position == self.env.goal_pos:
                 logger.debug(f'Iterative DFS succeeded: depth={depth}, states={self.states_explored}')
+                self._last_termination_status = "solved"
+                self._last_failure_reason = ""
                 return True, reconstruct_path(entry_id), self.states_explored
             
             # Generate and push successors (reverse order for left-to-right exploration)
             successors = self._get_successors(state)
+            if depth >= self.max_depth:
+                depth_cutoff = depth_cutoff or any(
+                    game_state_key(next_state) not in visited
+                    for next_state in successors
+                )
+                continue
             for next_state in reversed(successors):
                 next_key = game_state_key(next_state)
                 if next_key not in visited:
@@ -300,7 +342,22 @@ class StateSpaceDFS:
                     positions[successor_entry_id] = next_state.position
                     stack.append((next_state, depth + 1, successor_entry_id))
         
-        logger.debug(f'Iterative DFS exhausted: states={self.states_explored}')
+        if self.states_explored >= self.timeout and stack:
+            self._last_termination_status = "budget_exhausted"
+            self._last_failure_reason = "DFS state budget reached with unexplored states"
+        elif depth_cutoff:
+            self._last_termination_status = "depth_limit"
+            self._last_failure_reason = (
+                f"DFS maximum depth {self.max_depth} reached with deeper states remaining"
+            )
+        else:
+            self._last_termination_status = "exhausted"
+            self._last_failure_reason = "Complete DFS frontier exhaustion: no route exists"
+        logger.debug(
+            'Iterative DFS stopped: status=%s, states=%d',
+            self._last_termination_status,
+            self.states_explored,
+        )
         return False, [], self.states_explored
     
     def _get_successors(self, state: GameState) -> List[GameState]:
@@ -395,9 +452,10 @@ class StateSpaceDFS:
             states_pruned_dominated=self.metrics.cycle_detections,
             max_queue_size=0,  # DFS uses stack, not priority queue
             time_taken_ms=elapsed_ms,
-            failure_reason="" if success else "DFS exhausted search space",
+            failure_reason=str(self._last_failure_reason),
             path_length=max(0, len(path) - 1) if success else 0,
-            final_inventory=None
+            final_inventory=None,
+            termination_status=str(self._last_termination_status),
         )
         
         return success, path, diag

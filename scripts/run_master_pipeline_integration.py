@@ -106,11 +106,19 @@ def _gradient_probe(pipeline: NeuralSymbolicDungeonPipeline, graph: Any) -> floa
         boundary_constraints=torch.zeros(1, 8, device=pipeline.device),
         position=position,
     )
+    # Zelda rooms are 11 rows x 16 cols.  The VQ-VAE downsamples by a factor
+    # that can vary (typically 4x), so we derive the expected latent spatial
+    # dimensions from the pipeline's VQ-VAE config at runtime rather than
+    # hard-coding them.  The previous code had (4, 3) which is transposed.
+    _vqvae_ds = int(getattr(getattr(pipeline, "vqvae", None), "downsample_factor", 4))
+    _ZELDA_H, _ZELDA_W = 11, 16  # raw Zelda room grid dims in tiles
+    _lat_h = max(1, (_ZELDA_H + _vqvae_ds - 1) // _vqvae_ds)  # 3 for ds=4
+    _lat_w = max(1, (_ZELDA_W + _vqvae_ds - 1) // _vqvae_ds)  # 4 for ds=4
     latent = torch.randn(
         1,
         int(getattr(pipeline.diffusion, "latent_dim", 64)),
-        4,
-        3,
+        _lat_h,
+        _lat_w,
         device=pipeline.device,
     )
     loss = pipeline.diffusion.training_loss(latent, condition, graph_data=room_graph_data)

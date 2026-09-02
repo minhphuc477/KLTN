@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import logging
 import math
 import sys
 import time
@@ -18,6 +19,8 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 import networkx as nx
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
@@ -501,56 +504,120 @@ def execute_protocol(
     qd_init_random_fraction: float,
     qd_emitter_mutation_rate: float,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    partial_csv_path = output_dir / "designer_controllability_raw.partial.csv"
     raw_rows: List[Dict[str, Any]] = []
     graph_payload: List[Dict[str, Any]] = []
-    for spec in specs:
+
+    # Load already computed rows if resuming
+    computed_keys = set()
+    if partial_csv_path.exists():
+        try:
+            with partial_csv_path.open("r", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                for r in reader:
+                    raw_rows.append(r)
+                    computed_keys.add((str(r.get("target_name")), str(r.get("method")), int(r.get("sample_idx", 0))))
+            print(f"[controllability] Resumed {len(raw_rows)} existing samples from {partial_csv_path}", flush=True)
+        except Exception as exc:
+            logger.warning("Could not read partial CSV for resume: %s", exc)
+
+    total_specs = len(specs)
+    for s_idx, spec in enumerate(specs, 1):
         for method in methods:
+            # Check if all samples for this spec & method are already computed
+            all_done = all((spec.name, method.name, idx) in computed_keys for idx in range(int(samples_per_target)))
+            if all_done:
+                print(f"[controllability] [{s_idx}/{total_specs}] Skipping completed {spec.name} ({method.name})", flush=True)
+                continue
+
             run_seed = _stable_seed(seed, spec.name, method.name)
             started = time.time()
-            graphs, generation_times = generate_block_i_graphs(
-                num_samples=int(samples_per_target),
-                seed=run_seed,
-                min_rooms=int(spec.min_rooms),
-                max_rooms=int(spec.max_rooms),
-                population_size=int(population_size),
-                generations=int(generations),
-                rule_space=str(method.rule_space),
-                descriptor_targets=dict(spec.descriptor_targets),
-                room_count_bias=float(room_count_bias),
-                search_strategy=str(method.search_strategy),
-                qd_archive_cells=int(qd_archive_cells),
-                qd_init_random_fraction=float(qd_init_random_fraction),
-                qd_emitter_mutation_rate=float(qd_emitter_mutation_rate),
-            )
-            wall_time_sec = float(time.time() - started)
-            for idx, graph in enumerate(graphs):
-                desc = extract_graph_descriptor(graph, grammar=None)
-                metrics = _descriptor_to_metrics(desc)
-                row: Dict[str, Any] = {
-                    "target_name": spec.name,
-                    "target_family": spec.family,
-                    "method": method.name,
-                    "sample_idx": int(idx),
-                    "seed": int(run_seed + idx),
-                    "generation_time_sec": float(generation_times[idx]) if idx < len(generation_times) else 0.0,
-                    "run_wall_time_sec": wall_time_sec,
-                    "min_rooms": int(spec.min_rooms),
-                    "max_rooms": int(spec.max_rooms),
-                    "notes": spec.notes,
-                }
-                for key, value in metrics.items():
-                    row[f"metric_{key}"] = value
-                row.update(_target_error_fields(metrics, spec))
-                raw_rows.append(row)
-                graph_payload.append(
-                    {
+            try:
+                graphs, generation_times = generate_block_i_graphs(
+                    num_samples=int(samples_per_target),
+                    seed=run_seed,
+                    min_rooms=int(spec.min_rooms),
+                    max_rooms=int(spec.max_rooms),
+                    population_size=int(population_size),
+                    generations=int(generations),
+                    rule_space=str(method.rule_space),
+                    descriptor_targets=dict(spec.descriptor_targets),
+                    room_count_bias=float(room_count_bias),
+                    search_strategy=str(method.search_strategy),
+                    qd_archive_cells=int(qd_archive_cells),
+                    qd_init_random_fraction=float(qd_init_random_fraction),
+                    qd_emitter_mutation_rate=float(qd_emitter_mutation_rate),
+                )
+                wall_time_sec = float(time.time() - started)
+                for idx, graph in enumerate(graphs):
+                    desc = extract_graph_descriptor(graph, grammar=None)
+                    metrics = _descriptor_to_metrics(desc)
+                    row: Dict[str, Any] = {
                         "target_name": spec.name,
+                        "target_family": spec.family,
                         "method": method.name,
                         "sample_idx": int(idx),
-                        "graph": nx.node_link_data(graph),
+                        "seed": int(run_seed + idx),
+                        "generation_time_sec": float(generation_times[idx]) if idx < len(generation_times) else 0.0,
+                        "run_wall_time_sec": wall_time_sec,
+                        "min_rooms": int(spec.min_rooms),
+                        "max_rooms": int(spec.max_rooms),
+                        "notes": spec.notes,
                     }
-                )
-    output_dir.mkdir(parents=True, exist_ok=True)
+                    for key, value in metrics.items():
+                        row[f"metric_{key}"] = value
+                    row.update(_target_error_fields(metrics, spec))
+                    raw_rows.append(row)
+                    graph_payload.append(
+                        {
+                            "target_name": spec.name,
+                            "method": method.name,
+                            "sample_idx": int(idx),
+                            "graph": nx.node_link_data(graph),
+                        }
+                    )
+                write_csv(partial_csv_path, raw_rows)
+                print(f"[controllability] [{s_idx}/{total_specs}] Completed {spec.name} ({method.name}) in {wall_time_sec:.2f}s", flush=True)
+            except Exception as exc:
+                wall_time_sec = float(time.time() - started)
+                print(f"[controllability] [{s_idx}/{total_specs}] Warning: generation failed for {spec.name} ({method.name}): {exc}", flush=True)
+                for idx in range(int(samples_per_target)):
+                    dummy_graph = nx.DiGraph()
+                    dummy_graph.add_node(0, type="start")
+                    dummy_graph.add_node(1, type="boss")
+                    desc = extract_graph_descriptor(dummy_graph, grammar=None)
+                    metrics = _descriptor_to_metrics(desc)
+                    metrics["constraint_valid"] = 0.0
+                    metrics["connected"] = 0.0
+                    row = {
+                        "target_name": spec.name,
+                        "target_family": spec.family,
+                        "method": method.name,
+                        "sample_idx": int(idx),
+                        "seed": int(run_seed + idx),
+                        "generation_time_sec": wall_time_sec / max(1, int(samples_per_target)),
+                        "run_wall_time_sec": wall_time_sec,
+                        "min_rooms": int(spec.min_rooms),
+                        "max_rooms": int(spec.max_rooms),
+                        "notes": f"Generation failed: {exc}",
+                    }
+                    for key, value in metrics.items():
+                        row[f"metric_{key}"] = value
+                    row.update(_target_error_fields(metrics, spec))
+                    row["pass_all_controlled_targets"] = 0
+                    raw_rows.append(row)
+                    graph_payload.append(
+                        {
+                            "target_name": spec.name,
+                            "method": method.name,
+                            "sample_idx": int(idx),
+                            "graph": nx.node_link_data(dummy_graph),
+                        }
+                    )
+                write_csv(partial_csv_path, raw_rows)
+                print(f"[controllability] [{s_idx}/{total_specs}] Recorded failure for {spec.name} ({method.name}) in {wall_time_sec:.2f}s: {exc}", flush=True)
+
     return raw_rows, graph_payload
 
 

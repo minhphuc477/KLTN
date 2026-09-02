@@ -1016,6 +1016,30 @@ def test_edge_validator_models_bombs_and_persistent_boss_key():
     assert boss_result.is_solvable is True
 
 
+def test_edge_validator_requires_declared_switch_activation():
+    room = type("Room", (), {"grid": np.array([[1]], dtype=int)})
+    graph = nx.DiGraph()
+    graph.add_node(0, type="START")
+    graph.add_node(1, type="SWITCH", switch_id=7)
+    graph.add_node(2, type="GOAL")
+    graph.add_edge(0, 1, edge_type="open")
+    graph.add_edge(1, 2, edge_type="switch_locked", switches_required=[7])
+    dungeon = type(
+        "DungeonDataStub",
+        (),
+        {"graph": graph, "rooms": {"0": room(), "1": room(), "2": room()}},
+    )()
+
+    result = GraphGuidedValidator().validate_with_edge_types(dungeon)
+
+    graph.nodes[1].clear()
+    graph.nodes[1]["type"] = "EMPTY"
+    blocked = GraphGuidedValidator().validate_with_edge_types(dungeon)
+
+    assert result.is_solvable is True
+    assert blocked.is_solvable is False
+
+
 def test_validation_context_uses_stitched_slot_keys_for_puzzle_metadata():
     result = DungeonGenerationResult(
         dungeon_grid=[[21, 1, 22]],

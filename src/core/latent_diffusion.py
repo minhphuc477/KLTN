@@ -401,7 +401,7 @@ class CrossAttention(nn.Module):
         if int(valid.shape[1]) > seq_len:
             valid = valid[:, :seq_len]
         elif int(valid.shape[1]) < seq_len:
-            valid = F.pad(valid, (0, seq_len - int(valid.shape[1])), value=False)
+            valid = F.pad(valid, (0, seq_len - int(valid.shape[1])), value=True)
         return valid
 
     def _batched_normalized_adjacency(
@@ -2144,17 +2144,51 @@ class DiTDenoiser(nn.Module):
                 if int(mask.shape[1]) > int(context.shape[1]):
                     mask = mask[:, : int(context.shape[1])]
                 else:
-                    mask = F.pad(mask, (0, int(context.shape[1]) - int(mask.shape[1])), value=False)
+                    mask = F.pad(mask, (0, int(context.shape[1]) - int(mask.shape[1])), value=True)
         return self.context_token_proj(context), None if mask is None else ~mask
 
     def _positional_encoding(self, height: int, width: int, device: torch.device, dtype: torch.dtype) -> Tensor:
-        y = torch.linspace(-1.0, 1.0, height, device=device, dtype=dtype)
-        x = torch.linspace(-1.0, 1.0, width, device=device, dtype=dtype)
-        yy, xx = torch.meshgrid(y, x, indexing="ij")
-        base = torch.stack([yy, xx, torch.sin(math.pi * yy), torch.cos(math.pi * xx)], dim=-1)
-        base = base.reshape(1, height * width, 4)
-        repeat = math.ceil(self.model_channels / 4)
-        return base.repeat(1, 1, repeat)[..., : self.model_channels]
+        # Build 2-D sinusoidal positional encoding for a height x width grid.
+        # Uses log-spaced Fourier scale bands matching the standard ViT/DiT papers,
+        # so every embedding dimension receives a unique spatial frequency.  The
+        # previous implementation repeated the same 4 values across all channels,
+        # providing no discriminative power beyond coarse grid position.
+        #
+        # Encoding split: first d_half channels encode rows (y), rest encode cols (x).
+        # Within each half, channels alternate sin/cos across frequency bands.
+        d_model = self.model_channels
+        d_half = d_model // 2
+        num_freq = max(1, d_half // 2)
+
+        # Log-spaced frequencies: omega_i = 1 / (10000 ^ (2i / d_half))
+        freq_exponents = torch.arange(num_freq, device=device, dtype=torch.float64)
+        frequencies = 1.0 / (10000.0 ** (2.0 * freq_exponents / max(1, d_half)))
+
+        # Normalised grid coordinates in [0, 1]
+        y = torch.linspace(0.0, 1.0, height, device=device, dtype=torch.float64)
+        x = torch.linspace(0.0, 1.0, width, device=device, dtype=torch.float64)
+
+        y_enc = y.unsqueeze(1) * frequencies.unsqueeze(0)  # [H, num_freq]
+        x_enc = x.unsqueeze(1) * frequencies.unsqueeze(0)  # [W, num_freq]
+
+        y_pe = torch.stack([torch.sin(y_enc), torch.cos(y_enc)], dim=-1).reshape(height, d_half)
+        x_pe = torch.stack([torch.sin(x_enc), torch.cos(x_enc)], dim=-1).reshape(width, d_half)
+
+        y_grid = y_pe.unsqueeze(1).expand(height, width, d_half)  # [H, W, d_half]
+        x_grid = x_pe.unsqueeze(0).expand(height, width, d_half)  # [H, W, d_half]
+        pos = torch.cat([y_grid, x_grid], dim=-1)  # [H, W, d_model]
+
+        # Handle odd model_channels: pad or trim to exactly d_model channels
+        if pos.shape[-1] < d_model:
+            pad_size = d_model - pos.shape[-1]
+            pos = torch.cat(
+                [pos, torch.zeros(height, width, pad_size, device=device, dtype=torch.float64)],
+                dim=-1,
+            )
+        else:
+            pos = pos[..., :d_model]
+
+        return pos.reshape(1, height * width, d_model).to(dtype=dtype)
 
     def forward(
         self,
@@ -3061,7 +3095,8 @@ class LatentDiffusionModel(nn.Module):
         self.register_buffer('sqrt_recip_alphas', torch.sqrt(1.0 / alphas))
         
         # Posterior variance
-        posterior_variance = betas * (1.0 - alphas_cumprod_prev) / (1.0 - alphas_cumprod)
+        one_minus_alphas_cumprod = (1.0 - alphas_cumprod).clamp(min=1e-8)
+        posterior_variance = betas * (1.0 - alphas_cumprod_prev) / one_minus_alphas_cumprod
         self.register_buffer('posterior_variance', posterior_variance)
         self.register_buffer('posterior_log_variance', torch.log(torch.clamp(posterior_variance, min=1e-20)))
         self._compiled_for_inference = False
@@ -3386,7 +3421,7 @@ class LatentDiffusionModel(nn.Module):
                     raise ValueError(
                         f"node_mask length {int(node_mask.shape[1])} exceeds context sequence length {seq_len}."
                     )
-                node_mask = F.pad(node_mask, (0, seq_len - int(node_mask.shape[1])), value=0)
+                node_mask = F.pad(node_mask, (0, seq_len - int(node_mask.shape[1])), value=1)
 
         return adjusted, edge_attr, node_mask
 
@@ -3415,6 +3450,10 @@ class LatentDiffusionModel(nn.Module):
             if "edge_index" in str(key) or int(value.dim()) == 0:
                 continue
             if int(value.shape[0]) != int(batch_size):
+                # Check if key is a spatial conditioning map or node position feature
+                if int(batch_size) == 1 and int(value.shape[0]) != 1:
+                    # Single sample with leading spatial/node dimension [C, H, W] or [N, D]
+                    masked[key] = value * keep_mask.to(device=value.device, dtype=value.dtype).view(-1)[0]
                 continue
             if value.dim() < 3 and str(key) not in batched_vector_keys:
                 # A 2D node/edge feature matrix may be an unbatched [N,D] or
@@ -3648,8 +3687,22 @@ class LatentDiffusionModel(nn.Module):
         )
         
         if torch.any(cfg_scale > (1.0 + 1e-6)):
-            # Unconditional prediction (zero context)
-            pred_uncond = self.denoiser(x_t, t, torch.zeros_like(context))
+            # Unconditional prediction (zero context with matching spatial structure)
+            uncond_spatial_graph = None
+            if spatial_graph_data is not None:
+                uncond_spatial_graph = {
+                    k: torch.zeros_like(v) if isinstance(v, torch.Tensor) else v
+                    for k, v in spatial_graph_data.items()
+                }
+            pred_uncond = self.denoiser(
+                x_t,
+                t,
+                torch.zeros_like(context),
+                context_edge_index=context_edge_index,
+                context_edge_attr=context_edge_attr,
+                context_node_mask=context_node_mask,
+                spatial_graph_data=uncond_spatial_graph,
+            )
             # CFG interpolation
             prediction = pred_uncond + cfg_scale[:, None, None, None] * (pred_cond - pred_uncond)
         else:
@@ -3769,9 +3822,10 @@ class LatentDiffusionModel(nn.Module):
         alpha_cumprod_prev_t = self.alphas_cumprod_prev[t][:, None, None, None]
         beta_t = self.betas[t][:, None, None, None]
 
+        one_minus_alpha_cumprod_t = (1.0 - alpha_cumprod_t).clamp(min=1e-8)
         posterior_mean = (
-            torch.sqrt(alpha_cumprod_prev_t) * beta_t / (1.0 - alpha_cumprod_t) * pred_x0
-            + torch.sqrt(alpha_t) * (1.0 - alpha_cumprod_prev_t) / (1.0 - alpha_cumprod_t) * x_t
+            torch.sqrt(alpha_cumprod_prev_t) * beta_t / one_minus_alpha_cumprod_t * pred_x0
+            + torch.sqrt(alpha_t) * (1.0 - alpha_cumprod_prev_t) / one_minus_alpha_cumprod_t * x_t
         )
         posterior_variance = self.posterior_variance[t][:, None, None, None]
         posterior_log_variance = self.posterior_log_variance[t][:, None, None, None]

@@ -15,11 +15,11 @@ logger = logging.getLogger(__name__)
 
 class ProductionRule:
     """Base class for grammar production rules."""
-    
+
     def __init__(self, name: str, weight: float = 1.0):
         self.name = name
         self.weight = weight
-    
+
     def can_apply(
         self,
         graph: MissionGraph,
@@ -27,7 +27,7 @@ class ProductionRule:
     ) -> bool:
         """Check if this rule can be applied."""
         return True
-    
+
     def apply(
         self,
         graph: MissionGraph,
@@ -155,10 +155,10 @@ class ProductionRule:
 
 class StartRule(ProductionRule):
     """S -> START, SEGMENT, GOAL"""
-    
+
     def __init__(self):
         super().__init__("Start", weight=1.0)
-    
+
     def apply(
         self,
         graph: MissionGraph,
@@ -173,7 +173,7 @@ class StartRule(ProductionRule):
             difficulty=0.0,
         )
         graph.add_node(start)
-        
+
         # Create GOAL node
         goal = MissionNode(
             id=1,
@@ -182,20 +182,20 @@ class StartRule(ProductionRule):
             difficulty=1.0,
         )
         graph.add_node(goal)
-        
+
         # Connect with edge (to be filled in)
         graph.add_edge(0, 1, EdgeType.PATH)
-        
+
         return graph
 
 
 class InsertChallengeRule(ProductionRule):
     """Insert a challenge node between two connected nodes."""
-    
+
     def __init__(self, challenge_type: NodeType = NodeType.ENEMY):
         super().__init__(f"InsertChallenge_{challenge_type.name}", weight=1.0)
         self.challenge_type = challenge_type
-    
+
     def can_apply(
         self,
         graph: MissionGraph,
@@ -203,7 +203,7 @@ class InsertChallengeRule(ProductionRule):
     ) -> bool:
         """Can apply if there are traversable PATH edges to split."""
         return any(edge.edge_type == EdgeType.PATH for edge in graph.edges)
-    
+
     def apply(
         self,
         graph: MissionGraph,
@@ -216,16 +216,16 @@ class InsertChallengeRule(ProductionRule):
         ]
         if not path_edges:
             return graph
-        
+
         # Select random traversable edge
         rng = context.get('rng') or random
         edge_idx, edge = rng.choice(path_edges)
-        
+
         # Create new challenge node
         new_id = max(graph.nodes.keys()) + 1
-        
+
         new_pos = self._interpolate_free_position(graph, edge.source, edge.target, 0.5, context)
-        
+
         challenge = MissionNode(
             id=new_id,
             node_type=self.challenge_type,
@@ -233,13 +233,13 @@ class InsertChallengeRule(ProductionRule):
             difficulty=context.get('difficulty', 0.5),
         )
         graph.add_node(challenge)
-        
+
         # Remove old edge and add new ones
         graph.edges.pop(edge_idx)
         graph.add_edge(edge.source, new_id, EdgeType.PATH)
         graph.add_edge(new_id, edge.target, EdgeType.PATH)
         graph.sanitize()
-        
+
         return graph
 
 
@@ -251,10 +251,10 @@ class InsertLockKeyRule(ProductionRule):
     
     The key MUST be reachable before the lock in the graph.
     """
-    
+
     def __init__(self):
         super().__init__("InsertLockKey", weight=0.8)
-    
+
     def can_apply(
         self,
         graph: MissionGraph,
@@ -264,7 +264,7 @@ class InsertLockKeyRule(ProductionRule):
         if len(graph.nodes) < 2:
             return False
         return any(edge.edge_type == EdgeType.PATH for edge in graph.edges)
-    
+
     def apply(
         self,
         graph: MissionGraph,
@@ -273,7 +273,7 @@ class InsertLockKeyRule(ProductionRule):
         """Insert KEY before LOCK along a start->goal progression path."""
         if len(graph.edges) < 1 or len(graph.nodes) < 2:
             return graph
-        
+
         rng = context.get('rng') or random
         graph.sanitize()
         original_graph = graph
@@ -301,7 +301,7 @@ class InsertLockKeyRule(ProductionRule):
             if not fallback_path_edges:
                 return original_graph
             _key_edge_idx, key_edge = rng.choice(fallback_path_edges)
-        
+
         # Create a side-branch KEY node. Putting keys directly on the critical
         # path makes them unmissable corridor pickups and removes the intended
         # backtracking/exploration pressure.
@@ -323,12 +323,12 @@ class InsertLockKeyRule(ProductionRule):
             key_id=key_id,  # Self-referencing key ID
         )
         graph.add_node(key_node)
-        
+
         # Attach the key as a spur. PATH is physically bidirectional through
         # MissionGraph adjacency, so one stored edge is sufficient.
         graph.add_edge(key_edge.source, key_id, EdgeType.PATH)
         graph.sanitize()
-        
+
         # Now find an edge AFTER the key position for the LOCK
         lock_candidates: List[Tuple[int, MissionEdge]] = []
         if start is not None and goal is not None:
@@ -359,15 +359,16 @@ class InsertLockKeyRule(ProductionRule):
                     if neighbor not in reachable_after_key:
                         reachable_after_key.add(neighbor)
                         queue.append(neighbor)
-            lock_candidates = [
-                (i, e) for i, e in enumerate(graph.edges)
+            lock_candidates = []
+            for i, e in enumerate(graph.edges):
                 if (
                     e.edge_type == EdgeType.PATH
                     and e.source in reachable_after_key
                     and e.source != key_id
                     and e.target != key_id
-                )
-            ]
+                ):
+                    if not self._would_create_key_lock_cycle(graph, e, key_id):
+                        lock_candidates.append((i, e))
 
         if not lock_candidates:
             return original_graph
@@ -385,16 +386,68 @@ class InsertLockKeyRule(ProductionRule):
         )
         graph.add_node(lock_node)
 
-        # Insert LOCK with locked edge type
+        # Insert LOCK with locked edge type on the incoming edge
         graph.edges = [e for i, e in enumerate(graph.edges) if i != lock_edge_idx]
-        graph.add_edge(lock_edge.source, lock_id, EdgeType.PATH)
-        graph.add_edge(lock_id, lock_edge.target, EdgeType.LOCKED, key_required=key_id)
+        graph.add_edge(lock_edge.source, lock_id, EdgeType.LOCKED, key_required=key_id)
+        graph.add_edge(lock_id, lock_edge.target, EdgeType.PATH)
 
         # Track key-lock relationship
         graph._key_to_lock[key_id] = lock_id
 
         graph.sanitize()
         return graph
+
+    def _would_create_key_lock_cycle(
+        self,
+        graph: MissionGraph,
+        lock_edge: MissionEdge,
+        key_node: int
+    ) -> bool:
+        """
+        Check if placing a lock on lock_edge creates a cycle blocking the key.
+        Uses a reverse BFS from the candidate lock edge to check if the key node
+        is reachable WITHOUT passing through the lock.
+        """
+        reverse_adj = {}
+        for e in graph.edges:
+            if e.source == lock_edge.source and e.target == lock_edge.target:
+                continue
+            reverse_adj.setdefault(e.target, []).append(e.source)
+            if hasattr(graph, 'BIDIRECTIONAL_EDGE_TYPES') and e.edge_type in graph.BIDIRECTIONAL_EDGE_TYPES:
+                reverse_adj.setdefault(e.source, []).append(e.target)
+
+        visited = {lock_edge.source}
+        queue = deque([lock_edge.source])
+
+        while queue:
+            curr = queue.popleft()
+            if curr == key_node:
+                break
+            for nxt in reverse_adj.get(curr, []):
+                if nxt not in visited:
+                    visited.add(nxt)
+                    queue.append(nxt)
+        else:
+            return True
+
+        forward_adj = {}
+        for e in graph.edges:
+            if e.source == lock_edge.source and e.target == lock_edge.target:
+                continue
+            forward_adj.setdefault(e.source, []).append(e.target)
+
+        visited_fwd = {lock_edge.target}
+        queue_fwd = deque([lock_edge.target])
+        while queue_fwd:
+            curr = queue_fwd.popleft()
+            if curr == key_node:
+                return True
+            for nxt in forward_adj.get(curr, []):
+                if nxt not in visited_fwd:
+                    visited_fwd.add(nxt)
+                    queue_fwd.append(nxt)
+
+        return False
 
     def _find_shortest_path_nodes(
         self,
@@ -436,7 +489,7 @@ class InsertLockKeyRule(ProductionRule):
             if edge.source == node_a and edge.target == node_b:
                 return idx
         return None
-    
+
     def _interpolate_pos(
         self,
         graph: MissionGraph,
@@ -451,10 +504,10 @@ class InsertLockKeyRule(ProductionRule):
 
 class BranchRule(ProductionRule):
     """Create a branch (parallel paths)."""
-    
+
     def __init__(self):
         super().__init__("Branch", weight=0.5)
-    
+
     def can_apply(
         self,
         graph: MissionGraph,
@@ -465,7 +518,7 @@ class BranchRule(ProductionRule):
             if len(graph._adjacency.get(node.id, [])) < 4:
                 return True
         return False
-    
+
     def apply(
         self,
         graph: MissionGraph,
@@ -473,27 +526,27 @@ class BranchRule(ProductionRule):
     ) -> MissionGraph:
         """Create a branch from a random node."""
         rng = context.get('rng') or random
-        
+
         # Find nodes that can have more connections
         candidates = [
             n for n in graph.nodes.values()
             if len(graph._adjacency.get(n.id, [])) < 4
             and n.node_type not in [NodeType.START, NodeType.GOAL]
         ]
-        
+
         if not candidates:
             return graph
-        
+
         branch_node = rng.choice(candidates)
-        
+
         # Create branch endpoint
         new_id = max(graph.nodes.keys()) + 1
         offset_r = rng.randint(-2, 2)
         offset_c = rng.randint(-2, 2)
-        
+
         branch_pos = branch_node.position
         floor = branch_pos[2] if len(branch_pos) > 2 else 0
-        
+
         new_node = MissionNode(
             id=new_id,
             node_type=rng.choice([NodeType.ITEM, NodeType.PUZZLE, NodeType.EMPTY]),
@@ -510,7 +563,7 @@ class BranchRule(ProductionRule):
         )
         graph.add_node(new_node)
         graph.add_edge(branch_node.id, new_id, EdgeType.PATH)
-        
+
         return graph
 
 

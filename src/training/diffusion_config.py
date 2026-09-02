@@ -60,7 +60,7 @@ class DiffusionTrainingConfig:
         num_classes: int = 44,
         node_feature_dim: int = GRAPH_NODE_FEATURE_DIM,
         edge_feature_dim: int = GRAPH_EDGE_FEATURE_DIM,
-        
+
         # VQ-VAE (frozen encoder)
         vqvae_checkpoint: Optional[str] = None,
         vqvae_hidden_dim: int = 96,
@@ -70,7 +70,7 @@ class DiffusionTrainingConfig:
         vqvae_top_latent_dim: Optional[int] = None,
         vqvae_use_coordconv: bool = True,
         vqvae_mrf_penalty_weight: float = 0.05,
-        
+
         # Diffusion Model
         latent_dim: int = 64,
         latent_scale_factor: float = 1.0,
@@ -98,6 +98,7 @@ class DiffusionTrainingConfig:
         condition_reference_hidden_dim: int = 64,
         condition_use_rrwp_edge_features: bool = True,
         condition_strict_schema: bool = True,
+        condition_global_graph_enabled: bool = True,
         num_timesteps: int = 1000,
         schedule_type: str = "cosine",
         topology_refinement_mode: str = "gat2",  # none | lightweight | sparse*/gat2* | graphormer
@@ -134,7 +135,7 @@ class DiffusionTrainingConfig:
         prediction_type: str = "epsilon",
         diffusion_training_objective: str = "diffusion",
         min_snr_gamma: float = 5.0,
-        
+
         # LogicNet
         logic_net_enabled: bool = True,
         logic_net_trainable: bool = True,
@@ -160,7 +161,7 @@ class DiffusionTrainingConfig:
         guidance_max_graph_nodes: int = 512,
         guidance_max_key_lock_pairs: int = 2048,
         guidance_max_guidance_elements: int = 2_000_000,
-        
+
         # Training
         epochs: int = 100,
         learning_rate: float = 1e-4,
@@ -191,9 +192,11 @@ class DiffusionTrainingConfig:
         validation_num_samples: int = 8,
         validation_num_diffusion_samples: int = 64,
         validation_fraction: float = 0.1,
+        best_checkpoint_metric: str = "val_diffusion_loss",
+        nonfinite_policy: str = "skip",
         latent_cache_enabled: bool = True,
         latent_cache_max_items: int = 4096,
-        
+
         # Checkpointing
         checkpoint_dir: str = "./checkpoints",
         save_every: int = 10,
@@ -205,16 +208,22 @@ class DiffusionTrainingConfig:
         checkpoint_storage_warning_fraction: float = 0.8,
         checkpoint_storage_cleanup_enabled: bool = True,
         checkpoint_storage_cleanup_target_fraction: float = 0.6,
-        
+
         # Device
         device: str = "auto",
         seed: int = 42,
+        cudnn_benchmark: bool = True,
+        cudnn_deterministic: bool = False,
+        deterministic_algorithms: bool = False,
         distributed_enabled: bool = False,
         distributed_backend: str = "nccl",
         distributed_find_unused_parameters: bool = False,
-        
+
         # Quick mode
         quick: bool = False,
+
+        # Meta
+        experiment_name: str = "diffusion_training",
     ):
         self.data_dir = data_dir
         self.batch_size = batch_size
@@ -237,7 +246,7 @@ class DiffusionTrainingConfig:
         self.num_classes = int(num_classes)
         self.node_feature_dim = int(max(1, node_feature_dim))
         self.edge_feature_dim = int(max(1, edge_feature_dim))
-        
+
         self.vqvae_checkpoint = vqvae_checkpoint
         self.vqvae_hidden_dim = int(max(8, vqvae_hidden_dim))
         self.vqvae_codebook_size = int(max(8, vqvae_codebook_size))
@@ -250,7 +259,7 @@ class DiffusionTrainingConfig:
         )
         self.vqvae_use_coordconv = bool(vqvae_use_coordconv)
         self.vqvae_mrf_penalty_weight = float(max(0.0, vqvae_mrf_penalty_weight))
-        
+
         self.latent_dim = latent_dim
         self.latent_scale_factor = float(latent_scale_factor)
         if not math.isfinite(self.latent_scale_factor) or self.latent_scale_factor <= 0.0:
@@ -342,6 +351,7 @@ class DiffusionTrainingConfig:
         self.condition_reference_hidden_dim = int(max(4, condition_reference_hidden_dim))
         self.condition_use_rrwp_edge_features = bool(condition_use_rrwp_edge_features)
         self.condition_strict_schema = bool(condition_strict_schema)
+        self.condition_global_graph_enabled = bool(condition_global_graph_enabled)
         self.num_timesteps = num_timesteps
         self.schedule_type = schedule_type
         trm = str(topology_refinement_mode).strip().lower()
@@ -429,7 +439,7 @@ class DiffusionTrainingConfig:
                 "directly only for isolated research probes."
             )
         self.min_snr_gamma = float(max(0.0, min_snr_gamma))
-        
+
         self.logic_net_enabled = bool(logic_net_enabled)
         self.logic_net_trainable = bool(logic_net_trainable) and self.logic_net_enabled
         self.logic_learning_rate = (
@@ -474,7 +484,7 @@ class DiffusionTrainingConfig:
         self.guidance_max_graph_nodes = int(max(1, guidance_max_graph_nodes))
         self.guidance_max_key_lock_pairs = int(max(0, guidance_max_key_lock_pairs))
         self.guidance_max_guidance_elements = int(max(1, guidance_max_guidance_elements))
-        
+
         self.epochs = epochs if not quick else 2
         self.learning_rate = learning_rate
         self.optimizer_weight_decay = float(max(0.0, optimizer_weight_decay))
@@ -501,6 +511,24 @@ class DiffusionTrainingConfig:
                 "Expected 'node_sequence' or 'pooled'."
             )
         self.graph_conditioning_mode = gmode
+        if not self.condition_global_graph_enabled:
+            if self.graph_conditioning_mode != "pooled":
+                raise ValueError(
+                    "condition_global_graph_enabled=False requires "
+                    "graph_conditioning_mode='pooled' so the local-only baseline "
+                    "cannot accidentally expose graph tokens."
+                )
+            if self.logic_net_enabled:
+                raise ValueError(
+                    "condition_global_graph_enabled=False currently requires "
+                    "logic_net_enabled=False. Train local/global LogicNet ablations "
+                    "with global graph conditioning enabled."
+                )
+            if self.graph_to_grid_edge_semantics or self.graph_spatial_alignment_weight > 0.0:
+                raise ValueError(
+                    "The local-only baseline cannot enable graph-to-grid edge "
+                    "semantics or graph spatial-alignment loss."
+                )
         self.warmup_epochs = warmup_epochs
         self.logic_loss_ramp_epochs = int(max(1, logic_loss_ramp_epochs))
         self.scheduler_t0 = int(max(1, scheduler_t0))
@@ -521,9 +549,17 @@ class DiffusionTrainingConfig:
         self.validation_num_samples = int(max(1, validation_num_samples))
         self.validation_num_diffusion_samples = int(max(1, validation_num_diffusion_samples))
         self.validation_fraction = float(max(0.0, min(0.5, validation_fraction)))
+        self.best_checkpoint_metric = str(best_checkpoint_metric).strip().lower()
+        if self.best_checkpoint_metric not in {"val_diffusion_loss", "val_total_loss"}:
+            raise ValueError(
+                "best_checkpoint_metric must be 'val_diffusion_loss' or 'val_total_loss'."
+            )
+        self.nonfinite_policy = str(nonfinite_policy).strip().lower()
+        if self.nonfinite_policy not in {"skip", "error"}:
+            raise ValueError("nonfinite_policy must be 'skip' or 'error'.")
         self.latent_cache_enabled = bool(latent_cache_enabled)
         self.latent_cache_max_items = int(max(0, latent_cache_max_items))
-        
+
         self.checkpoint_dir = checkpoint_dir
         self.save_every = save_every
         self.keep_last = int(max(0, keep_last))
@@ -544,12 +580,15 @@ class DiffusionTrainingConfig:
         self.checkpoint_storage_cleanup_target_fraction = float(
             max(0.0, min(1.0, checkpoint_storage_cleanup_target_fraction))
         )
-        
+
         if device == "auto":
             self.device = "cuda" if torch.cuda.is_available() else "cpu"
         else:
             self.device = device
         self.seed = int(seed)
+        self.cudnn_benchmark = bool(cudnn_benchmark)
+        self.cudnn_deterministic = bool(cudnn_deterministic)
+        self.deterministic_algorithms = bool(deterministic_algorithms)
         self.distributed_enabled = bool(distributed_enabled)
         backend = str(distributed_backend).strip().lower()
         if backend not in {"nccl", "gloo"}:
@@ -558,9 +597,10 @@ class DiffusionTrainingConfig:
             )
         self.distributed_backend = backend
         self.distributed_find_unused_parameters = bool(distributed_find_unused_parameters)
-        
+
         self.quick = quick
-    
+        self.experiment_name = str(experiment_name)
+
     def to_dict(self) -> Dict[str, Any]:
         return {k: v for k, v in self.__dict__.items() if not k.startswith('_')}
 
@@ -649,6 +689,7 @@ def diffusion_training_kwargs_from_resolved_config(
         "condition_reference_hidden_dim": stage["condition_reference_hidden_dim"],
         "condition_use_rrwp_edge_features": stage.get("condition_use_rrwp_edge_features", True),
         "condition_strict_schema": stage.get("condition_strict_schema", True),
+        "condition_global_graph_enabled": stage.get("condition_global_graph_enabled", True),
         "num_timesteps": stage["num_timesteps"],
         "schedule_type": stage["schedule_type"],
         "topology_refinement_mode": stage["topology_refinement_mode"],
@@ -744,6 +785,8 @@ def diffusion_training_kwargs_from_resolved_config(
         "validation_num_samples": stage["validation_num_samples"],
         "validation_num_diffusion_samples": stage["validation_num_diffusion_samples"],
         "validation_fraction": stage.get("validation_fraction", 0.1),
+        "best_checkpoint_metric": stage.get("best_checkpoint_metric", "val_diffusion_loss"),
+        "nonfinite_policy": stage.get("nonfinite_policy", "skip"),
         "latent_cache_enabled": stage.get("latent_cache_enabled", True),
         "latent_cache_max_items": stage.get("latent_cache_max_items", 4096),
         "checkpoint_dir": stage["checkpoint_dir"],
@@ -758,10 +801,14 @@ def diffusion_training_kwargs_from_resolved_config(
         "checkpoint_storage_cleanup_target_fraction": runtime["checkpoint_storage_cleanup_target_fraction"],
         "device": runtime["device"],
         "seed": runtime["seed"],
+        "cudnn_benchmark": runtime["cudnn_benchmark"],
+        "cudnn_deterministic": runtime["cudnn_deterministic"],
+        "deterministic_algorithms": runtime["deterministic_algorithms"],
         "distributed_enabled": distributed["enabled"],
         "distributed_backend": distributed["backend"],
         "distributed_find_unused_parameters": distributed["find_unused_parameters"],
         "quick": runtime["quick"],
+        "experiment_name": runtime.get("experiment_name", "diffusion_training"),
     }
 
 
@@ -920,4 +967,3 @@ def build_diffusion_training_config_from_args(args: argparse.Namespace) -> Diffu
             setattr(args, "verbose", bool(resolved["runtime"]["verbose"]))
     legacy_overrides = _legacy_diffusion_overrides_from_args(args)
     return DiffusionTrainingConfig(**{**base_kwargs, **legacy_overrides})
-

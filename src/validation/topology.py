@@ -12,6 +12,27 @@ from typing import Any, Dict, Mapping, Optional, Sequence
 import networkx as nx
 
 
+def _node_disjoint_paths(graph: nx.Graph, source: Any, target: Any) -> int:
+    """Return the node-disjoint path count between *source* and *target*.
+
+    Handles three degenerate cases that cause :func:`nx.node_connectivity` to
+    raise or produce nonsensical results:
+
+    * ``source == target`` — the same node is both endpoints, so there are
+      infinitely many trivial paths; return a sentinel of ``-1`` so callers can
+      distinguish this from a real connectivity value.
+    * No path between the two nodes — return ``0``.
+    * Normal case — delegate to ``nx.node_connectivity``.
+    """
+    if source == target:
+        # Single-room dungeon or self-loop: connectivity is undefined.
+        # Callers should check for this sentinel and skip choke-point analysis.
+        return -1
+    if not nx.has_path(graph, source, target):
+        return 0
+    return int(nx.node_connectivity(graph, source, target))
+
+
 def _role(attrs: Mapping[str, Any]) -> str:
     value = attrs.get("node_type", attrs.get("type", attrs.get("label", "")))
     if hasattr(value, "name"):
@@ -78,14 +99,18 @@ def evaluate_graph_topology_characteristics(
     node_disjoint_path_count: Optional[int] = None
     mandatory_checkpoints: list[Any] = []
     if start_goal_connected:
-        node_disjoint_path_count = int(nx.node_connectivity(physical, start, goal))
-        for node_id in articulation_nodes:
-            if node_id in {start, goal}:
-                continue
-            reduced = physical.copy()
-            reduced.remove_node(node_id)
-            if not nx.has_path(reduced, start, goal):
-                mandatory_checkpoints.append(node_id)
+        raw_ndp = _node_disjoint_paths(physical, start, goal)
+        # -1 sentinel means start == goal (single-room dungeon); treat as N/A.
+        node_disjoint_path_count = None if raw_ndp == -1 else raw_ndp
+        # Only compute choke-points when endpoints are distinct nodes.
+        if start != goal:
+            for node_id in articulation_nodes:
+                if node_id in {start, goal}:
+                    continue
+                reduced = physical.copy()
+                reduced.remove_node(node_id)
+                if not nx.has_path(reduced, start, goal):
+                    mandatory_checkpoints.append(node_id)
 
     checkpoint_set = set(mandatory_checkpoints)
     checkpoint_positions = [

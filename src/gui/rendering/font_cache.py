@@ -8,6 +8,13 @@ _FONT_CACHE: Dict[Tuple[int, str, int, bool, bool], Any] = {}
 _DEFAULT_FONT_CACHE: Dict[Tuple[int, int], Any] = {}
 
 
+def _ensure_initialized(font_module: Any) -> None:
+    get_init = getattr(font_module, "get_init", None)
+    init = getattr(font_module, "init", None)
+    if callable(get_init) and not get_init() and callable(init):
+        init()
+
+
 def get_sys_font(
     pygame: Any,
     name: str = "Arial",
@@ -23,9 +30,19 @@ def get_sys_font(
     key = (id(pygame.font), str(name), int(size), bool(bold), bool(italic))
     font = _FONT_CACHE.get(key)
     if font is None:
-        if not pygame.font.get_init():
-            pygame.font.init()
-        font = pygame.font.SysFont(key[1], key[2], bold=key[3], italic=key[4])
+        _ensure_initialized(pygame.font)
+        if key[3] or key[4]:
+            try:
+                font = pygame.font.SysFont(
+                    key[1],
+                    key[2],
+                    bold=key[3],
+                    italic=key[4],
+                )
+            except TypeError:
+                font = pygame.font.SysFont(key[1], key[2])
+        else:
+            font = pygame.font.SysFont(key[1], key[2])
         _FONT_CACHE[key] = font
     return font
 
@@ -41,8 +58,7 @@ def get_default_font(pygame: Any, size: int) -> Any:
     key = (id(pygame.font), int(size))
     font = _DEFAULT_FONT_CACHE.get(key)
     if font is None:
-        if not pygame.font.get_init():
-            pygame.font.init()
+        _ensure_initialized(pygame.font)
         font = pygame.font.Font(None, key[1])
         _DEFAULT_FONT_CACHE[key] = font
     return font

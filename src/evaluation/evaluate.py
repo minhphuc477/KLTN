@@ -86,11 +86,14 @@ def evaluate_solvability(graphs: List[nx.DiGraph]) -> Dict[str, Any]:
     path_lengths: List[int] = []
 
     for g in graphs:
-        canonical = normalize_validation_result(validator.validate(g))
-        if canonical.is_solvable:
-            solvable += 1
-            if canonical.path_length > 0:
-                path_lengths.append(canonical.path_length)
+        try:
+            canonical = normalize_validation_result(validator.validate(g))
+            if canonical.is_solvable:
+                solvable += 1
+                if canonical.path_length > 0:
+                    path_lengths.append(canonical.path_length)
+        except Exception as exc:
+            logger.warning("Graph validation failed during evaluate_solvability: %s", exc)
 
     stats = {
         'total': total,
@@ -102,7 +105,6 @@ def evaluate_solvability(graphs: List[nx.DiGraph]) -> Dict[str, Any]:
 
 
 def evaluate_map_elites(graphs: List[nx.DiGraph]) -> Dict[str, float]:
-    """Run a small MAP-Elites analysis on a set of graphs."""
     extractor = LinearityLeniencyExtractor()
     archive = EliteArchive(feature_dims=2, cells_per_dim=10)
     validator = ExternalValidator()

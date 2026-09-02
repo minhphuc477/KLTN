@@ -140,6 +140,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--run-pcbs", action="store_true")
+    parser.add_argument(
+        "--no-save-checkpoint",
+        action="store_true",
+        help="Skip saving the trained model checkpoint (useful for CI dry-runs).",
+    )
     args = parser.parse_args(argv)
 
     set_reproducible_seed(args.seed)
@@ -158,6 +163,31 @@ def main(argv: Sequence[str] | None = None) -> int:
         dry_run=args.dry_run,
     )
     num_generate = 4 if args.dry_run else int(args.num_generate)
+
+    # Persist the trained model so it can be reloaded for evaluation / ablations
+    # without rerunning the full training loop.
+    if not args.no_save_checkpoint and not args.dry_run:
+        args.output_dir.mkdir(parents=True, exist_ok=True)
+        ckpt_path = args.output_dir / "llm_checkpoint.pth"
+        torch.save(
+            {
+                "model_state_dict": model.state_dict(),
+                "hparams": {
+                    "seq_len": int(tokens.shape[1]),
+                    "vocab_size": 44,
+                    "n_embd": args.n_embd,
+                    "n_layer": args.n_layer,
+                    "n_head": args.n_head,
+                    "epochs": args.epochs,
+                    "batch_size": args.batch_size,
+                    "learning_rate": args.learning_rate,
+                    "seed": args.seed,
+                },
+            },
+            ckpt_path,
+        )
+        print(f"Saved LLM checkpoint -> {ckpt_path}")
+
     sampled = generate_tokens(
         model,
         num_samples=num_generate,

@@ -33,8 +33,23 @@ def _tile_targets(real_maps: torch.Tensor, *, num_classes: int, device: torch.de
     else:
         raise ValueError(f"Cannot derive tile targets from shape {tuple(real_maps.shape)}.")
     if targets.dtype.is_floating_point:
-        max_value = float(targets.detach().max().item()) if targets.numel() else 0.0
-        targets = torch.round(targets * float(num_classes - 1)) if max_value <= 1.0 else torch.round(targets)
+        if targets.numel() == 0:
+            return targets.to(device=device, dtype=torch.long)
+        max_value = float(targets.detach().max().item())
+        min_value = float(targets.detach().min().item())
+        if max_value <= 1.0 and min_value < 0.0:
+            # Tensor is in the [-1, 1] range emitted by VQ-VAE dataloaders
+            # with normalize=True.  Naively multiplying by (num_classes - 1)
+            # maps the negative half to negative indices, which .clamp(0, ...)
+            # would silently collapse to class 0 — destroying half the palette.
+            # De-normalise to [0, 1] first, then scale to class indices.
+            targets = (targets + 1.0) / 2.0
+        elif max_value > 1.0:
+            # Already integer-valued or in raw tile-ID range; round and clamp.
+            targets = torch.round(targets)
+        else:
+            # max_value in (0, 1] and min >= 0: standard [0, 1] normalisation.
+            targets = torch.round(targets * float(num_classes - 1))
     return targets.to(device=device, dtype=torch.long).clamp(0, int(num_classes) - 1)
 
 

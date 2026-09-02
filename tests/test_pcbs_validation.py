@@ -152,6 +152,49 @@ def test_evaluate_astar_vs_pcbs_separates_failed_trajectory_from_solution_path()
     }
 
 
+def test_pcbs_is_not_run_without_a_hard_oracle_solution(monkeypatch) -> None:
+    from src.evaluation import pcbs_validation as module
+
+    monkeypatch.setattr(
+        module,
+        "run_astar_oracle",
+        lambda *_args, **_kwargs: {
+            "success": False,
+            "path": [],
+            "path_length": 0,
+            "states_explored": 12,
+            "status": "no_path",
+            "termination_status": "exhausted",
+            "proof_status": "no_path_proof",
+            "proven_unsolvable": True,
+            "indeterminate": False,
+            "failure_reason": "complete frontier exhaustion",
+            "time_ms": 1.0,
+        },
+    )
+
+    class _UnexpectedPCBS:
+        def __init__(self, *_args, **_kwargs):
+            raise AssertionError("P-CBS must not run without a hard-oracle route")
+
+    monkeypatch.setattr(module, "PersonaDrivenCognitiveBoundedSearch", _UnexpectedPCBS)
+
+    result = module.evaluate_astar_vs_pcbs(
+        np.array(
+            [
+                [2, 2, 2, 2],
+                [2, 21, 22, 2],
+                [2, 2, 2, 2],
+            ],
+            dtype=np.int32,
+        ),
+    )
+
+    assert result["pcbs"]["status"] == "not_run_oracle_no_path_proof"
+    assert result["pcbs"]["states_explored"] == 0
+    assert result["pcbs"]["pcbs_outcome_class"] == "oracle_no_path_proven"
+
+
 def test_evaluate_astar_vs_pcbs_uses_calibration_artifact(tmp_path) -> None:
     grid = np.array(
         [

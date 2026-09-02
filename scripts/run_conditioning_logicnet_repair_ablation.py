@@ -177,7 +177,7 @@ def validate_execute_checkpoints(
         return payload_cache[path]
 
     component_keys = {
-        "vqvae_checkpoint": ("vqvae_state_dict",),
+        "vqvae_checkpoint": ("vqvae_state_dict", "model_state_dict"),
         "diffusion_checkpoint": ("ema_diffusion_state_dict", "diffusion_state_dict"),
         "logic_net_checkpoint": ("ema_logic_net_state_dict", "logic_net_state_dict"),
     }
@@ -700,8 +700,22 @@ def execute_protocol(
     rows: List[Dict[str, Any]] = []
     visual_grids: List[Tuple[str, np.ndarray]] = []
     pipeline_cache: Dict[Tuple[Any, ...], NeuralSymbolicDungeonPipeline] = {}
+    partial_csv = args.output / "conditioning_logicnet_repair_rows.partial.csv"
+    computed_keys: set = set()
+    if partial_csv.exists():
+        try:
+            with partial_csv.open("r", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    rows.append(row)
+                    computed_keys.add((str(row.get("variant")), int(row.get("seed", 0))))
+        except Exception:
+            pass
+
     for seed in _parse_seeds(args.seeds):
         for variant in variants:
+            if (variant.name, int(seed)) in computed_keys:
+                continue
             pipeline = get_or_create_pipeline(
                 pipeline_cache,
                 resolved_config=resolved,
@@ -712,63 +726,80 @@ def execute_protocol(
             )
             pipeline.runtime_diagnostics = {}
             started = time.perf_counter()
-            result = pipeline.generate_dungeon(
-                generate_topology=True,
-                seed=int(seed),
-                num_rooms=int(args.num_rooms or topology_kwargs["num_rooms"]),
-                population_size=int(args.population_size or topology_kwargs["population_size"]),
-                generations=int(args.generations or topology_kwargs["generations"]),
-                num_diffusion_steps=int(args.num_diffusion_steps),
-                logic_guidance_scale=float(args.logic_guidance_scale if variant.logic_enabled else 0.0),
-                apply_repair=bool(variant.repair_enabled),
-                use_topological_positional_encoding=(variant.conditioning != "no_graph_tokens"),
-                enable_map_elites=False,
-                batch_independent_rooms=not bool(args.disable_batch_independent_rooms),
-                max_batch_size=int(args.max_batch_size),
-            )
-            result.metrics["ablation_wall_time_sec"] = float(time.perf_counter() - started)
-            result.metrics["ablation_pipeline_cache_size"] = int(len(pipeline_cache))
-            raw_result, raw_grid = _raw_diffusion_result(pipeline, result)
-            pre_result, pre_grid = _pre_repair_result(pipeline, result)
-            raw_eval, raw_error = _safe_evaluate(
-                raw_result,
-                persona=str(args.persona),
-                timeout_astar=int(args.timeout_astar),
-                timeout_pcbs=int(args.timeout_pcbs),
-                seed=int(seed),
-            )
-            pre_eval, pre_error = _safe_evaluate(
-                pre_result,
-                persona=str(args.persona),
-                timeout_astar=int(args.timeout_astar),
-                timeout_pcbs=int(args.timeout_pcbs),
-                seed=int(seed),
-            )
-            post_eval, post_error = _safe_evaluate(
-                result,
-                persona=str(args.persona),
-                timeout_astar=int(args.timeout_astar),
-                timeout_pcbs=int(args.timeout_pcbs),
-                seed=int(seed),
-            )
-            row = _row_for_result(
-                variant=variant,
-                seed=int(seed),
-                result=result,
-                raw_result=raw_result,
-                pre_result=pre_result,
-                raw_eval=raw_eval,
-                pre_eval=pre_eval,
-                post_eval=post_eval,
-                raw_eval_error=raw_error,
-                pre_eval_error=pre_error,
-                post_eval_error=post_error,
-            )
+            try:
+                result = pipeline.generate_dungeon(
+                    generate_topology=True,
+                    seed=int(seed),
+                    num_rooms=int(args.num_rooms or topology_kwargs["num_rooms"]),
+                    population_size=int(args.population_size or topology_kwargs["population_size"]),
+                    generations=int(args.generations or topology_kwargs["generations"]),
+                    num_diffusion_steps=int(args.num_diffusion_steps),
+                    logic_guidance_scale=float(args.logic_guidance_scale if variant.logic_enabled else 0.0),
+                    apply_repair=bool(variant.repair_enabled),
+                    use_topological_positional_encoding=(variant.conditioning != "no_graph_tokens"),
+                    enable_map_elites=False,
+                    batch_independent_rooms=not bool(args.disable_batch_independent_rooms),
+                    max_batch_size=int(args.max_batch_size),
+                )
+                result.metrics["ablation_wall_time_sec"] = float(time.perf_counter() - started)
+                result.metrics["ablation_pipeline_cache_size"] = int(len(pipeline_cache))
+                raw_result, raw_grid = _raw_diffusion_result(pipeline, result)
+                pre_result, pre_grid = _pre_repair_result(pipeline, result)
+                raw_eval, raw_error = _safe_evaluate(
+                    raw_result,
+                    persona=str(args.persona),
+                    timeout_astar=int(args.timeout_astar),
+                    timeout_pcbs=int(args.timeout_pcbs),
+                    seed=int(seed),
+                )
+                pre_eval, pre_error = _safe_evaluate(
+                    pre_result,
+                    persona=str(args.persona),
+                    timeout_astar=int(args.timeout_astar),
+                    timeout_pcbs=int(args.timeout_pcbs),
+                    seed=int(seed),
+                )
+                post_eval, post_error = _safe_evaluate(
+                    result,
+                    persona=str(args.persona),
+                    timeout_astar=int(args.timeout_astar),
+                    timeout_pcbs=int(args.timeout_pcbs),
+                    seed=int(seed),
+                )
+                row = _row_for_result(
+                    variant=variant,
+                    seed=int(seed),
+                    result=result,
+                    raw_result=raw_result,
+                    pre_result=pre_result,
+                    raw_eval=raw_eval,
+                    pre_eval=pre_eval,
+                    post_eval=post_eval,
+                    raw_eval_error=raw_error,
+                    pre_eval_error=pre_error,
+                    post_eval_error=post_error,
+                )
+                if bool(args.write_visual_sheet):
+                    visual_grids.append((f"{variant.name} seed={seed} raw", raw_grid))
+                    visual_grids.append((f"{variant.name} seed={seed} pre", pre_grid))
+                    visual_grids.append((f"{variant.name} seed={seed} post", np.asarray(result.dungeon_grid, dtype=np.int32)))
+            except Exception as e:
+                row = {
+                    "variant": variant.name,
+                    "conditioning": variant.conditioning,
+                    "repair_enabled": bool(variant.repair_enabled),
+                    "logic_enabled": bool(variant.logic_enabled),
+                    "seed": int(seed),
+                    "notes": f"Generation failed: {e}",
+                    "generation_time_sec": float(time.perf_counter() - started),
+                    "raw_oracle_solved": False,
+                    "pre_oracle_solved": False,
+                    "post_oracle_solved": False,
+                    "raw_pcbs_solved": False,
+                    "pre_pcbs_solved": False,
+                    "post_pcbs_solved": False,
+                }
             rows.append(row)
-            if bool(args.write_visual_sheet):
-                visual_grids.append((f"{variant.name} seed={seed} raw", raw_grid))
-                visual_grids.append((f"{variant.name} seed={seed} pre", pre_grid))
-                visual_grids.append((f"{variant.name} seed={seed} post", np.asarray(result.dungeon_grid, dtype=np.int32)))
             _write_csv(args.output / "conditioning_logicnet_repair_rows.partial.csv", rows)
     return rows, visual_grids
 

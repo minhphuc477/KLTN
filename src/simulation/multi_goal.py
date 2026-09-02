@@ -234,7 +234,7 @@ class MultiGoalPathfinder:
         grid = self.env.original_grid
         height, width = grid.shape
         current_row, current_col = state.position
-        transitions: List[Tuple[Position, int, float, Optional[str]]] = []
+        transitions: List[Tuple[Position, int, float, Any]] = []
 
         for delta_row, delta_col in ((-1, 0), (1, 0), (0, -1), (0, 1)):
             row, col = current_row + delta_row, current_col + delta_col
@@ -305,13 +305,13 @@ class MultiGoalPathfinder:
                             tuple(destination),
                             int(grid[row, col]),
                             float(base_cost),
-                            str(edge_type),
+                            edge_type,
                         )
                     )
 
         for target_pos, target_tile, base_cost, edge_type in transitions:
             transition_state = state
-            if edge_type not in {None, "stair"}:
+            if edge_type is not None and edge_type != "stair":
                 allowed, transition_state = (
                     self._transition_solver.apply_graph_edge_transition(
                         state,

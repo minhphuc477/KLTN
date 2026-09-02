@@ -15,6 +15,11 @@ from src.evaluation.search_benchmark_utils import (
     run_astar_oracle,
 )
 from src.simulation.validator import ZeldaLogicEnv
+from src.simulation.search_status import (
+    proven_unsolvable_from_outcome,
+    search_outcome_is_indeterminate,
+    search_proof_status,
+)
 from src.evaluation.pcbs_telemetry_calibration import _path_efficiency
 
 
@@ -28,10 +33,24 @@ def _simple_grid() -> np.ndarray:
 
 def test_oracle_status_normalizes_common_failure_modes():
     assert oracle_status_from_outcome(True, "") == "solved"
-    assert oracle_status_from_outcome(False, "Timeout: explored 100 states") == "timeout"
-    assert oracle_status_from_outcome(False, "No path: all reachable states explored") == "no_path"
-    assert oracle_status_from_outcome(False, "No goal (TRIFORCE) found in map") == "invalid_map"
+    assert oracle_status_from_outcome(False, "Timeout: explored 100 states") == "failed"
+    assert oracle_status_from_outcome(False, "No path: all reachable states explored") == "failed"
+    assert oracle_status_from_outcome(False, "No goal (TRIFORCE) found in map") == "failed"
     assert oracle_status_from_outcome(False, "misc error") == "failed"
+    assert oracle_status_from_outcome(False, "localized message", "budget_exhausted") == "timeout"
+    assert oracle_status_from_outcome(False, "localized message", "exhausted") == "no_path"
+    assert oracle_status_from_outcome(False, "localized message", "invalid") == "invalid_map"
+    assert oracle_status_from_outcome(False, "localized message", "depth_limit") == "inconclusive"
+
+
+def test_search_proof_requires_structured_termination_evidence():
+    assert search_proof_status(True, "solved") == "solution_witness"
+    assert search_proof_status(False, "exhausted") == "no_path_proof"
+    assert proven_unsolvable_from_outcome(False, "exhausted") is True
+    for status in ("budget_exhausted", "depth_limit", "incomplete", "route_replay_failed"):
+        assert proven_unsolvable_from_outcome(False, status) is False
+        assert search_outcome_is_indeterminate(False, status) is True
+    assert search_proof_status(True, "budget_exhausted") == "inconsistent"
 
 
 def test_path_efficiency_ratio_is_bounded_and_directionally_consistent():
@@ -85,9 +104,14 @@ def test_run_astar_oracle_reports_solved_status_on_simple_grid():
     assert payload["path_length"] > 0
     assert payload["states_explored"] > 0
     assert payload["states_explored"] <= payload["state_budget"]
+    assert payload["termination_status"] == "solved"
+    assert payload["proof_status"] == "solution_witness"
+    assert payload["route_replay_status"] == "verified"
+    assert payload["proven_unsolvable"] is False
+    assert payload["indeterminate"] is False
 
 
-def test_astar_fallback_shares_one_state_budget() -> None:
+def test_astar_frontier_exhaustion_is_not_rerun_as_dijkstra() -> None:
     grid = _simple_grid()
     grid[2, 1:-1] = int(SEMANTIC_PALETTE["WALL"])
     env = ZeldaLogicEnv(grid, render_mode=False)
@@ -96,8 +120,61 @@ def test_astar_fallback_shares_one_state_budget() -> None:
 
     assert payload["success"] is False
     assert payload["states_explored"] <= 40
-    assert (
-        payload["primary_states_explored"]
-        + payload["fallback_states_explored"]
-        == payload["states_explored"]
+    assert payload["termination_status"] == "exhausted"
+    assert payload["proof_status"] == "no_path_proof"
+    assert payload["proven_unsolvable"] is True
+    assert payload["indeterminate"] is False
+    assert payload["fallback_attempted"] is False
+    assert payload["fallback_states_explored"] == 0
+
+
+def test_astar_oracle_rejects_an_unreplayable_solution(monkeypatch) -> None:
+    from src.evaluation import search_benchmark_utils as module
+
+    monkeypatch.setattr(
+        module.StateSpaceAStar,
+        "verify_position_path",
+        lambda *_args, **_kwargs: (False, "synthetic replay failure", None, None),
     )
+
+    payload = run_astar_oracle(
+        ZeldaLogicEnv(_simple_grid(), render_mode=False),
+        timeout=20_000,
+    )
+
+    assert payload["success"] is False
+    assert payload["termination_status"] == "route_replay_failed"
+    assert payload["proof_status"] == "execution_error"
+    assert payload["proven_unsolvable"] is False
+    assert payload["indeterminate"] is True
+    assert payload["route_replay_status"] == "failed"
+
+
+def test_cbs_fitness_rejects_timeout_without_running_pcbs(monkeypatch) -> None:
+    from src.evaluation import cbs_fitness as cbs_fitness_module
+
+    monkeypatch.setattr(
+        cbs_fitness_module,
+        "run_astar_oracle",
+        lambda *_args, **_kwargs: {
+            "success": False,
+            "path": [],
+            "states_explored": 25,
+            "status": "timeout",
+            "failure_reason": "state budget exhausted",
+        },
+    )
+
+    class _UnexpectedPCBS:
+        def __init__(self, *_args, **_kwargs):
+            raise AssertionError("P-CBS must not run after an indeterminate hard oracle")
+
+    monkeypatch.setattr(cbs_fitness_module, "CognitiveBoundedSearch", _UnexpectedPCBS)
+
+    metrics = cbs_fitness_module.compute_cbs_fitness(_simple_grid())
+
+    assert metrics["fitness"] == -10.0
+    assert metrics["oracle_status"] == "timeout"
+    assert metrics["oracle_indeterminate"] is True
+    assert metrics["solvable_astar"] is False
+    assert math.isnan(metrics["confusion_ratio"])

@@ -2,9 +2,58 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, List, Optional
+from collections.abc import Iterable, Mapping
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from src.core.definitions import parse_edge_type_tokens, select_primary_edge_type
+
+
+def graph_successors(graph: Any, node: Any) -> Iterable[Any]:
+    """Return legal forward neighbors for directed or undirected graphs."""
+    if graph is None or not graph.has_node(node):
+        return ()
+    if bool(graph.is_directed()):
+        return graph.successors(node)
+    return graph.neighbors(node)
+
+
+def graph_predecessors(graph: Any, node: Any) -> Iterable[Any]:
+    """Return legal reverse-search neighbors for directed or undirected graphs."""
+    if graph is None or not graph.has_node(node):
+        return ()
+    if bool(graph.is_directed()):
+        return graph.predecessors(node)
+    return graph.neighbors(node)
+
+
+def _has_implied_reverse(edge_data: Any) -> bool:
+    """Recognize converter-generated reverse arcs, including multigraph data."""
+    if not isinstance(edge_data, Mapping):
+        return False
+    metadata = edge_data.get("metadata")
+    if isinstance(metadata, Mapping) and bool(metadata.get("implied_reverse", False)):
+        return True
+    return any(_has_implied_reverse(value) for value in edge_data.values())
+
+
+def graph_edge_state_key(graph: Any, source: Any, target: Any) -> Tuple[Any, Any]:
+    """Return the persistent opened-state identity of one graph edge.
+
+    Genuine directed arcs remain distinct. Undirected edges and converter-
+    generated reverse arcs for bidirectional mission edges share one identity.
+    """
+    ordered = (source, target)
+    if graph is None:
+        return ordered
+    is_directed = bool(graph.is_directed())
+    shares_reverse_identity = not is_directed
+    if is_directed:
+        forward = graph.get_edge_data(source, target, {}) or {}
+        reverse = graph.get_edge_data(target, source, {}) or {}
+        shares_reverse_identity = _has_implied_reverse(forward) or _has_implied_reverse(reverse)
+    if not shares_reverse_identity:
+        return ordered
+    return tuple(sorted(ordered, key=lambda value: (type(value).__name__, str(value))))
 
 
 def edge_constraints_from_data(edge_data: Optional[Dict[str, Any]]) -> List[str]:
@@ -93,5 +142,5 @@ def can_traverse_edge_type(
         if strict_original_mode:
             current_room = get_room_for_position(state.position)
             return is_room_cleared(current_room, state)
-        return True
+        return False
     return False

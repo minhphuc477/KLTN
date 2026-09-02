@@ -121,7 +121,7 @@ class LocalStreamEncoder(nn.Module):
         output_dim: Output conditioning dimension
         num_neighbors: Number of neighbor directions (default: 4 for N,S,E,W)
     """
-    
+
     def __init__(
         self,
         latent_dim: int = 64,
@@ -131,12 +131,12 @@ class LocalStreamEncoder(nn.Module):
         boundary_dim: int = 16,
     ):
         super().__init__()
-        
+
         self.latent_dim = latent_dim
         self.hidden_dim = hidden_dim
         self.output_dim = output_dim
         self.num_neighbors = num_neighbors
-        
+
         # Neighbor encoders (one per direction)
         self.neighbor_encoders = nn.ModuleDict({
             'N': nn.Linear(latent_dim, hidden_dim),
@@ -144,7 +144,7 @@ class LocalStreamEncoder(nn.Module):
             'E': nn.Linear(latent_dim, hidden_dim),
             'W': nn.Linear(latent_dim, hidden_dim),
         })
-        
+
         # Boundary constraint encoder
         # Encodes which boundaries must have doors/connections
         self.boundary_encoder = nn.Sequential(
@@ -152,14 +152,14 @@ class LocalStreamEncoder(nn.Module):
             nn.ReLU(),
             nn.Linear(boundary_dim, hidden_dim),
         )
-        
+
         # Position encoder (row, col in dungeon layout)
         self.position_encoder = nn.Sequential(
             nn.Linear(2, 32),
             nn.ReLU(),
             nn.Linear(32, hidden_dim),
         )
-        
+
         # Fusion MLP
         # Input: 4 neighbors + boundary + position
         fusion_input_dim = hidden_dim * (num_neighbors + 2)
@@ -173,7 +173,7 @@ class LocalStreamEncoder(nn.Module):
             nn.ReLU(),
             nn.Linear(hidden_dim, output_dim),
         )
-        
+
         # Learnable null token for missing neighbors
         self.null_token = nn.Parameter(torch.zeros(latent_dim))
         nn.init.normal_(self.null_token, std=0.02)
@@ -216,7 +216,7 @@ class LocalStreamEncoder(nn.Module):
             return edge.mean(dim=1)
 
         return latent.flatten(1, -2).mean(dim=1)
-    
+
     def forward(
         self,
         neighbor_latents: Dict[str, Optional[Tensor]],
@@ -258,16 +258,16 @@ class LocalStreamEncoder(nn.Module):
             raise ValueError(
                 f"Boundary batch {boundary_batch} does not match position batch {batch_size}."
             )
-        
+
         # Encode each neighbor
         neighbor_features = []
         for direction in ['N', 'S', 'E', 'W']:
             latent = neighbor_latents.get(direction)
-            
+
             if latent is None:
                 # Use null token
                 latent = self.null_token.unsqueeze(0).expand(batch_size, -1)
-            
+
             # Pool the boundary-facing edge of spatial latents if needed.
             if latent.dim() > 2:
                 latent = self._pool_neighbor_latent(latent, direction)
@@ -289,25 +289,25 @@ class LocalStreamEncoder(nn.Module):
                 device=module_device,
                 dtype=module_dtype,
             )
-            
+
             encoded = self.neighbor_encoders[direction](latent)
             neighbor_features.append(encoded)
-        
+
         # Encode boundary constraints
         boundary_feat = self.boundary_encoder(boundary_constraints)
-        
+
         # Encode position
         position_feat = self.position_encoder(position.float())
-        
+
         # Concatenate all features
         all_features = torch.cat(
             neighbor_features + [boundary_feat, position_feat],
             dim=-1
         )
-        
+
         # Fuse into output conditioning
         c_local = self.fusion(all_features)
-        
+
         return c_local
 
 
@@ -428,7 +428,7 @@ class FallbackGNN(nn.Module):
     Simple fallback GNN when torch_geometric is not available.
     Uses sparse edge-index message passing.
     """
-    
+
     def __init__(
         self,
         node_dim: int,
@@ -437,12 +437,12 @@ class FallbackGNN(nn.Module):
         num_layers: int = 3,
     ):
         super().__init__()
-        
+
         self.layers = nn.ModuleList()
-        
+
         # Input projection
         self.input_proj = nn.Linear(node_dim, hidden_dim)
-        
+
         # Message passing layers
         for _ in range(num_layers):
             self.layers.append(nn.Sequential(
@@ -450,10 +450,10 @@ class FallbackGNN(nn.Module):
                 nn.LayerNorm(hidden_dim),
                 nn.ReLU(),
             ))
-        
+
         # Output projection
         self.output_proj = nn.Linear(hidden_dim, output_dim)
-    
+
     def forward(
         self,
         node_features: Tensor,
@@ -500,7 +500,7 @@ class FallbackGNN(nn.Module):
             # Concatenate self and neighbor
             combined = torch.cat([h, neighbor_sum], dim=-1)
             h = layer(combined) + h  # Residual
-        
+
         return self.output_proj(h)
 
 
@@ -521,7 +521,7 @@ class GlobalStreamEncoder(nn.Module):
         num_layers: Number of GNN layers
         gnn_type: Type of GNN ('gcn', 'gat', 'sage', or 'gps')
     """
-    
+
     def __init__(
         self,
         node_feature_dim: int = GRAPH_NODE_FEATURE_DIM,
@@ -547,12 +547,16 @@ class GlobalStreamEncoder(nn.Module):
         self.use_rrwp_edge_features = bool(use_rrwp_edge_features)
         self.strict_schema = bool(strict_schema)
         self.current_node_distance_dim = int(max(1, current_node_distance_dim))
-        self.gnn_type = str(gnn_type).strip().lower()
-        if self.gnn_type not in {"gcn", "gat", "sage", "gps"}:
+        gnn_type = str(gnn_type).strip().lower()
+        if gnn_type == "gat2":
+            gnn_type = "gat"
+        self.gnn_type = gnn_type
+
+        if self.gnn_type not in {"gcn", "gat", "gat2", "sage", "gps", "gin"}:
             raise ValueError(
-                f"Unsupported gnn_type={gnn_type!r}. Expected 'gcn', 'gat', 'sage', or 'gps'."
+                f"Unsupported gnn_type={gnn_type!r}. Expected 'gcn', 'gat', 'gat2', 'sage', 'gps', or 'gin'."
             )
-        if self.use_rrwp_edge_features and self.gnn_type in {"gcn", "sage"}:
+        if self.use_rrwp_edge_features and self.gnn_type in {"gcn", "sage", "gin"}:
             raise ValueError(
                 "RRWP edge features require gnn_type='gat' or gnn_type='gps'. "
                 f"Got gnn_type={gnn_type!r} with use_rrwp_edge_features=True."
@@ -572,8 +576,8 @@ class GlobalStreamEncoder(nn.Module):
             )
         elif self.use_torch_geometric:
             self._build_torch_geometric_gnn(
-                node_feature_dim, edge_feature_dim, 
-                hidden_dim, output_dim, num_layers, 
+                node_feature_dim, edge_feature_dim,
+                hidden_dim, output_dim, num_layers,
                 gnn_type, num_heads
             )
         else:
@@ -583,7 +587,7 @@ class GlobalStreamEncoder(nn.Module):
                 output_dim=output_dim,
                 num_layers=num_layers,
             )
-        
+
         # TPE (Topological Positional Encoding) projection
         self.tpe_proj = nn.Linear(int(GRAPH_TPE_DIM), hidden_dim)
         self.edge_rrwp_proj = nn.Linear(int(GRAPH_TPE_DIM), hidden_dim) if self.use_rrwp_edge_features else None
@@ -596,7 +600,7 @@ class GlobalStreamEncoder(nn.Module):
             nn.LayerNorm(output_dim),
             nn.ReLU(),
         )
-    
+
     def _build_torch_geometric_gnn(
         self,
         node_feature_dim: int,
@@ -616,10 +620,10 @@ class GlobalStreamEncoder(nn.Module):
         """
         self.node_encoder = nn.Linear(node_feature_dim, hidden_dim)
         self.edge_encoder = nn.Linear(edge_feature_dim, hidden_dim)  # Phase 3A
-        
+
         self.gnn_layers = nn.ModuleList()
         self.layer_norms = nn.ModuleList()
-        
+
         for _i in range(num_layers):
             if gnn_type == 'gat':
                 # Phase 3A: GATv2Conv supports edge features natively
@@ -636,10 +640,10 @@ class GlobalStreamEncoder(nn.Module):
                 layer = SAGEConv(hidden_dim, hidden_dim)
             else:  # gcn
                 layer = GCNConv(hidden_dim, hidden_dim)
-            
+
             self.gnn_layers.append(layer)
             self.layer_norms.append(nn.LayerNorm(hidden_dim))
-        
+
         self.node_output = nn.Linear(hidden_dim, output_dim)
 
     def _build_gps_gnn(
@@ -1003,7 +1007,7 @@ class GlobalStreamEncoder(nn.Module):
                 aligned[:rows] = tensor[:rows].to(dtype=torch.bool)
             return aligned
         return tensor.to(dtype=torch.bool)
-    
+
     def forward(
         self,
         node_features: Tensor,
@@ -1070,7 +1074,7 @@ class GlobalStreamEncoder(nn.Module):
             )
         else:
             h = self.gnn(node_features, edge_index)
-        
+
         aux_features = torch.zeros(h.shape[0], self.hidden_dim, device=h.device, dtype=h.dtype)
         if tpe is not None:
             aux_features = aux_features + self.tpe_proj(tpe)
@@ -1082,13 +1086,13 @@ class GlobalStreamEncoder(nn.Module):
         h = self.output_proj(torch.cat([h, aux_features], dim=-1))
         if prepared_node_mask is not None:
             h = h * prepared_node_mask.to(device=h.device, dtype=h.dtype).unsqueeze(-1)
-        
+
         # Return specific node embedding or all
         if node_idx is not None:
             return h[node_idx:node_idx+1]
-        
+
         return h
-    
+
     def _forward_torch_geometric(
         self,
         node_features: Tensor,
@@ -1103,7 +1107,7 @@ class GlobalStreamEncoder(nn.Module):
         can distinguish edge types (key_locked, boss_locked, stair, etc.).
         """
         h = self.node_encoder(node_features)
-        
+
         # Encode edge features if available
         edge_attr = None
         if edge_features is not None and hasattr(self, 'edge_encoder'):
@@ -1127,7 +1131,7 @@ class GlobalStreamEncoder(nn.Module):
                 rrwp_attr = None
             if rrwp_attr is not None:
                 edge_attr = rrwp_attr if edge_attr is None else edge_attr + rrwp_attr
-        
+
         for layer, norm in zip(self.gnn_layers, self.layer_norms):
             if edge_attr is not None and isinstance(layer, GATv2Conv):
                 h_new = layer(h, edge_index, edge_attr=edge_attr)
@@ -1135,7 +1139,7 @@ class GlobalStreamEncoder(nn.Module):
                 h_new = layer(h, edge_index)
             h_new = norm(h_new)
             h = F.relu(h_new) + h  # Residual connection
-        
+
         return self.node_output(h)
 
     def _forward_gps(
@@ -1436,7 +1440,7 @@ class CrossAttentionFusion(nn.Module):
         num_heads: Number of attention heads
         dropout: Dropout probability
     """
-    
+
     def __init__(
         self,
         local_dim: int = 256,
@@ -1446,22 +1450,22 @@ class CrossAttentionFusion(nn.Module):
         dropout: float = 0.1,
     ):
         super().__init__()
-        
+
         self.local_dim = local_dim
         self.global_dim = global_dim
         self.output_dim = output_dim
         self.num_heads = num_heads
         self.head_dim = output_dim // num_heads
-        
+
         assert output_dim % num_heads == 0, "output_dim must be divisible by num_heads"
-        
+
         # Query from local
         self.query_proj = nn.Linear(local_dim, output_dim)
-        
+
         # Key and Value from global
         self.key_proj = nn.Linear(global_dim, output_dim)
         self.value_proj = nn.Linear(global_dim, output_dim)
-        
+
         # Output projection
         self.output_proj = nn.Linear(output_dim, output_dim)
         self.residual_proj = (
@@ -1469,11 +1473,11 @@ class CrossAttentionFusion(nn.Module):
             if local_dim == output_dim
             else nn.Linear(local_dim, output_dim)
         )
-        
+
         # Layer norm and dropout
         self.layer_norm = nn.LayerNorm(output_dim)
         self.dropout = nn.Dropout(dropout)
-        
+
         # Feed-forward network
         self.ffn = nn.Sequential(
             nn.Linear(output_dim, output_dim * 4),
@@ -1483,7 +1487,7 @@ class CrossAttentionFusion(nn.Module):
             nn.Dropout(dropout),
         )
         self.ffn_norm = nn.LayerNorm(output_dim)
-    
+
     def forward(
         self,
         c_local: Tensor,
@@ -1502,13 +1506,13 @@ class CrossAttentionFusion(nn.Module):
             Fused conditioning [B, output_dim]
         """
         B = c_local.shape[0]
-        
+
         # Ensure c_global has batch dimension
         if c_global.dim() == 2:
             c_global = c_global.unsqueeze(0).expand(B, -1, -1)
-        
+
         N = c_global.shape[1]
-        
+
         # Add sequence dimension to local (single query)
         c_local = c_local.unsqueeze(1)  # [B, 1, local_dim]
 
@@ -1520,17 +1524,17 @@ class CrossAttentionFusion(nn.Module):
             c_out = self.layer_norm(residual)
             c_out = self.ffn_norm(c_out + self.ffn(c_out))
             return c_out.squeeze(1)
-        
+
         # Project Q, K, V
         Q = self.query_proj(c_local)  # [B, 1, output_dim]
         K = self.key_proj(c_global)    # [B, N, output_dim]
         V = self.value_proj(c_global)  # [B, N, output_dim]
-        
+
         # Reshape for multi-head attention
         Q = Q.reshape(B, 1, self.num_heads, self.head_dim).transpose(1, 2).contiguous()  # [B, H, 1, D]
         K = K.reshape(B, N, self.num_heads, self.head_dim).transpose(1, 2).contiguous()  # [B, H, N, D]
         V = V.reshape(B, N, self.num_heads, self.head_dim).transpose(1, 2).contiguous()  # [B, H, N, D]
-        
+
         valid_mask = None
         has_valid_context = None
         if mask is not None:
@@ -1583,20 +1587,20 @@ class CrossAttentionFusion(nn.Module):
         if has_valid_context is not None and not torch.all(has_valid_context):
             attn_output = attn_output.clone()
             attn_output[~has_valid_context] = 0.0
-        
+
         # Reshape and project
         attn_output = attn_output.transpose(1, 2).contiguous().view(B, 1, self.output_dim)
         attn_output = self.output_proj(attn_output)
-        
+
         # Add & Norm
         c_out = self.layer_norm(self.residual_proj(c_local) + attn_output)
-        
+
         # FFN + Add & Norm
         c_out = self.ffn_norm(c_out + self.ffn(c_out))
-        
+
         # Remove sequence dimension
         c_out = c_out.squeeze(1)  # [B, output_dim]
-        
+
         return c_out
 
 
@@ -1645,7 +1649,7 @@ class DualStreamConditionEncoder(nn.Module):
             node_features, edge_index, tpe, current_node
         )
     """
-    
+
     def __init__(
         self,
         latent_dim: int = 64,
@@ -1668,19 +1672,19 @@ class DualStreamConditionEncoder(nn.Module):
         strict_schema: bool = True,
     ):
         super().__init__()
-        
+
         self.latent_dim = latent_dim
         self.output_dim = output_dim
         self.style_dim = style_dim
         self.use_reference_room_maps = bool(use_reference_room_maps)
-        
+
         # Stream A: Local context
         self.local_encoder = LocalStreamEncoder(
             latent_dim=latent_dim,
             hidden_dim=hidden_dim,
             output_dim=output_dim,
         )
-        
+
         # Stream B: Global context
         self.global_encoder = GlobalStreamEncoder(
             node_feature_dim=node_feature_dim,
@@ -1695,7 +1699,7 @@ class DualStreamConditionEncoder(nn.Module):
             use_rrwp_edge_features=use_rrwp_edge_features,
             strict_schema=strict_schema,
         )
-        
+
         # GLOBAL STYLE TOKEN (Theme Consistency)
         # Embeds the repo's canonical sector themes:
         # fire, water, ice, forest, shadow, spirit.
@@ -1707,7 +1711,7 @@ class DualStreamConditionEncoder(nn.Module):
         )
         # Initialize with small values
         nn.init.normal_(self.style_embedding.weight, mean=0.0, std=0.02)
-        
+
         # Style projection to match output_dim for fusion
         self.style_proj = nn.Sequential(
             nn.Linear(style_dim, hidden_dim),
@@ -1725,7 +1729,7 @@ class DualStreamConditionEncoder(nn.Module):
             if self.use_reference_room_maps
             else None
         )
-        
+
         # Cross-attention fusion (now receives style-augmented global context)
         self.fusion = CrossAttentionFusion(
             local_dim=output_dim,
@@ -1734,14 +1738,14 @@ class DualStreamConditionEncoder(nn.Module):
             num_heads=num_attention_heads,
             dropout=dropout,
         )
-        
+
         # Final projection keeps style and reference features disentangled for
         # ablation and gradient attribution.
         self.output_proj = nn.Sequential(
             nn.Linear(output_dim * 3, output_dim),
             nn.LayerNorm(output_dim),
         )
-    
+
     def forward(
         self,
         neighbor_latents: Dict[str, Optional[Tensor]],
@@ -1789,14 +1793,14 @@ class DualStreamConditionEncoder(nn.Module):
             position = position.unsqueeze(0)
         batch_size = boundary_constraints.shape[0]
         device = boundary_constraints.device
-        
+
         # Stream A: Local context
         c_local = self.local_encoder(
             neighbor_latents,
             boundary_constraints,
             position,
         )
-        
+
         # Stream B: Global context. When callers need both the current-room
         # summary token and the full graph-token sequence, run the global
         # encoder once and slice the current node locally.
@@ -1878,25 +1882,34 @@ class DualStreamConditionEncoder(nn.Module):
         c_global = global_tokens
         if current_node_token is not None:
             c_local = c_local + current_node_token
-        
+
         # GLOBAL STYLE TOKEN: Inject theme consistency
         if style_id is not None:
-            # Convert to tensor if scalar
-            if not isinstance(style_id, torch.Tensor):
-                style_id = torch.tensor([style_id], dtype=torch.long, device=device)
-            
-            # Expand to batch size if needed
+            style_id = torch.as_tensor(
+                style_id,
+                dtype=torch.long,
+                device=device,
+            )
             if style_id.dim() == 0:
                 style_id = style_id.unsqueeze(0).expand(batch_size)
-            elif style_id.shape[0] == 1 and batch_size > 1:
+            elif style_id.dim() != 1:
+                raise ValueError(
+                    f"style_id must be a scalar or [B], got {tuple(style_id.shape)}."
+                )
+            elif int(style_id.shape[0]) == 1 and batch_size > 1:
                 style_id = style_id.expand(batch_size)
-            
+            elif int(style_id.shape[0]) != batch_size:
+                raise ValueError(
+                    f"style_id batch {int(style_id.shape[0])} does not match "
+                    f"conditioning batch {batch_size}."
+                )
+
             # Embed style token (fixed for entire dungeon)
             style_token = self.style_embedding(style_id)  # [B, style_dim]
             style_feat = self.style_proj(style_token)      # [B, output_dim]
         else:
             # No style specified: use zero vector
-            style_feat = torch.zeros(batch_size, self.output_dim, 
+            style_feat = torch.zeros(batch_size, self.output_dim,
                                     device=device, dtype=c_local.dtype)
 
         if self.reference_room_encoder is not None:
@@ -1913,7 +1926,7 @@ class DualStreamConditionEncoder(nn.Module):
                 device=device,
                 dtype=c_local.dtype,
             )
-        
+
         # Cross-attention fusion (local queries global with style-augmented keys)
         c_fused = self.fusion(c_local, c_global, mask=global_mask)
 
@@ -1925,7 +1938,7 @@ class DualStreamConditionEncoder(nn.Module):
         if return_global_tokens:
             return c, global_tokens
         return c
-    
+
     def encode_local_only(
         self,
         neighbor_latents: Dict[str, Optional[Tensor]],
@@ -1938,7 +1951,7 @@ class DualStreamConditionEncoder(nn.Module):
             boundary_constraints,
             position,
         )
-    
+
     def encode_global_only(
         self,
         node_features: Tensor,

@@ -1,4 +1,4 @@
-﻿"""
+"""
 ZELDA DUNGEON CORE - Clean Implementation
 =========================================
 Core logic for VGLC room extraction, graph alignment, and dungeon stitching.
@@ -572,7 +572,7 @@ class RoomGraphMatcher:
         # Exclude start pointer nodes - they are virtual (not physical rooms)
         unmapped_nodes = sorted([n for n in graph.nodes() if n not in node_to_room
                                   and not graph.nodes[n].get('is_start_pointer', False)],
-                                 key=lambda x: self._node_signature(graph, x))
+                                 key=lambda n: int(n) if str(n).isdigit() else hash(n))
 
         if unmapped_rooms and unmapped_nodes:
             R = unmapped_rooms
@@ -613,8 +613,8 @@ class RoomGraphMatcher:
         # After main BFS, match nodes connected via stair edges ('s' type)
         # to rooms containing STAIR tiles. Stair edges represent non-adjacent
         # teleport connections that BFS cannot discover via room adjacency.
-        still_unmapped_nodes = [n for n in graph.nodes() if n not in node_to_room
-                                and not graph.nodes[n].get('is_start_pointer', False)]
+        still_unmapped_nodes = sorted([n for n in graph.nodes() if n not in node_to_room
+                                and not graph.nodes[n].get('is_start_pointer', False)], key=lambda n: int(n) if str(n).isdigit() else hash(n))
         stair_rooms = sorted([pos for pos in rooms.keys() 
                               if getattr(rooms[pos], 'has_stair', False)])
         
@@ -657,8 +657,8 @@ class RoomGraphMatcher:
         # If there are more graph nodes than rooms, remaining unmapped nodes
         # are "virtual" nodes representing sub-areas within already-mapped rooms.
         # Propagate room assignments from their closest mapped neighbor.
-        still_unmapped_nodes = [n for n in graph.nodes() if n not in node_to_room
-                                and not graph.nodes[n].get('is_start_pointer', False)]
+        still_unmapped_nodes = sorted([n for n in graph.nodes() if n not in node_to_room
+                                and not graph.nodes[n].get('is_start_pointer', False)], key=lambda n: int(n) if str(n).isdigit() else hash(n))
         still_unmapped_rooms = sorted([pos for pos in rooms.keys() if pos not in room_to_node])
         
         # FIRST: If there are both unmapped rooms and unmapped non-virtual nodes,

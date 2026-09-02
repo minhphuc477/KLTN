@@ -1458,7 +1458,8 @@ class TensionCurveEvaluator:
             # These are target/style deviations, not functional invalidity.
             # Keep them as smooth quality penalties while hard feasibility is
             # determined exclusively by the resource-aware solvability checks.
-            fitness *= float(np.clip(1.0 - (0.25 * violation), 0.05, 1.0))
+            penalty = float(np.clip(1.0 - (0.25 * violation), 0.01, 0.10))  # max 10% retained
+            fitness *= penalty
 
         return {
             "fitness": float(max(0.0, min(1.0, fitness))),
@@ -1736,7 +1737,7 @@ class TensionCurveEvaluator:
         from src.evaluation.validator import ExternalValidator
 
         validation_graph = mission_graph_to_networkx(graph, directed=True)
-        return bool(ExternalValidator(mode="full").validate(validation_graph).is_solvable)
+        return bool(ExternalValidator(mode="full").validate(validation_graph, max_states=5000).is_solvable)
     
     @staticmethod
     def _find_path_in_adjacency(

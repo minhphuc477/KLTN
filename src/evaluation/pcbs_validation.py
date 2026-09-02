@@ -15,7 +15,7 @@ import json
 from collections import deque
 from dataclasses import dataclass, asdict, fields
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
+from typing import Any, Dict, Iterable, Mapping, Optional, Tuple
 
 import numpy as np
 
@@ -28,6 +28,7 @@ from src.evaluation.search_benchmark_utils import (
 )
 from src.simulation.cognitive_bounded_search import (
     AgentPersona,
+    CBSMetrics,
     PersonaConfig,
     PersonaDrivenCognitiveBoundedSearch,
 )
@@ -475,9 +476,18 @@ def classify_pcbs_outcome(
     path_delta_value = None if path_delta is None else int(path_delta)
 
     if not oracle_success:
-        outcome_class = "oracle_unsolved"
-        calibration_bucket = "hard_invalid"
-        failure_driver = "hard_oracle_failure"
+        if bool(oracle.get("proven_unsolvable", False)):
+            outcome_class = "oracle_no_path_proven"
+            calibration_bucket = "hard_invalid"
+            failure_driver = "hard_oracle_no_path_proof"
+        elif str(oracle.get("status", "")) == "invalid_map":
+            outcome_class = "oracle_invalid_problem"
+            calibration_bucket = "hard_invalid"
+            failure_driver = "invalid_problem"
+        else:
+            outcome_class = "oracle_indeterminate"
+            calibration_bucket = "indeterminate"
+            failure_driver = "hard_oracle_inconclusive"
     elif bool(pcbs_success):
         if oracle_path_length > 0 and path_delta_value is not None:
             relative_delta = path_delta_value / float(max(1, oracle_path_length))
@@ -606,19 +616,34 @@ def evaluate_astar_vs_pcbs(
     env_astar = ZeldaLogicEnv(semantic_grid=grid.copy(), **copy.deepcopy(env_kwargs))
     oracle = run_astar_oracle(env_astar, timeout=int(timeout_astar))
 
-    env_pcbs = ZeldaLogicEnv(semantic_grid=grid.copy(), **copy.deepcopy(env_kwargs))
-    pcbs = PersonaDrivenCognitiveBoundedSearch(
-        env_pcbs,
-        persona=str(persona),
-        timeout=int(timeout_pcbs),
-        seed=seed,
-        custom_config=calibrated_config,
-    )
-    pcbs_success, pcbs_path, pcbs_states, pcbs_metrics = pcbs.solve()
-    pcbs_status = "success"
     timeout_pcbs_i = safe_positive_int(timeout_pcbs)
-    if not pcbs_success:
-        pcbs_status = "budget_exhausted" if int(pcbs_states) >= timeout_pcbs_i else "failed"
+    if bool(oracle.get("success", False)):
+        env_pcbs = ZeldaLogicEnv(semantic_grid=grid.copy(), **copy.deepcopy(env_kwargs))
+        pcbs = PersonaDrivenCognitiveBoundedSearch(
+            env_pcbs,
+            persona=str(persona),
+            timeout=int(timeout_pcbs),
+            seed=seed,
+            custom_config=calibrated_config,
+        )
+        pcbs_success, pcbs_path, pcbs_states, pcbs_metrics = pcbs.solve()
+        pcbs_status = "success"
+        if not pcbs_success:
+            pcbs_status = (
+                "budget_exhausted"
+                if int(pcbs_states) >= timeout_pcbs_i
+                else "failed"
+            )
+    else:
+        pcbs_success = False
+        pcbs_path = []
+        pcbs_states = 0
+        pcbs_metrics = CBSMetrics()
+        pcbs_status = (
+            "not_run_oracle_no_path_proof"
+            if bool(oracle.get("proven_unsolvable", False))
+            else "not_run_oracle_indeterminate"
+        )
 
     pcbs_trajectory_length = int(len(pcbs_path))
     pcbs_solution_length = max(0, pcbs_trajectory_length - 1) if bool(pcbs_success) else 0
@@ -758,7 +783,7 @@ def build_ieee_markdown_table(result: Mapping[str, Any], *, map_name: str = "Gen
     ]
 
     lines = [
-        f"| Map | Solver | Solved | Path Length | PER | Total Revisits | Navigation Entropy | Goal-Sighting Latency | Status | Outcome | Driver |",
+        "| Map | Solver | Solved | Path Length | PER | Total Revisits | Navigation Entropy | Goal-Sighting Latency | Status | Outcome | Driver |",
         "|---|---|---:|---:|---:|---:|---:|---:|---|---|---|",
     ]
     for solver, solved, path_len, per, revisits, nav_entropy, aha_latency, status, outcome, driver in rows:

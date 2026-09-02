@@ -1400,15 +1400,39 @@ def build_stitched_room_layout(
         strict_search_budget=strict_search_budget,
     )
 
+    return build_stitched_room_layout_from_slots(
+        room_grids,
+        graph,
+        slot_positions,
+        fill_tile=fill_tile,
+        carve_connections=carve_connections,
+        diagnostic_callback=diagnostic_callback,
+    )
+
+
+def build_stitched_room_layout_from_slots(
+    room_grids: Mapping[Any, np.ndarray],
+    graph: nx.Graph,
+    slot_positions: Mapping[Any, Tuple[int, int]],
+    *,
+    fill_tile: int = 0,
+    carve_connections: bool = True,
+    diagnostic_callback: Optional[DiagnosticCallback] = None,
+) -> StitchedRoomLayout:
+    """Stitch rooms at fixed slots and realize graph edges consistently.
+
+    This is the fixed-placement counterpart of :func:`build_stitched_room_layout`.
+    It is useful when multiple versions of the same sampled rooms must be compared
+    without allowing placement or connection realization to become a confound.
+    """
     stitched = build_room_canvas_from_slots(
         room_grids=room_grids,
         slot_positions=slot_positions,
         fill_tile=int(fill_tile),
     )
 
-    # Seal ALL room border tiles with walls BEFORE carving connections.
-    # This ensures stray floor/door tiles from AI-generated room grids
-    # are replaced, then carving writes correct DOOR tiles on top.
+    # Seal all room borders before carving graph connections so generated border
+    # artifacts cannot create unrecorded passages.
     seal_boundary_walls(
         stitched.dungeon_grid,
         stitched.layout_map,
@@ -1425,29 +1449,30 @@ def build_stitched_room_layout(
                 if diagnostic_callback is not None:
                     diagnostic_callback("non_spatial_graph_edge_not_carved")
                 continue
-            if u in stitched.layout_map and v in stitched.layout_map:
-                recorded_cells: List[Tuple[int, int]] = []
+            if u not in stitched.layout_map or v not in stitched.layout_map:
+                continue
+            recorded_cells: List[Tuple[int, int]] = []
 
-                def _record_connection(mode: str, cells: List[Tuple[int, int]]) -> None:
-                    nonlocal recorded_cells
-                    recorded_cells = [(int(row), int(col)) for row, col in cells]
+            def _record_connection(mode: str, cells: List[Tuple[int, int]]) -> None:
+                nonlocal recorded_cells
+                recorded_cells = [(int(row), int(col)) for row, col in cells]
 
-                mode = carve_room_connection_between_bboxes(
-                    stitched.dungeon_grid,
-                    stitched.layout_map[u],
-                    stitched.layout_map[v],
-                    edge_data=edge_data or {},
-                    has_reverse_edge=bool(graph.has_edge(v, u)),
-                    fill_tile=int(fill_tile),
-                    diagnostic_callback=diagnostic_callback,
-                    connection_trace_callback=_record_connection,
-                )
-                if mode is not None:
-                    carved_edge_modes[(u, v)] = str(mode)
-                    connection_realizations[(u, v)] = {
-                        "mode": str(mode),
-                        "cells": recorded_cells,
-                    }
+            mode = carve_room_connection_between_bboxes(
+                stitched.dungeon_grid,
+                stitched.layout_map[u],
+                stitched.layout_map[v],
+                edge_data=edge_data or {},
+                has_reverse_edge=bool(graph.has_edge(v, u)),
+                fill_tile=int(fill_tile),
+                diagnostic_callback=diagnostic_callback,
+                connection_trace_callback=_record_connection,
+            )
+            if mode is not None:
+                carved_edge_modes[(u, v)] = str(mode)
+                connection_realizations[(u, v)] = {
+                    "mode": str(mode),
+                    "cells": recorded_cells,
+                }
 
     stitched.realization_metrics = compute_graph_edge_realization_metrics(
         graph,
@@ -1457,7 +1482,6 @@ def build_stitched_room_layout(
         carved_edge_modes=carved_edge_modes,
     )
     stitched.connection_realizations = connection_realizations
-
     return stitched
 
 

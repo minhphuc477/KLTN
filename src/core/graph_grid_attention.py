@@ -1055,11 +1055,19 @@ class GraphToGridCrossAttention(nn.Module):
                 attn_bias = attn_bias.masked_fill(node_mask[:, None, None, :] == 0, -1.0e4)
 
             if HAS_SDPA and not self.capture_attention_maps:
+                # F.scaled_dot_product_attention (and especially the FlashAttention
+                # backend) requires the attention bias's query-sequence dimension to
+                # *exactly* match Q's sequence length L = H * W.  The bias was built
+                # with shape [B, heads, 1, N] (via .unsqueeze(2)), which PyTorch's
+                # fallback matmul-softmax path expands implicitly but FlashAttention
+                # rejects at runtime.  We expand explicitly here so both paths see
+                # the canonical [B, heads, L, N] shape.
+                attn_bias_expanded = attn_bias.expand(-1, -1, H * W, -1).contiguous()
                 attn_output = F.scaled_dot_product_attention(
                     Q,
                     K,
                     V,
-                    attn_mask=attn_bias,
+                    attn_mask=attn_bias_expanded,
                     dropout_p=self.dropout.p if self.training else 0.0,
                 )
             else:

@@ -118,6 +118,7 @@ CONFIG_FIELDS: List[ConfigField] = [
     ConfigField("runtime.seed", int, 42, "Global random seed.", min_value=0),
     ConfigField("runtime.cudnn_benchmark", bool, True, "Enable cuDNN convolution autotuning for fixed-size training grids."),
     ConfigField("runtime.cudnn_deterministic", bool, False, "Force deterministic cuDNN kernels; disables benchmark when true."),
+    ConfigField("runtime.deterministic_algorithms", bool, False, "Require deterministic PyTorch algorithms and fail when an operation has no deterministic implementation."),
     ConfigField("runtime.verbose", bool, False, "Enable verbose logging."),
     ConfigField("runtime.quick", bool, False, "Shorten training for smoke tests."),
     ConfigField("runtime.auto_resume", bool, True, "Automatically resume from checkpoint_dir/latest_resume.pth when present."),
@@ -201,6 +202,8 @@ CONFIG_FIELDS: List[ConfigField] = [
     ConfigField("diffusion.save_every", int, 1000, "Iterations between saving checkpoints.", min_value=1),
     ConfigField("diffusion.keep_last", int, 2, "Number of retained full-resume diffusion checkpoints besides latest_resume/best/final.", min_value=0),
     ConfigField("diffusion.validation_fraction", float, 0.1, "Held-out validation fraction for diffusion checkpoint selection and reporting. Set to 0 to reuse the training split for evaluation-only ablations.", min_value=0.0, max_value=0.5),
+    ConfigField("diffusion.best_checkpoint_metric", str, "val_diffusion_loss", "Metric used to select the common diffusion checkpoint across model variants. val_total_loss is exploratory because its objective changes when logic losses are enabled.", choices=("val_diffusion_loss", "val_total_loss")),
+    ConfigField("diffusion.nonfinite_policy", str, "skip", "How diffusion training handles non-finite losses or gradients. Publication runs use error so arms cannot silently receive different update counts.", choices=("skip", "error")),
     ConfigField("diffusion.latent_dim", int, 64, "Diffusion latent width.", min_value=1),
     ConfigField("diffusion.latent_scale_factor", float, 1.0, "Fixed multiplier from raw VQ-VAE latents to diffusion space. Use a corpus-calibrated reciprocal standard deviation for the scaled-latent ablation; 1.0 preserves legacy checkpoints.", min_value=1e-8),
     ConfigField("diffusion.model_channels", int, 96, "Diffusion U-Net base channels.", min_value=8),
@@ -221,12 +224,13 @@ CONFIG_FIELDS: List[ConfigField] = [
     ConfigField("diffusion.condition_num_attention_heads", int, 8, "Condition-encoder fusion heads.", min_value=1),
     ConfigField("diffusion.condition_dropout", float, 0.1, "Condition-encoder dropout.", min_value=0.0, max_value=1.0),
     ConfigField("diffusion.condition_gnn_type", str, "gps", "Condition-encoder graph backbone.", choices=("gcn", "gat", "sage", "gps")),
-    ConfigField("diffusion.condition_use_reference_room_maps", bool, True, "Enable discrete neighboring-room exemplar conditioning in Block III."),
+    ConfigField("diffusion.condition_use_reference_room_maps", bool, False, "Optional discrete neighboring-room exemplar conditioning. Keep disabled in the main architecture because neighbor latents already provide local room context; enable only as a separate ablation."),
     ConfigField("diffusion.condition_reference_tile_vocab_size", int, 44, "Tile vocabulary size used by the reference-room exemplar encoder.", min_value=2),
     ConfigField("diffusion.condition_reference_embedding_dim", int, 32, "Embedding width for the reference-room exemplar encoder.", min_value=4),
     ConfigField("diffusion.condition_reference_hidden_dim", int, 64, "CNN hidden width for the reference-room exemplar encoder.", min_value=4),
     ConfigField("diffusion.condition_use_rrwp_edge_features", bool, True, "Inject RRWP edge encodings into graph conditioning edge attributes."),
     ConfigField("diffusion.condition_strict_schema", bool, True, "Fail on graph-conditioning schema shape drift instead of pad/truncate compatibility alignment. Set false only for explicit legacy-checkpoint migration."),
+    ConfigField("diffusion.condition_global_graph_enabled", bool, True, "Enable global mission-graph conditioning. Disable only for the separately trained local-context publication baseline."),
     ConfigField("diffusion.graph_conditioning_mode", str, "node_sequence", "Graph-conditioning representation.", choices=("node_sequence", "pooled")),
     ConfigField("diffusion.num_timesteps", int, 1000, "Forward diffusion timesteps.", min_value=10),
     ConfigField("diffusion.schedule_type", str, "cosine", "Diffusion noise schedule.", choices=("linear", "cosine")),
@@ -737,6 +741,27 @@ def validate_config(config: Dict[str, Any]) -> Dict[str, Any]:
         validated["diffusion"]["guidance_scale"] = 0.0
         validated["diffusion"]["alpha_logic"] = 0.0
         validated["diffusion"]["alpha_logic_tile"] = 0.0
+    if not bool(validated["diffusion"]["condition_global_graph_enabled"]):
+        if validated["diffusion"]["graph_conditioning_mode"] != "pooled":
+            raise ValueError(
+                "diffusion.condition_global_graph_enabled=false requires "
+                "diffusion.graph_conditioning_mode=pooled."
+            )
+        if bool(validated["diffusion"]["logic_net_enabled"]):
+            raise ValueError(
+                "The local-context publication baseline requires "
+                "diffusion.logic_net_enabled=false."
+            )
+        if bool(validated["diffusion"]["graph_to_grid_edge_semantics"]):
+            raise ValueError(
+                "The local-context publication baseline cannot enable "
+                "diffusion.graph_to_grid_edge_semantics."
+            )
+        if float(validated["diffusion"]["graph_spatial_alignment_weight"]) > 0.0:
+            raise ValueError(
+                "The local-context publication baseline requires "
+                "diffusion.graph_spatial_alignment_weight=0."
+            )
     if not bool(validated["masked_room"]["logic_net_enabled"]):
         validated["masked_room"]["logic_net_trainable"] = False
         validated["masked_room"]["alpha_logic"] = 0.0
@@ -927,7 +952,37 @@ def merge_config(
     return validated
 
 
-def cli_overrides_from_namespace(namespace: Any) -> Dict[str, Any]:
+def cli_overrides_from_namespace(namespace: Any, parser: Optional[Any] = None) -> Dict[str, Any]:
+    """Extract explicit CLI overrides from an ``argparse.Namespace``.
+
+    **Problem solved**: ``argparse`` assigns its own default value (often
+    ``False``, ``0``, ``1``) to flags that the user did NOT provide on the
+    command line.  The original implementation extracted all non-``None``
+    namespace values, so argparse defaults silently overwrote values the user
+    had explicitly set in their YAML config.
+
+    **Fix**: When ``parser`` is supplied, this function builds a defaults map
+    from the parser and only includes fields whose value *differs* from the
+    argparse default.  Fields where the user provided no CLI argument therefore
+    produce no override, leaving the YAML value intact.
+
+    If ``parser`` is ``None`` (backward-compatible mode), the old behaviour is
+    preserved: any non-``None`` namespace value is included as an override.
+
+    Args:
+        namespace: The ``argparse.Namespace`` returned by ``parser.parse_args()``.
+        parser: The ``argparse.ArgumentParser`` used to produce ``namespace``.
+            Pass it to enable default-skipping.  ``None`` disables the check.
+    """
+    # Build a map of argparse-defined defaults so we can exclude them.
+    if parser is not None:
+        argparse_defaults: Dict[str, Any] = {
+            action.dest: action.default
+            for action in getattr(parser, "_actions", [])
+        }
+    else:
+        argparse_defaults = {}
+
     overrides: Dict[str, Any] = {}
     for field in CONFIG_FIELDS:
         cli_name = field.cli or cli_name_for_path(field.path)
@@ -935,6 +990,11 @@ def cli_overrides_from_namespace(namespace: Any) -> Dict[str, Any]:
             continue
         value = getattr(namespace, cli_name)
         if value is None:
+            continue
+        # Skip the value if it is identical to the argparse default — this
+        # means the user never provided this flag, so the YAML config should
+        # remain authoritative.
+        if cli_name in argparse_defaults and value == argparse_defaults[cli_name]:
             continue
         _deep_set(overrides, field.path, value)
     return overrides
@@ -984,6 +1044,7 @@ def seed_everything(
     *,
     cudnn_benchmark: Optional[bool] = None,
     cudnn_deterministic: Optional[bool] = None,
+    deterministic_algorithms: Optional[bool] = None,
 ) -> int:
     if seed is None:
         seed = 42
@@ -991,9 +1052,15 @@ def seed_everything(
     random.seed(seed)
     np.random.seed(seed)
     if torch is not None:
+        if deterministic_algorithms:
+            # PyTorch requires this setting for deterministic CUDA BLAS paths.
+            # Set it before the first CUDA RNG call, which may initialize CUDA.
+            os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
         torch.manual_seed(seed)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(seed)
+        if deterministic_algorithms is not None:
+            torch.use_deterministic_algorithms(bool(deterministic_algorithms))
         if hasattr(torch.backends, "cudnn"):
             if cudnn_deterministic is not None:
                 torch.backends.cudnn.deterministic = bool(cudnn_deterministic)
@@ -1035,6 +1102,9 @@ def save_reproducibility_snapshot(config: Dict[str, Any], *, argv: Optional[List
         "saved_at_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
         "config_version": int(config["config_version"]),
         "seed": int(config["runtime"]["seed"]),
+        "cudnn_benchmark": bool(config["runtime"]["cudnn_benchmark"]),
+        "cudnn_deterministic": bool(config["runtime"]["cudnn_deterministic"]),
+        "deterministic_algorithms": bool(config["runtime"]["deterministic_algorithms"]),
         "git_commit": get_git_commit(cwd=str(Path(__file__).resolve().parent.parent)),
         "command": list(argv or sys.argv),
         "dataset_schema_profile": str(config["dataset"]["schema_profile"]),

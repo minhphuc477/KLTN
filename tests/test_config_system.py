@@ -274,6 +274,8 @@ def test_default_config_uses_small_data_recommended_room_model_profile():
     assert resolved["vqvae"]["validation_max_batches"] == 16
     assert resolved["vqvae"]["best_checkpoint_metric"] == "val_loss"
     assert resolved["diffusion"]["keep_last"] == 2
+    assert resolved["diffusion"]["best_checkpoint_metric"] == "val_diffusion_loss"
+    assert resolved["diffusion"]["nonfinite_policy"] == "skip"
     assert resolved["fast_sampler"]["keep_last"] == 2
     assert resolved["fast_sampler"]["ema_decay"] == pytest.approx(0.95)
     assert resolved["fast_sampler"]["decode_alignment_weight"] == pytest.approx(0.25)
@@ -297,7 +299,7 @@ def test_default_config_uses_small_data_recommended_room_model_profile():
     assert resolved["diffusion"]["condition_hidden_dim"] == 192
     assert resolved["diffusion"]["condition_num_gnn_layers"] == 2
     assert resolved["diffusion"]["condition_gnn_type"] == "gps"
-    assert resolved["diffusion"]["condition_use_reference_room_maps"] is True
+    assert resolved["diffusion"]["condition_use_reference_room_maps"] is False
     assert resolved["masked_room"]["model_channels"] == 64
     assert resolved["masked_room"]["hidden_dim"] == 48
     assert resolved["masked_room"]["condition_hidden_dim"] == 192
@@ -360,6 +362,7 @@ def test_default_config_uses_small_data_recommended_room_model_profile():
 def test_seed_everything_configures_cudnn_benchmark_flags():
     old_benchmark = torch.backends.cudnn.benchmark
     old_deterministic = torch.backends.cudnn.deterministic
+    old_algorithms = torch.are_deterministic_algorithms_enabled()
     try:
         seed_everything(123, cudnn_benchmark=True, cudnn_deterministic=False)
         assert torch.backends.cudnn.benchmark is True
@@ -368,9 +371,13 @@ def test_seed_everything_configures_cudnn_benchmark_flags():
         seed_everything(123, cudnn_benchmark=True, cudnn_deterministic=True)
         assert torch.backends.cudnn.benchmark is False
         assert torch.backends.cudnn.deterministic is True
+
+        seed_everything(123, deterministic_algorithms=True)
+        assert torch.are_deterministic_algorithms_enabled() is True
     finally:
         torch.backends.cudnn.benchmark = old_benchmark
         torch.backends.cudnn.deterministic = old_deterministic
+        torch.use_deterministic_algorithms(old_algorithms)
 
 
 def test_canonical_yaml_uses_downsized_masked_room_profile():
@@ -477,6 +484,16 @@ def test_stage_helpers_forward_checkpoint_retention_and_resume_defaults():
     fast_sampler_kwargs = fast_sampler_training_kwargs_from_resolved_config(resolved)
     masked_room_kwargs = masked_room_training_kwargs_from_resolved_config(resolved)
     vqvae_kwargs = vqvae_training_kwargs_from_resolved_config(resolved)
+
+    for kwargs in (
+        diffusion_kwargs,
+        fast_sampler_kwargs,
+        masked_room_kwargs,
+        vqvae_kwargs,
+    ):
+        assert kwargs["cudnn_benchmark"] is True
+        assert kwargs["cudnn_deterministic"] is False
+        assert kwargs["deterministic_algorithms"] is False
 
     assert diffusion_kwargs["keep_last"] == 2
     assert diffusion_kwargs["auto_resume"] is True

@@ -158,6 +158,7 @@ class DungeonGenerationResult:
     rooms: Dict[int, RoomGenerationResult]
     mission_graph: nx.Graph
     metrics: Dict[str, Any]
+    physical_mission_graph: Optional[nx.Graph] = None
     map_elites_score: Optional[Dict[str, float]] = None
     generation_time: float = 0.0
     stitched_layout: Optional[StitchedRoomLayout] = None

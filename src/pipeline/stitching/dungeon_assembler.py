@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import random
 import sys
 import time
 from typing import Any, Dict, List, Mapping, Optional, Tuple
@@ -982,6 +983,13 @@ def generate_dungeon(
         DungeonGenerationResult with complete dungeon and metrics
     """
     start_time = time.time()
+    if seed is not None:
+        normalized_seed = int(seed)
+        random.seed(normalized_seed)
+        np.random.seed(normalized_seed % (2**32))
+        torch.manual_seed(normalized_seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(normalized_seed)
     stage_times: Dict[str, float] = {}
     runtime_diagnostics_before = dict(pipeline.runtime_diagnostics)
     guidance_scale = pipeline.default_guidance_scale if guidance_scale is None else float(guidance_scale)
@@ -1320,6 +1328,7 @@ def generate_dungeon(
         rooms=room_set.rooms,
         mission_graph=prepared.mission_graph,  # Preserve caller graph identity
         metrics=metrics,
+        physical_mission_graph=prepared.mission_graph_physical,
         map_elites_score=map_elites_score,
         generation_time=generation_time,
         stitched_layout=stitched_layout,

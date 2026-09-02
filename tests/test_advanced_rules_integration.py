@@ -803,7 +803,10 @@ class TestAdvancedRulesIntegration:
 
     def test_big_room_merging(self):
         """Test big room formation (RULE #2)."""
-        grammar = MissionGrammar(seed=123)
+        # Seed 31 exercises FormBigRoom under the current safe-edge candidate
+        # policy; seed 123 stopped doing so when unreachable teleport choices
+        # were correctly removed from the weighted rule pool.
+        grammar = MissionGrammar(seed=31)
         graph = grammar.generate(num_rooms=15)
         
         big_rooms = [n for n in graph.nodes.values() if n.is_big_room]

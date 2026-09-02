@@ -336,7 +336,12 @@ def test_prepare_graph_context_and_room_graph_context_include_spatial_topology(p
     """Prepared graph context should expose node positions and per-room topology maps."""
     graph = nx.DiGraph()
     graph.add_node(0, is_start=True, pos=(0, 0))
-    graph.add_node(1, has_boss=True, pos=(0, 1))
+    graph.add_node(
+        1,
+        has_boss=True,
+        pos=(0, 1),
+        puzzle_room_structure_enabled=False,
+    )
     graph.add_edge(0, 1, edge_type="key_locked")
 
     graph_data = pipeline._prepare_graph_context(graph)
@@ -350,6 +355,7 @@ def test_prepare_graph_context_and_room_graph_context_include_spatial_topology(p
     assert "node_positions" in graph_data
     assert tuple(graph_data["node_positions"].shape) == (2, 2)
     assert room_graph_context["has_room_anchor"] is True
+    assert room_graph_context["puzzle_room_structure_enabled"] is False
     assert "room_topology_map" in room_graph_context
     assert "puzzle_stage_condition" in room_graph_context
     topo = room_graph_context["room_topology_map"]
@@ -1334,22 +1340,41 @@ def test_missing_neighbor_handling(pipeline, graph_context):
     print("✓ Missing neighbors handled correctly")
 
 
-def test_invalid_graph_context_fallback(pipeline, neighbor_latents):
-    """Test fallback when graph context is invalid."""
+def test_invalid_graph_context_fallback_requires_non_strict_schema(pipeline, neighbor_latents):
+    """Legacy non-strict mode may replace invalid graph context with zeros."""
     # Empty graph context
     graph_context = {}
-    
-    result = pipeline.generate_room(
-        neighbor_latents=neighbor_latents,
-        graph_context=graph_context,
-        room_id=0,
-        num_diffusion_steps=3,
-        apply_repair=False,
-        seed=42
-    )
+    old_strict_schema = pipeline.condition_strict_schema
+    pipeline.condition_strict_schema = False
+    try:
+        result = pipeline.generate_room(
+            neighbor_latents=neighbor_latents,
+            graph_context=graph_context,
+            room_id=0,
+            num_diffusion_steps=3,
+            apply_repair=False,
+            seed=42
+        )
+    finally:
+        pipeline.condition_strict_schema = old_strict_schema
     
     assert result.room_grid is not None
     print("✓ Invalid graph context handled with fallback")
+
+
+def test_invalid_graph_context_fails_closed_under_strict_schema(pipeline, neighbor_latents):
+    old_strict_schema = pipeline.condition_strict_schema
+    pipeline.condition_strict_schema = True
+    try:
+        with pytest.raises(RuntimeError, match="Condition encoding failed under the strict schema"):
+            pipeline._compute_room_condition(
+                neighbor_latents=neighbor_latents,
+                graph_context={},
+                boundary_constraints=None,
+                position=None,
+            )
+    finally:
+        pipeline.condition_strict_schema = old_strict_schema
 
 
 def test_refiner_tile_vocab_uses_canonical_semantic_ids(pipeline):

@@ -277,19 +277,62 @@ def reduce_scalar_metrics(
     context: Optional[DistributedContext],
     average: bool = True,
 ) -> Dict[str, float]:
+    """All-reduce scalar metrics across distributed ranks.
+
+    **Key-agreement safety**: ``dist.all_reduce`` requires all ranks to submit
+    identically-shaped tensors.  If one rank computes a different set of metric
+    keys (e.g. because a loss term was skipped on that rank), the tensor sizes
+    will disagree, causing NCCL to crash or Gloo to hang indefinitely.
+
+    This function negotiates a canonical key order by broadcasting rank-0's
+    sorted key list to all ranks before the collective.  Ranks that observe a
+    key mismatch raise an informative ``RuntimeError`` immediately.
+    """
     if context is None or not context.enabled or int(context.world_size) <= 1:
         return {str(k): float(v) for k, v in metrics.items()}
 
     if not metrics:
         return {}
 
-    keys = list(metrics.keys())
+    import pickle as _pickle
+
+    # --- Step 1: Broadcast the canonical key list from rank 0 ---
+    # Encode the key list as bytes so we can broadcast it as a fixed-size tensor.
+    local_keys = sorted(metrics.keys())
+
+    if context.rank == 0:
+        key_bytes = _pickle.dumps(local_keys)
+        size_tensor = torch.tensor([len(key_bytes)], device=device, dtype=torch.int64)
+    else:
+        size_tensor = torch.zeros(1, device=device, dtype=torch.int64)
+
+    dist.broadcast(size_tensor, src=0)
+    key_buf_size = int(size_tensor.item())
+
+    if context.rank == 0:
+        key_buf = torch.frombuffer(bytearray(key_bytes), dtype=torch.uint8).to(device)
+    else:
+        key_buf = torch.zeros(key_buf_size, device=device, dtype=torch.uint8)
+
+    dist.broadcast(key_buf, src=0)
+    canonical_keys: List[str] = _pickle.loads(bytes(key_buf.cpu().numpy().tobytes()))
+
+    # --- Step 2: Validate local keys against the canonical set ---
+    if local_keys != canonical_keys:
+        raise RuntimeError(
+            f"[Rank {context.rank}] reduce_scalar_metrics: local metric keys "
+            f"{local_keys} do not match rank-0 keys {canonical_keys}.  "
+            f"Ensure all ranks compute the same set of metrics each step, or "
+            f"fill missing keys with 0.0 before calling reduce_scalar_metrics."
+        )
+
+    # --- Step 3: All-reduce the values tensor (shapes guaranteed to match) ---
     values = torch.tensor(
-        [float(metrics[key]) for key in keys],
+        [float(metrics[key]) for key in canonical_keys],
         device=device,
         dtype=torch.float64,
     )
     dist.all_reduce(values, op=dist.ReduceOp.SUM)
     if average:
         values.div_(float(context.world_size))
-    return {key: float(values[idx].item()) for idx, key in enumerate(keys)}
+    return {key: float(values[idx].item()) for idx, key in enumerate(canonical_keys)}

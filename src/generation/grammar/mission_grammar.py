@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import logging
 import random
-import copy
 from collections import defaultdict, deque
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from .advanced_rules import (
     AddArenaRule,
@@ -1180,6 +1179,28 @@ class MissionGrammar:
 
         for edge in graph.edges:
             excluded_edge = {(edge.source, edge.target)}
+            progression_reachable: Optional[Set[int]] = None
+            structural_reachable: Optional[Set[int]] = None
+
+            def _progression_pre_gate() -> Set[int]:
+                nonlocal progression_reachable
+                if progression_reachable is None:
+                    progression_reachable = self._progression_reachable_nodes(
+                        graph,
+                        start.id,
+                        exclude_nodes=set(),
+                        exclude_edges=excluded_edge,
+                    )
+                return progression_reachable
+
+            def _structural_pre_gate() -> Set[int]:
+                nonlocal structural_reachable
+                if structural_reachable is None:
+                    structural_reachable = graph.get_reachable_nodes(
+                        start.id,
+                        excluded_edges=excluded_edge,
+                    )
+                return structural_reachable
 
             if edge.edge_type in {EdgeType.LOCKED, EdgeType.BOSS_LOCKED}:
                 # Fungible small-key locks intentionally use requires_key_count
@@ -1202,10 +1223,7 @@ class MissionGrammar:
                                 f"(key_required={edge.key_required})"
                             )
                         return False
-                    if not any(
-                        self._is_reachable_without_edges(graph, start.id, provider, excluded_edge)
-                        for provider in providers
-                    ):
+                    if not any(provider in _progression_pre_gate() for provider in providers):
                         if log_failures:
                             logger.warning(
                                 f"Key for locked edge {edge.source}->{edge.target} is not reachable pre-gate"
@@ -1213,7 +1231,7 @@ class MissionGrammar:
                         return False
 
             if edge.requires_key_count > 0:
-                reachable = graph.get_reachable_nodes(start.id, excluded_edges=excluded_edge)
+                reachable = _structural_pre_gate()
                 reachable_keys = sum(1 for key_node in key_nodes if key_node in reachable)
                 if reachable_keys < edge.requires_key_count:
                     if log_failures:
@@ -1232,10 +1250,7 @@ class MissionGrammar:
                             f"(item_required={edge.item_required})"
                         )
                     return False
-                if not any(
-                    self._is_reachable_without_edges(graph, start.id, provider, excluded_edge)
-                    for provider in providers
-                ):
+                if not any(provider in _progression_pre_gate() for provider in providers):
                     if log_failures:
                         logger.warning(
                             f"Item {edge.item_required} not reachable before ITEM_GATE "
@@ -1255,10 +1270,7 @@ class MissionGrammar:
                             required_item,
                         )
                     return False
-                if not any(
-                    self._is_reachable_without_edges(graph, start.id, provider, excluded_edge)
-                    for provider in providers
-                ):
+                if not any(provider in _progression_pre_gate() for provider in providers):
                     if log_failures:
                         logger.warning(
                             "Protection %s is not reachable before HAZARD %s->%s",
@@ -1269,7 +1281,7 @@ class MissionGrammar:
                     return False
 
             if edge.edge_type == EdgeType.MULTI_LOCK and edge.token_count > 0:
-                reachable = graph.get_reachable_nodes(start.id, excluded_edges=excluded_edge)
+                reachable = _structural_pre_gate()
                 reachable_tokens = sum(1 for token_node in token_nodes if token_node in reachable)
                 if reachable_tokens < edge.token_count:
                     if log_failures:
@@ -1280,7 +1292,7 @@ class MissionGrammar:
                     return False
 
             if edge.edge_type == EdgeType.STATE_BLOCK and edge.switches_required:
-                reachable = graph.get_reachable_nodes(start.id, excluded_edges=excluded_edge)
+                reachable = _structural_pre_gate()
                 missing_switches = [sid for sid in edge.switches_required if sid not in reachable]
                 if missing_switches:
                     if log_failures:
@@ -1409,21 +1421,29 @@ class MissionGrammar:
         if start in exclude_nodes or start not in graph.nodes:
             return set()
 
-        filtered = copy.deepcopy(graph)
         excluded_nodes = {int(node_id) for node_id in exclude_nodes}
         excluded_edges = {
             (int(source), int(target))
             for source, target in exclude_edges
         }
-        for node_id in excluded_nodes:
-            filtered.nodes.pop(node_id, None)
-        filtered.edges = [
-            edge
-            for edge in filtered.edges
-            if edge.source not in excluded_nodes
-            and edge.target not in excluded_nodes
-            and (edge.source, edge.target) not in excluded_edges
-        ]
+        # The progression solver only reads node/edge objects; ``sanitize``
+        # mutates the graph containers and adjacency cache, not those objects.
+        # A filtered shallow view therefore preserves isolation while avoiding
+        # thousands of full graph deep copies during evolutionary evaluation.
+        filtered = MissionGraph(
+            nodes={
+                node_id: node
+                for node_id, node in graph.nodes.items()
+                if node_id not in excluded_nodes
+            },
+            edges=[
+                edge
+                for edge in graph.edges
+                if edge.source not in excluded_nodes
+                and edge.target not in excluded_nodes
+                and (edge.source, edge.target) not in excluded_edges
+            ],
+        )
         filtered.sanitize()
         result = solve_mission_progression(filtered, int(start))
         if result.exhausted:

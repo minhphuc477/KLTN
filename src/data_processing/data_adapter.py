@@ -613,6 +613,13 @@ class PhaseAligner:
         for room in rooms:
             grid = room.semantic_grid
 
+            # Guard: skip rooms whose grid is not a proper 2-D array or is
+            # empty.  Appending the original room keeps the list-length
+            # contract intact (callers zip rooms with other per-room lists).
+            if grid is None or grid.ndim != 2 or grid.size == 0:
+                corrected.append(room)
+                continue
+
             top_walls = np.sum(grid[0, :] == TileID.WALL)
             bottom_walls = np.sum(grid[-1, :] == TileID.WALL)
             left_walls = np.sum(grid[:, 0] == TileID.WALL)

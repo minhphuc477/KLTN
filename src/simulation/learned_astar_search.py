@@ -33,8 +33,9 @@ class LearnedTieBreakAStarGameStateSolver:
             priority_options=priority_options,
             search_mode="astar",
         )
-        success, path, diagnostics = solver.solve_with_diagnostics()
+        success, path, diagnostics = solver.solve_with_verified_diagnostics()
         failure_reason = str(getattr(diagnostics, "failure_reason", "") or "")
+        termination_status = str(getattr(diagnostics, "termination_status", "") or "")
         trained_shape = learned.trained_map_shape
         environment_shape = (
             int(getattr(self.env, "height", 0) or 0),
@@ -47,7 +48,14 @@ class LearnedTieBreakAStarGameStateSolver:
             algorithm="A* + learned tie-break",
             metadata={
                 "failure_reason": failure_reason,
-                "oracle_status": str(oracle_status_from_outcome(bool(success), failure_reason)),
+                "oracle_status": str(
+                    oracle_status_from_outcome(
+                        bool(success),
+                        failure_reason,
+                        termination_status,
+                    )
+                ),
+                "termination_status": termination_status,
                 "time_taken_ms": float(getattr(diagnostics, "time_taken_ms", 0.0) or 0.0),
                 "states_pruned_dominated": int(
                     getattr(diagnostics, "states_pruned_dominated", 0) or 0

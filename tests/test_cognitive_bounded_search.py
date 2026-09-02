@@ -312,7 +312,7 @@ class TestVisionSystem:
         
         assert vision.radius == 5
         assert vision.cone_angle == 120.0
-        assert vision.enable_occlusion == True
+        assert vision.enable_occlusion is True
     
     def test_full_vision(self, simple_grid):
         """Test 360° vision sees all tiles in radius."""
@@ -762,6 +762,40 @@ class TestCBS:
         )
 
         assert ((1, 12), SEMANTIC_PALETTE['STAIR']) in candidates
+
+    def test_graph_candidate_enumeration_does_not_mutate_inventory(self):
+        """Previewing alternatives must not collect items before one is chosen."""
+        import networkx as nx
+
+        grid = np.full((16, 22), SEMANTIC_PALETTE['WALL'], dtype=np.int64)
+        grid[1, 1] = SEMANTIC_PALETTE['START']
+        grid[1, 2] = SEMANTIC_PALETTE['STAIR']
+        grid[1, 12] = SEMANTIC_PALETTE['KEY_SMALL']
+        grid[1, 20] = SEMANTIC_PALETTE['TRIFORCE']
+        graph = nx.DiGraph([(0, 1)])
+        env = ZeldaLogicEnv(
+            semantic_grid=grid,
+            graph=graph,
+            room_to_node={(0, 0): 0, (0, 1): 1},
+            room_positions={(0, 0): (0, 0), (0, 1): (0, 11)},
+            node_to_room={0: (0, 0), 1: (0, 1)},
+        )
+        state = env.state.copy()
+        state.position = (1, 2)
+        cognitive_state = SimpleNamespace(game_state=state)
+        cbs = CognitiveBoundedSearch(env, timeout=100, seed=42)
+        cbs._transition_helper.get_stair_destinations = lambda _pos: [(1, 12)]
+
+        candidates = cbs._get_graph_transition_candidates(
+            cognitive_state,
+            grid,
+            [],
+        )
+
+        assert ((1, 12), SEMANTIC_PALETTE['KEY_SMALL']) in candidates
+        assert cognitive_state.game_state is state
+        assert state.keys == 0
+        assert state.collected_items == set()
     
     def test_persona_affects_behavior(self, grid_with_enemies):
         """Test different personas produce different paths."""

@@ -352,6 +352,7 @@ class GraphGrammarExecutor:
             # through intermediate over-sized topologies to reach complex valid ones.
             # The fitness function's _constraint_violation() applies a smooth penalty
             # for node_count > max_nodes_soft. Hard safety valve at 1.5x prevents runaway.
+
             hard_cap = int(max(max_nodes + 2, max_nodes * 1.5))
             if len(graph.nodes) >= hard_cap:
                 if record_trace:
@@ -359,9 +360,9 @@ class GraphGrammarExecutor:
                         {
                             "genome_index": int(genome_index),
                             "requested_rule_id": int(requested_rule_id),
-                            "rule_id": int(max(1, min(requested_rule_id, len(self.rules) - 1))),
+                            "rule_id": int(max(0, min(requested_rule_id, len(self.rules) - 1))),
                             "rule_name": str(
-                                self.rule_names[max(1, min(requested_rule_id, len(self.rule_names) - 1))]
+                                self.rule_names[max(0, min(requested_rule_id, len(self.rule_names) - 1))]
                             ),
                             "status": "stopped_hard_cap",
                             "reason": f"hard safety cap reached ({len(graph.nodes)} >= {hard_cap})",
@@ -374,7 +375,7 @@ class GraphGrammarExecutor:
                 break
             
             # Clamp rule_id to valid range and build dynamic action mask.
-            rule_id = max(1, min(requested_rule_id, len(self.rules) - 1))
+            rule_id = max(0, min(requested_rule_id, len(self.rules) - 1))
             action_mask = self._build_action_mask(
                 graph,
                 context,

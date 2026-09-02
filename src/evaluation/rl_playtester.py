@@ -138,7 +138,7 @@ class HeadlessZeldaPersonaEnv(_GymBase):
 
     def _transition(self) -> tuple[float, bool, Dict[str, Any]]:
         state = self.logic_env.state
-        candidates: list[tuple[Tuple[int, int], Optional[str]]] = []
+        candidates: list[tuple[Tuple[int, int], Any]] = []
         if int(self.logic_env.grid[state.position]) == int(SEMANTIC_PALETTE["STAIR"]):
             candidates.extend((position, "stair") for position in self._transition_helper.get_stair_destinations(state.position))
         candidates.extend(
@@ -153,12 +153,12 @@ class HeadlessZeldaPersonaEnv(_GymBase):
             return -1.0, False, {"msg": "No transition available"}
         destination, edge_type = sorted(set(candidates), key=lambda item: (item[0], str(item[1])))[0]
         transition_state = state
-        if edge_type not in {None, "stair"}:
+        if edge_type is not None and edge_type != "stair":
             allowed, transition_state = self._transition_helper.apply_graph_edge_transition(
                 state,
                 state.position,
                 destination,
-                str(edge_type),
+                edge_type,
             )
             if not allowed:
                 return -1.0, False, {"msg": "Transition requirements not met"}

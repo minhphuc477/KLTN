@@ -14,7 +14,42 @@ from src.evaluation.search_benchmark_utils import (
 )
 from src.evaluation.validator import ExternalValidator
 from src.simulation.cognitive_bounded_search import CognitiveBoundedSearch
+from src.simulation.search_status import oracle_status_from_outcome
 from src.simulation.validator import ZeldaLogicEnv
+
+
+def _oracle_rejection_metrics(
+    *,
+    status: str,
+    failure_reason: str,
+    states_explored: int,
+    is_proxy: bool = False,
+    indeterminate: bool | None = None,
+) -> Dict[str, Any]:
+    """Return a schema-stable rejection without rewarding indeterminate maps."""
+    normalized_status = str(status or "failed")
+    return {
+        'fitness': -10.0,
+        'solvable_astar': False,
+        'solvable_cbs': False,
+        'confusion_ratio': float('nan'),
+        'normalized_confusion_ratio': float('nan'),
+        'path_efficiency': 0.0,
+        'exploration_efficiency': 0.0,
+        'room_entropy': 0.0,
+        'confusion_index': 0.0,
+        'astar_path_length': 0,
+        'cbs_path_length': 0,
+        'astar_states': int(max(0, states_explored)),
+        'oracle_status': normalized_status,
+        'oracle_indeterminate': (
+            bool(indeterminate)
+            if indeterminate is not None
+            else normalized_status in {'timeout', 'inconclusive', 'failed'}
+        ),
+        'failure_reason': str(failure_reason or ''),
+        'is_proxy': float(bool(is_proxy)),
+    }
 
 
 def _compute_graph_cognitive_proxy(
@@ -29,20 +64,12 @@ def _compute_graph_cognitive_proxy(
     """
     n = int(graph.number_of_nodes())
     if n <= 0:
-        return {
-            'fitness': -10.0,
-            'solvable_astar': False,
-            'solvable_cbs': False,
-            'confusion_ratio': float('inf'),
-            'normalized_confusion_ratio': float('inf'),
-            'path_efficiency': 0.0,
-            'room_entropy': 0.0,
-            'confusion_index': 0.0,
-            'astar_path_length': 0,
-            'cbs_path_length': 0,
-            'astar_states': 0,
-            'is_proxy': 1.0,
-        }
+        return _oracle_rejection_metrics(
+            status="invalid_map",
+            failure_reason="empty graph",
+            states_explored=0,
+            is_proxy=True,
+        )
 
     def _has_semantic(node_data: Dict[str, Any], *tokens: str) -> bool:
         label_tokens = {
@@ -100,6 +127,11 @@ def _compute_graph_cognitive_proxy(
     validation_graph = nx.DiGraph(graph)
     validation = ExternalValidator(mode="full").validate(validation_graph, start_node=start, goal_node=goal)
     solvable = bool(validation.is_solvable)
+    oracle_status = oracle_status_from_outcome(
+        solvable,
+        str(getattr(validation, "failure_reason", "") or ""),
+        str(getattr(validation, "termination_status", "") or ""),
+    )
     if solvable and validation.path_length > 0:
         shortest = int(validation.path_length)
     else:
@@ -168,9 +200,8 @@ def _compute_graph_cognitive_proxy(
         'astar_path_length': int(shortest),
         'cbs_path_length': int(cbs_path_len),
         'astar_states': int(getattr(validation, "states_explored", 0) or max(0, n_physical + e_physical)),
-        'oracle_status': str(
-            getattr(validation, "termination_status", "solved" if solvable else "failed")
-        ),
+        'oracle_status': oracle_status,
+        'oracle_indeterminate': oracle_status in {'timeout', 'failed'},
         'failure_reason': '' if solvable else str(getattr(validation, "failure_reason", "") or "progression graph unsolved"),
         'is_proxy': 1.0,
     }
@@ -218,39 +249,19 @@ def compute_cbs_fitness(
     path_a = list(oracle["path"])
     states_a = int(oracle["states_explored"])
     oracle_status = str(oracle["status"])
-    if oracle_status == "timeout":
-        return {
-            'fitness': 0.0,
-            'solvable_astar': False,
-            'solvable_cbs': False,
-            'oracle_status': oracle_status,
-            'confusion_ratio': float('inf'),
-            'normalized_confusion_ratio': float('inf'),
-            'path_efficiency': 0.0,
-            'exploration_efficiency': 0.0,
-            'room_entropy': 0.0,
-            'confusion_index': 0.0,
-            'astar_path_length': 0,
-            'cbs_path_length': 0,
-            'astar_states': states_a,
-            'is_proxy': 0.0,
-        }
+    if not success_a:
+        return _oracle_rejection_metrics(
+            status=oracle_status,
+            failure_reason=str(oracle.get("failure_reason", "") or ""),
+            states_explored=states_a,
+            indeterminate=bool(oracle.get("indeterminate", True)),
+        )
     if success_a and len(path_a) <= 0:
-        return {
-            'fitness': -10.0,
-            'solvable_astar': False,
-            'solvable_cbs': False,
-            'confusion_ratio': float('inf'),
-            'normalized_confusion_ratio': float('inf'),
-            'path_efficiency': 0.0,
-            'exploration_efficiency': 0.0,
-            'room_entropy': 0.0,
-            'confusion_index': 0.0,
-            'astar_path_length': 0,
-            'cbs_path_length': 0,
-            'astar_states': states_a,
-            'is_proxy': 0.0,
-        }
+        return _oracle_rejection_metrics(
+            status="failed",
+            failure_reason="Oracle reported success without a replayable path.",
+            states_explored=states_a,
+        )
     
     env_c = ZeldaLogicEnv(semantic_grid=grid_for_pcbs)
     cbs = CognitiveBoundedSearch(env_c, persona=persona, timeout=cbs_timeout, seed=seed)
@@ -307,6 +318,8 @@ def compute_cbs_fitness(
         'cbs_path_length': cbs_steps,
         'astar_states': states_a,
         'oracle_status': oracle_status,
+        'oracle_indeterminate': False,
+        'failure_reason': str(oracle.get("failure_reason", "") or ""),
         'is_proxy': 0.0,
     }
 

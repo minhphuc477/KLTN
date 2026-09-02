@@ -90,6 +90,16 @@ def test_internal_validation_split_groups_rooms_by_dungeon():
     assert len(validation_dungeons) == 1
 
 
+def test_publication_split_fails_closed_without_group_metadata():
+    with pytest.raises(ValueError, match="Grouped internal validation requires"):
+        split_dataset_for_vqvae_validation(
+            list(range(20)),
+            validation_fraction=0.2,
+            seed=123,
+            require_group_metadata=True,
+        )
+
+
 def test_vqvae_evaluation_restores_training_mode():
     model = torch.nn.Identity()
     model.train()

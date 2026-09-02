@@ -48,27 +48,27 @@ from collections import deque, defaultdict
 
 import numpy as np
 
-if TYPE_CHECKING:
-    from src.simulation.validator import ZeldaLogicEnv
-
-# Configure logging
-logger = logging.getLogger(__name__)
-
-# Import tile constants from canonical source
 from src.core.definitions import (
     ROOM_HEIGHT,
     ROOM_WIDTH,
-    SEMANTIC_PALETTE
+    SEMANTIC_PALETTE,
 )
-
-# Re-import blocking/walkable sets for convenience
 from src.simulation.validator import (
-    WALKABLE_IDS, BLOCKING_IDS, CONDITIONAL_IDS, 
-    PICKUP_IDS, Action, ACTION_DELTAS,
+    ACTION_DELTAS,
+    BLOCKING_IDS,
+    CONDITIONAL_IDS,
+    PICKUP_IDS,
+    WALKABLE_IDS,
+    Action,
     GameState as _GameState,
     StateSpaceAStar,
     game_state_key,
 )
+
+if TYPE_CHECKING:
+    from src.simulation.validator import ZeldaLogicEnv
+
+logger = logging.getLogger(__name__)
 
 
 # ==============================================================================
@@ -934,7 +934,8 @@ class VisionSystem:
         
         # Handle 360-degree vision (no cone restriction)
         if self.cone_angle >= 360:
-            angle_check = lambda dr, dc: True
+            def angle_check(_dr: int, _dc: int) -> bool:
+                return True
         else:
             # Compute angle limits
             half_angle = math.radians(self.cone_angle / 2)
@@ -2148,8 +2149,14 @@ class CognitiveState:
     visit_counts: Dict[Tuple[int, int], int] = field(default_factory=dict)
     
     def __hash__(self):
-        """Hash for state-space search (only game state + step)."""
-        return hash((hash(self.game_state), self.current_step))
+        """Hash for state-space search (game state only, step-agnostic)."""
+        return hash(self.game_state)
+
+    def __eq__(self, other: object) -> bool:
+        """Equality for state-space search (game state only)."""
+        if not isinstance(other, CognitiveState):
+            return NotImplemented
+        return self.game_state == other.game_state
     
     def copy(self) -> 'CognitiveState':
         """Create a deep copy for branching."""
@@ -2486,12 +2493,12 @@ class CognitiveBoundedSearch:
             actual_tile = int(grid[best_pos[0], best_pos[1]])
             execution_state = cog_state.game_state
             graph_edge_type = getattr(self, "_pending_graph_transition_types", {}).get(tuple(best_pos))
-            if graph_edge_type not in {None, "stair"}:
+            if graph_edge_type is not None and graph_edge_type != "stair":
                 graph_ok, execution_state = self._transition_helper.apply_graph_edge_transition(
                     execution_state,
                     current_pos,
                     best_pos,
-                    str(graph_edge_type),
+                    graph_edge_type,
                 )
                 if not graph_ok:
                     moved, new_game_state = False, cog_state.game_state
@@ -2808,6 +2815,7 @@ class CognitiveBoundedSearch:
             int(SEMANTIC_PALETTE["DOOR_LOCKED"]),
             int(SEMANTIC_PALETTE["DOOR_BOMB"]),
             int(SEMANTIC_PALETTE["DOOR_BOSS"]),
+            int(SEMANTIC_PALETTE["DOOR_PUZZLE"]),
         }
 
         strict_original = bool(getattr(self.env, "strict_original_mode", False))
@@ -2820,7 +2828,7 @@ class CognitiveBoundedSearch:
             can_transition = is_stair or is_door or self._is_at_room_boundary(current_pos)
 
         transition_positions: List[Tuple[int, int]] = []
-        transition_types: Dict[Tuple[int, int], str] = {}
+        transition_types: Dict[Tuple[int, int], Any] = {}
         if is_stair:
             try:
                 for pos in self._transition_helper.get_stair_destinations(current_pos):
@@ -2838,7 +2846,7 @@ class CognitiveBoundedSearch:
                 ):
                     normalized = (int(pos[0]), int(pos[1]))
                     transition_positions.append(normalized)
-                    transition_types[normalized] = str(edge_type)
+                    transition_types[normalized] = edge_type
             except (AttributeError, RuntimeError, ValueError, TypeError):
                 pass
             try:
@@ -2848,7 +2856,7 @@ class CognitiveBoundedSearch:
                 ):
                     normalized = (int(pos[0]), int(pos[1]))
                     transition_positions.append(normalized)
-                    transition_types[normalized] = str(edge_type)
+                    transition_types[normalized] = edge_type
             except (AttributeError, RuntimeError, ValueError, TypeError):
                 pass
 

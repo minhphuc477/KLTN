@@ -23,13 +23,27 @@ SafetensorsLoad = Callable[..., Mapping[str, torch.Tensor]]
 SafetensorsSave = Callable[[Mapping[str, torch.Tensor], str], None]
 
 
+def _clean_state_dict(obj: Any) -> Any:
+    """Extract and strip 'module.' DDP prefixes from state dict keys."""
+    if hasattr(obj, "state_dict"):
+        sd = obj.state_dict()
+    elif isinstance(obj, dict):
+        sd = obj
+    else:
+        return obj
+    return {
+        (k[7:] if k.startswith("module.") else k): v
+        for k, v in sd.items()
+    }
+
+
 def build_resume_checkpoint_payload(trainer: Any, metrics: Optional[Dict] = None) -> Dict[str, Any]:
     payload = {
         "epoch": trainer.epoch,
         "global_step": trainer.global_step,
-        "diffusion_state_dict": trainer.diffusion.state_dict(),
-        "ema_diffusion_state_dict": trainer.ema_diffusion.state_dict(),
-        "condition_encoder_state_dict": trainer.condition_encoder.state_dict(),
+        "diffusion_state_dict": _clean_state_dict(trainer.diffusion),
+        "ema_diffusion_state_dict": _clean_state_dict(trainer.ema_diffusion),
+        "condition_encoder_state_dict": _clean_state_dict(trainer.condition_encoder),
         "optimizer_state_dict": trainer.optimizer.state_dict(),
         "scheduler_state_dict": trainer.scheduler.state_dict(),
         "config": trainer.config.to_dict(),
@@ -43,10 +57,10 @@ def build_resume_checkpoint_payload(trainer: Any, metrics: Optional[Dict] = None
         bool(getattr(trainer.config, "logic_net_enabled", True))
         and getattr(trainer, "logic_net", None) is not None
     ):
-        payload["logic_net_state_dict"] = trainer.logic_net.state_dict()
+        payload["logic_net_state_dict"] = _clean_state_dict(trainer.logic_net)
     if getattr(trainer, "puzzle_stage_semantics_head", None) is not None:
         payload["puzzle_stage_semantics_head_state_dict"] = (
-            trainer.puzzle_stage_semantics_head.state_dict()
+            _clean_state_dict(trainer.puzzle_stage_semantics_head)
         )
     return payload
 
@@ -55,9 +69,9 @@ def build_inference_checkpoint_payload(trainer: Any, metrics: Optional[Dict] = N
     payload = {
         "epoch": trainer.epoch,
         "global_step": trainer.global_step,
-        "diffusion_state_dict": trainer.diffusion.state_dict(),
-        "ema_diffusion_state_dict": trainer.ema_diffusion.state_dict(),
-        "condition_encoder_state_dict": trainer.condition_encoder.state_dict(),
+        "diffusion_state_dict": _clean_state_dict(trainer.diffusion),
+        "ema_diffusion_state_dict": _clean_state_dict(trainer.ema_diffusion),
+        "condition_encoder_state_dict": _clean_state_dict(trainer.condition_encoder),
         "config": trainer.config.to_dict(),
         "metrics": metrics,
         "schedule_type": trainer.config.schedule_type,

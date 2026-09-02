@@ -20,6 +20,13 @@ TRAP_NODE_TOKENS = frozenset({"softlock", "soft", "trap", "pitfall", "deadlock",
 LOW_VALUE_DEAD_END_DEPTH = 2
 
 
+def _safe_ratio(numerator: float, denominator: float, default: float = 0.0) -> float:
+    """Safely divide numerator by denominator, returning default if denominator is zero."""
+    if denominator == 0:
+        return float(default)
+    return float(numerator) / float(denominator)
+
+
 def _node_tokens(mission_graph: nx.Graph, node: Any) -> Set[str]:
     data = mission_graph.nodes[node] if node in mission_graph.nodes else {}
     values = [
@@ -124,7 +131,7 @@ class FrustrationAnalyzer:
 
         total_frustration = (
             self.weights["backtracking"] * backtracking_ratio
-            + self.weights["dead_ends"] * (dead_end_count / max(len(mission_graph.nodes), 1))
+            + self.weights["dead_ends"] * _safe_ratio(dead_end_count, len(mission_graph.nodes))
             + self.weights["unclear_goals"] * unclear_goal_score
             + self.weights["empty_rooms"] * empty_room_ratio
         )
@@ -166,8 +173,8 @@ class FrustrationAnalyzer:
                 depth_reversal += max(0.0, float(max_depth_seen - depth))
             last_seen[room] = idx
 
-        span_score = loop_span / max(1.0, float(len(solution_path) - 1))
-        depth_score = depth_reversal / max(1.0, float((len(solution_path) - 1) * max_depth_den))
+        span_score = _safe_ratio(loop_span, len(solution_path) - 1)
+        depth_score = _safe_ratio(depth_reversal, (len(solution_path) - 1) * max_depth_den)
         return float(np.clip((0.45 * span_score) + (0.55 * depth_score), 0.0, 1.0))
 
     def _count_dead_ends(self, mission_graph: nx.Graph, room_contents: Dict[int, Dict]) -> int:
@@ -257,7 +264,7 @@ class FrustrationAnalyzer:
             or room_contents.get(node, {}).get("boss", False)
         }
         # A single final boss must not erase the layout-level branching signal.
-        goal_visibility = min(len(goal_rooms) / max(len(graph_nodes), 1), 1.0)
+        goal_visibility = min(_safe_ratio(len(goal_rooms), len(graph_nodes)), 1.0)
         trap_pressure = _branch_trap_pressure(mission_graph, room_contents)
         return float(
             np.clip(
@@ -292,7 +299,7 @@ class FrustrationAnalyzer:
             if not has_content:
                 empty_count += 1
 
-        return empty_count / len(room_contents)
+        return _safe_ratio(empty_count, len(room_contents))
 
 
 class ExplorabilityAnalyzer:
@@ -307,14 +314,14 @@ class ExplorabilityAnalyzer:
         total_rooms = len(mission_graph.nodes)
         graph_nodes = set(mission_graph.nodes)
         optional_rooms = max(0, total_rooms - len(set(critical_path) & graph_nodes))
-        optional_ratio = optional_rooms / max(total_rooms, 1)
+        optional_ratio = _safe_ratio(optional_rooms, total_rooms)
         secret_count = self._count_secrets(mission_graph)
         reward_density = self._compute_reward_density(room_contents)
 
         trap_pressure = _branch_trap_pressure(mission_graph, room_contents)
         discovery_potential = (
             0.4 * optional_ratio
-            + 0.3 * min(secret_count / max(total_rooms, 1), 1.0)
+            + 0.3 * min(_safe_ratio(secret_count, total_rooms), 1.0)
             + 0.3 * reward_density
         ) * (1.0 - 0.5 * trap_pressure)
 
@@ -341,7 +348,7 @@ class ExplorabilityAnalyzer:
             for content in room_contents.values()
         )
 
-        reward_density = total_rewards / len(room_contents)
+        reward_density = _safe_ratio(total_rewards, len(room_contents))
         return min(reward_density / 3.0, 1.0)
 
 
@@ -383,7 +390,7 @@ class FlowAnalyzer:
         deltas = np.diff(np.asarray(difficulties, dtype=np.float32))
         progressive_steps = int(np.count_nonzero(deltas > 1e-6))
         regressive_steps = int(np.count_nonzero(deltas < -1e-6))
-        return float(np.clip((progressive_steps - regressive_steps) / max(len(deltas), 1), 0.0, 1.0))
+        return float(np.clip(_safe_ratio(progressive_steps - regressive_steps, len(deltas)), 0.0, 1.0))
 
     def _calculate_weighted_difficulty(self, room_content: Dict) -> float:
         enemy_count = room_content.get("enemies", 0)

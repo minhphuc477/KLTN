@@ -81,6 +81,7 @@ def _initialize_pipeline_from_flat_kwargs(
     condition_reference_hidden_dim: int = 64,
     condition_use_rrwp_edge_features: bool = True,
     condition_strict_schema: bool = True,
+    diffusion_condition_global_graph_enabled: bool = True,
     topology_refinement_mode: str = "gat2",
     diffusion_attention_mode: str = "softmax",
     diffusion_hedgehog_feature_dim: int = 32,
@@ -198,6 +199,9 @@ def _initialize_pipeline_from_flat_kwargs(
     pipeline.domain_schema = resolve_domain_schema(domain_schema)
     pipeline.domain_schema_name = str(getattr(pipeline.domain_schema, "name", type(pipeline.domain_schema).__name__))
     pipeline.use_graph_node_cross_attention = bool(use_graph_node_cross_attention)
+    pipeline.diffusion_condition_global_graph_enabled = bool(
+        diffusion_condition_global_graph_enabled
+    )
     pipeline.use_latent_boundary_masking = bool(use_latent_boundary_masking)
     pipeline.topology_refinement_mode = str(topology_refinement_mode).strip().lower()
     pipeline.diffusion_attention_mode = str(diffusion_attention_mode).strip().lower()

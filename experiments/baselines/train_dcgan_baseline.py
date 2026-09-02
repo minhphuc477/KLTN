@@ -144,6 +144,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--run-pcbs", action="store_true")
+    parser.add_argument(
+        "--no-save-checkpoint",
+        action="store_true",
+        help="Skip saving the trained model checkpoint (useful for CI dry-runs).",
+    )
     args = parser.parse_args(argv)
 
     set_reproducible_seed(args.seed)
@@ -160,6 +165,30 @@ def main(argv: Sequence[str] | None = None) -> int:
         dry_run=args.dry_run,
     )
     num_generate = 4 if args.dry_run else int(args.num_generate)
+
+    # Persist the trained model so it can be reloaded for evaluation / ablations
+    # without rerunning the full training loop.
+    if not args.no_save_checkpoint and not args.dry_run:
+        args.output_dir.mkdir(parents=True, exist_ok=True)
+        ckpt_path = args.output_dir / "dcgan_checkpoint.pth"
+        torch.save(
+            {
+                "generator_state_dict": generator.state_dict(),
+                "hparams": {
+                    "z_dim": args.z_dim,
+                    "hidden": args.hidden,
+                    "room_shape": list(np.asarray(reference[0]).shape),
+                    "num_tiles": 44,
+                    "epochs": args.epochs,
+                    "batch_size": args.batch_size,
+                    "learning_rate": args.learning_rate,
+                    "seed": args.seed,
+                },
+            },
+            ckpt_path,
+        )
+        print(f"Saved DCGAN checkpoint -> {ckpt_path}")
+
     generated = sample_generator(generator, num_samples=num_generate, z_dim=args.z_dim, device=device)
     report = evaluate_generated_grids(
         generated,

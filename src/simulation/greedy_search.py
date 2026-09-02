@@ -25,7 +25,8 @@ class GreedyGameStateSolver:
             priority_options=self.config.to_priority_options(),
             search_mode="greedy",
         )
-        success, path, diagnostics = solver.solve_with_diagnostics()
+        success, path, diagnostics = solver.solve_with_verified_diagnostics()
+        termination_status = str(getattr(diagnostics, "termination_status", "") or "")
         return GameStateSearchResult(
             success=bool(success),
             path=list(path or []),
@@ -37,8 +38,10 @@ class GreedyGameStateSolver:
                     oracle_status_from_outcome(
                         bool(success),
                         str(getattr(diagnostics, "failure_reason", "") or ""),
+                        termination_status,
                     )
                 ),
+                "termination_status": termination_status,
                 "time_taken_ms": float(getattr(diagnostics, "time_taken_ms", 0.0) or 0.0),
                 "states_pruned_dominated": int(
                     getattr(diagnostics, "states_pruned_dominated", 0) or 0

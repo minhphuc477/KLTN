@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 import networkx as nx
 import numpy as np
 
-from src.simulation.edge_logic import edge_type_from_data
+from src.simulation.edge_logic import edge_type_from_data, graph_edge_state_key
 from src.simulation.state import (
     WALKABLE_IDS,
     is_graph_goal_node as _is_graph_goal_node,
@@ -326,7 +326,8 @@ class GraphGuidedValidator:
         key_nodes = []
         bomb_nodes = []
         boss_key_nodes = []
-        item_nodes = []
+        item_nodes: Dict[Any, str] = {}
+        switch_ids_by_node: Dict[Any, str] = {}
         
         for node_id in graph.nodes():
             node_data = graph.nodes[node_id]
@@ -355,7 +356,14 @@ class GraphGuidedValidator:
                 or "key_item" in node_tokens
                 or "item_minor" in node_tokens
             ):
-                item_nodes.append(node_id)
+                item_name = node_data.get("item_type", node_data.get("item_id"))
+                item_nodes[node_id] = str(item_name).upper() if item_name else "*"
+            if (
+                bool(node_data.get("has_switch", False))
+                or "switch" in node_tokens
+            ):
+                switch_id = node_data.get("switch_id", node_id)
+                switch_ids_by_node[node_id] = str(switch_id)
         
         if start_node is None or triforce_node is None:
             return GraphValidationResult(
@@ -376,7 +384,13 @@ class GraphGuidedValidator:
             int(inventory_start.get('keys', 0)),
             int(inventory_start.get('bombs', 0)),
             bool(inventory_start.get('boss_key', False)),
-            bool(inventory_start.get('item', False)),
+            frozenset(
+                {"*"} if bool(inventory_start.get('item', False)) else ()
+            )
+            | frozenset(
+                str(value).upper() for value in inventory_start.get('items', ())
+            ),
+            frozenset(str(value) for value in inventory_start.get('switches', ())),
         )
         
         queue = deque([initial_state])
@@ -386,7 +400,7 @@ class GraphGuidedValidator:
         
         while queue:
             state = queue.popleft()
-            current_node, collected, opened, keys, bombs, boss_key, has_item = state
+            current_node, collected, opened, keys, bombs, boss_key, items, switches = state
             
             # Check win
             if current_node == triforce_node:
@@ -413,7 +427,8 @@ class GraphGuidedValidator:
             new_keys = keys
             new_bombs = bombs
             new_boss_key = boss_key
-            new_has_item = has_item
+            new_items = items
+            new_switches = switches
             if current_node not in collected and current_node in key_nodes:
                 new_collected = collected | {current_node}
                 new_keys = keys + 1
@@ -426,13 +441,15 @@ class GraphGuidedValidator:
                 new_boss_key = True
             if current_node not in collected and current_node in item_nodes:
                 new_collected = new_collected | {current_node}
-                new_has_item = True
+                new_items = items | {item_nodes[current_node]}
+            if current_node in switch_ids_by_node:
+                new_switches = switches | {switch_ids_by_node[current_node]}
             
             # Explore edges
             for neighbor in graph.neighbors(current_node):
                 edge_data = graph.get_edge_data(current_node, neighbor) or {}
                 edge_type = edge_type_from_data(edge_data)
-                edge_key = tuple(sorted((current_node, neighbor), key=lambda value: (type(value).__name__, str(value))))
+                edge_key = graph_edge_state_key(graph, current_node, neighbor)
                 
                 can_traverse = False
                 new_opened = opened
@@ -458,9 +475,31 @@ class GraphGuidedValidator:
                 elif edge_type in {'boss', 'boss_locked'}:
                     can_traverse = bool(new_boss_key)
                 elif edge_type in {'item_locked', 'item_gate'}:
-                    can_traverse = bool(new_has_item)
+                    required_item = edge_data.get("item_required")
+                    if required_item is None or not str(required_item).strip():
+                        can_traverse = bool(new_items)
+                    else:
+                        can_traverse = (
+                            "*" in new_items
+                            or str(required_item).strip().upper() in new_items
+                        )
+                elif edge_type in {'hazard', 'hazard_protected'}:
+                    required_item = edge_data.get("protection_item_id")
+                    if required_item is None or not str(required_item).strip():
+                        can_traverse = bool(new_items)
+                    else:
+                        can_traverse = (
+                            "*" in new_items
+                            or str(required_item).strip().upper() in new_items
+                        )
                 elif edge_type == 'switch':
-                    can_traverse = True
+                    required_switches = list(edge_data.get("switches_required", ()) or ())
+                    if edge_data.get("switch_id") is not None:
+                        required_switches.append(edge_data["switch_id"])
+                    required = {str(value) for value in required_switches}
+                    # A switch gate without an explicit controller cannot be
+                    # proven traversable by this graph-only state model.
+                    can_traverse = bool(required) and required.issubset(new_switches)
                 else:
                     # This graph-only validator does not model the resource or
                     # state needed by the remaining constraints. Fail closed.
@@ -479,7 +518,8 @@ class GraphGuidedValidator:
                         final_keys,
                         final_bombs,
                         new_boss_key,
-                        new_has_item,
+                        new_items,
+                        new_switches,
                     )
                     if new_state not in visited:
                         visited.add(new_state)

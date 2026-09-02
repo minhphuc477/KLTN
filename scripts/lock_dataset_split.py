@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, List
+
+from src.publication.dataset_provenance import (
+    dataset_content_sha256,
+    dataset_file_records,
+)
 
 
 DEFAULT_DATA_ROOT = Path("Data") / "The Legend of Zelda"
@@ -24,24 +28,6 @@ def _parse_ids(value: str) -> List[int]:
     return ids
 
 
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as f:
-        for chunk in iter(lambda: f.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def iter_dataset_files(data_root: Path) -> Iterable[Path]:
-    """Yield regular dataset files in stable relative-path order."""
-    excluded_names = {"dataset_manifest.json"}
-    return sorted(
-        path
-        for path in data_root.rglob("*")
-        if path.is_file() and path.name not in excluded_names
-    )
-
-
 def build_manifest(
     data_root: Path,
     *,
@@ -52,16 +38,7 @@ def build_manifest(
     if not data_root.exists():
         raise FileNotFoundError(f"Dataset root does not exist: {data_root}")
 
-    files = []
-    for path in iter_dataset_files(data_root):
-        rel_path = path.relative_to(data_root).as_posix()
-        files.append(
-            {
-                "path": rel_path,
-                "size_bytes": path.stat().st_size,
-                "sha256": _sha256_file(path),
-            }
-        )
+    files = dataset_file_records(data_root)
 
     return {
         "schema_version": "1.0",
@@ -73,6 +50,7 @@ def build_manifest(
             "test_dungeon_ids": [int(v) for v in test_dungeon_ids],
         },
         "file_count": len(files),
+        "content_sha256": dataset_content_sha256(files),
         "files": files,
     }
 

@@ -822,6 +822,25 @@ def run_protocol(args: argparse.Namespace) -> Dict[str, Any]:
     test_dungeons = tuple(int(v) for v in DEFAULT_TEST_DUNGEONS)
     variants = tuple(int(v) for v in DEFAULT_VARIANTS)
 
+    # ---- Holdout invariant guards ------------------------------------------------
+    # These assertions enforce the Dungeon 9 holdout contract BEFORE any data is
+    # loaded.  If DEFAULT_TRAIN_DUNGEONS / DEFAULT_TEST_DUNGEONS are ever changed
+    # in src/zelda_data/splits.py, these will fail loudly rather than silently
+    # contaminating the holdout evaluation.
+    assert 9 not in train_dungeons, (
+        f"HOLDOUT VIOLATION: Dungeon 9 is present in the training set {train_dungeons!r}. "
+        f"Dungeon 9 must be reserved exclusively for evaluation."
+    )
+    assert 9 in test_dungeons, (
+        f"HOLDOUT VIOLATION: Dungeon 9 is absent from the test set {test_dungeons!r}. "
+        f"Dungeon 9 must be the held-out evaluation dungeon."
+    )
+    assert not set(train_dungeons) & set(test_dungeons), (
+        f"HOLDOUT VIOLATION: train and test sets overlap at dungeons "
+        f"{sorted(set(train_dungeons) & set(test_dungeons))}."
+    )
+    # ---- End holdout guards ------------------------------------------------------
+
     train_rooms, train_meta = _load_rooms(args.data_root, train_dungeons, variants)
     test_rooms, test_meta = _load_rooms(args.data_root, test_dungeons, variants)
     all_d9_specs = _build_dungeon9_specs(args.data_root, variants)

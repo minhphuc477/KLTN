@@ -207,27 +207,48 @@ def run_game_state_rows(
     for spec in specs:
         env = ZeldaLogicEnv(grid.copy())
         start = time.perf_counter()
-        result = run_game_state_solver(env, int(spec.index), config)
-        elapsed = time.perf_counter() - start
-        metadata = dict(result.metadata or {})
-        rows.append(
-            {
-                "map_id": map_id,
-                "solver_key": spec.key,
-                "solver_label": spec.label,
-                "family": "game_state_search",
-                "validation_role": spec.validation_role,
-                "canonical_use": spec.canonical_use,
-                "success": bool(result.success),
-                "path_length": _path_length(result.path),
-                "states_explored": int(result.states_explored),
-                "time_sec": float(elapsed),
-                "fallback_used": bool(metadata.get("fallback_used", False)),
-                "status": _result_status(metadata),
-                "failure_reason": str(metadata.get("failure_reason", "") or ""),
-                "metadata": metadata,
-            }
-        )
+        try:
+            result = run_game_state_solver(env, int(spec.index), config)
+            elapsed = time.perf_counter() - start
+            metadata = dict(result.metadata or {})
+            rows.append(
+                {
+                    "map_id": map_id,
+                    "solver_key": spec.key,
+                    "solver_label": spec.label,
+                    "family": "game_state_search",
+                    "validation_role": spec.validation_role,
+                    "canonical_use": spec.canonical_use,
+                    "success": bool(result.success),
+                    "path_length": _path_length(result.path),
+                    "states_explored": int(result.states_explored),
+                    "time_sec": float(elapsed),
+                    "fallback_used": bool(metadata.get("fallback_used", False)),
+                    "status": _result_status(metadata),
+                    "failure_reason": str(metadata.get("failure_reason", "") or ""),
+                    "metadata": metadata,
+                }
+            )
+        except Exception as exc:  # noqa: BLE001  # solver timeout / OOM / unexpected
+            elapsed = time.perf_counter() - start
+            rows.append(
+                {
+                    "map_id": map_id,
+                    "solver_key": spec.key,
+                    "solver_label": spec.label,
+                    "family": "game_state_search",
+                    "validation_role": spec.validation_role,
+                    "canonical_use": spec.canonical_use,
+                    "success": False,
+                    "path_length": -1,
+                    "states_explored": -1,
+                    "time_sec": float(elapsed),
+                    "fallback_used": False,
+                    "status": "error",
+                    "failure_reason": f"{type(exc).__name__}: {exc}",
+                    "metadata": {},
+                }
+            )
     selection = {
         "requires_full_state_oracle": environment_requires_full_state_oracle(env_for_selection),
         "selected_solver_keys": [spec.key for spec in specs],
