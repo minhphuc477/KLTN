@@ -181,9 +181,16 @@ def _apply_maskgit_neighbor_boundary_tokens(
     fixed_tokens: Optional[torch.Tensor],
     fixed_mask: Optional[torch.Tensor],
     neighbor_latents: Dict[str, Optional[Any]],
+    reference_room_maps: Optional[Dict[str, Optional[Any]]] = None,
 ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor], int]:
-    """Anchor MaskGIT boundary tokens from decoded neighbor latents."""
-    if not neighbor_latents:
+    """Anchor MaskGIT boundary tokens from discrete neighbor room grids or decoded latents."""
+    has_ref_maps = isinstance(reference_room_maps, Mapping) and any(
+        value is not None for value in reference_room_maps.values()
+    )
+    has_latents = bool(neighbor_latents) and any(
+        value is not None for value in neighbor_latents.values()
+    )
+    if not has_ref_maps and not has_latents:
         return fixed_tokens, fixed_mask, 0
     if fixed_tokens is None or fixed_mask is None:
         fixed_tokens = torch.zeros((1, ROOM_HEIGHT, ROOM_WIDTH), device=pipeline.device, dtype=torch.long)
@@ -191,21 +198,42 @@ def _apply_maskgit_neighbor_boundary_tokens(
     fixed_tokens = fixed_tokens.to(device=pipeline.device, dtype=torch.long).clone()
     fixed_mask = fixed_mask.to(device=pipeline.device, dtype=torch.bool).clone()
     applied = 0
-    for raw_direction, latent in neighbor_latents.items():
-        direction = str(raw_direction).upper()
-        if direction not in _CURRENT_BOUNDARY_SLICES or latent is None:
+    for direction in ("N", "S", "E", "W"):
+        ref_map = reference_room_maps.get(direction) if isinstance(reference_room_maps, Mapping) else None
+        latent = neighbor_latents.get(direction) if isinstance(neighbor_latents, Mapping) else None
+        if ref_map is None and latent is None:
             continue
         try:
-            latent_t = torch.as_tensor(latent, device=pipeline.device)
-            if latent_t.dim() == 3:
-                latent_t = latent_t.unsqueeze(0)
-            if latent_t.dim() != 4:
-                raise ValueError(
-                    f"Neighbor latent for {direction} must be rank 3 or 4, got {tuple(latent_t.shape)}"
-                )
-            with torch.no_grad():
-                neighbor_logits = pipeline._decode_latent_with_vqvae(latent_t)
-                neighbor_grid = neighbor_logits.argmax(dim=1)[0].to(device=pipeline.device, dtype=torch.long)
+            neighbor_grid: Optional[torch.Tensor] = None
+            if ref_map is not None:
+                grid_t = torch.as_tensor(ref_map, device=pipeline.device)
+                if grid_t.dim() == 4 and int(grid_t.shape[0]) == 1 and int(grid_t.shape[1]) == 1:
+                    grid_t = grid_t.squeeze(0).squeeze(0)
+                elif grid_t.dim() == 3 and int(grid_t.shape[0]) == 1:
+                    grid_t = grid_t.squeeze(0)
+                if grid_t.dim() != 2:
+                    raise ValueError(
+                        f"Reference room map for {direction} must resolve to [H,W], got {tuple(grid_t.shape)}"
+                    )
+                neighbor_grid = grid_t.to(device=pipeline.device, dtype=torch.long)
+            elif latent is not None:
+                latent_t = torch.as_tensor(latent, device=pipeline.device)
+                if latent_t.dim() == 2 or (latent_t.dim() == 3 and int(latent_t.shape[0]) == 1 and tuple(latent_t.shape[-2:]) == (ROOM_HEIGHT, ROOM_WIDTH)):
+                    neighbor_grid = latent_t.squeeze(0).to(device=pipeline.device, dtype=torch.long) if latent_t.dim() == 3 else latent_t.to(device=pipeline.device, dtype=torch.long)
+                else:
+                    if latent_t.dim() == 3:
+                        latent_t = latent_t.unsqueeze(0)
+                    if latent_t.dim() != 4:
+                        raise ValueError(
+                            f"Neighbor latent for {direction} must be rank 3 or 4, got {tuple(latent_t.shape)}"
+                        )
+                    if getattr(pipeline, "vqvae", None) is None:
+                        continue
+                    with torch.no_grad():
+                        neighbor_logits = pipeline._decode_latent_with_vqvae(latent_t)
+                        neighbor_grid = neighbor_logits.argmax(dim=1)[0].to(device=pipeline.device, dtype=torch.long)
+            if neighbor_grid is None:
+                continue
             if tuple(neighbor_grid.shape[-2:]) != (ROOM_HEIGHT, ROOM_WIDTH):
                 raise ValueError(
                     f"Decoded neighbor grid for {direction} has shape {tuple(neighbor_grid.shape)}, "
@@ -395,13 +423,15 @@ def generate_room_batch(
         neighbor_latents = pipeline._normalize_neighbor_latents(
             pipeline._get_neighbor_latents(room_id, mission_graph_physical, room_latents)
         )
-        reference_room_maps = None
-        if needs_condition and bool(getattr(pipeline.condition_encoder, "use_reference_room_maps", False)):
-            reference_room_maps = pipeline._get_neighbor_reference_room_maps(
+        use_ref_maps = bool(getattr(pipeline.condition_encoder, "use_reference_room_maps", False))
+        neighbor_room_maps = None
+        if (needs_condition and use_ref_maps) or pipeline.room_generator_mode == "discrete_masked":
+            neighbor_room_maps = pipeline._get_neighbor_reference_room_maps(
                 room_id,
                 mission_graph_physical,
                 generated_rooms,
             )
+        reference_room_maps = neighbor_room_maps if (needs_condition and use_ref_maps) else None
         boundary_constraints = pipeline._build_room_boundary_constraints(
             graph=mission_graph_physical,
             room_id=room_id,
@@ -437,6 +467,7 @@ def generate_room_batch(
                 'room_id': room_id,
                 'neighbor_latents': neighbor_latents,
                 'reference_room_maps': reference_room_maps,
+                'neighbor_room_maps': neighbor_room_maps,
                 'graph_context': room_graph_context,
                 'boundary_constraints': boundary_constraints,
                 'position': room_position,
@@ -468,9 +499,17 @@ def generate_room_batch(
         raise ValueError(
             "Batched room conditions disagree on has_room_anchor; refusing to misalign graph tokens."
         )
+    cond_mode = str(
+        first_room_graph_context.get(
+            'graph_conditioning_mode',
+            'node_sequence' if bool(getattr(pipeline, 'use_graph_node_cross_attention', True)) else 'pooled',
+        )
+        or 'node_sequence'
+    ).strip().lower()
 
     graph_ctx_for_guidance = {
         'graph_scope': 'dungeon',
+        'graph_conditioning_mode': cond_mode,
         'has_room_anchor': room_anchor_flags.pop(),
         'node_features': graph_data.get('node_features'),
         'edge_index': graph_data.get('edge_index'),
@@ -578,6 +617,7 @@ def generate_room_batch(
                 layout[0],
                 layout[1],
                 inp.get('neighbor_latents', {}),
+                reference_room_maps=inp.get('neighbor_room_maps'),
             )
             anchored_layouts.append((anchored_tokens, anchored_mask))
             boundary_anchor_count += int(applied)
@@ -666,12 +706,21 @@ def generate_room_batch(
         if use_flow_ode:
             if use_fast_sampling:
                 pipeline._bump_diagnostic("fast_sampling_unavailable_flow_matching")
-            z_batch = pipeline.diffusion.flow_ode_sample(
-                context=condition_batch,
-                shape=latent_shape,
-                graph_data=graph_ctx_for_guidance,
-                num_steps=max(2, int(num_diffusion_steps)),
+            need_disable_adapters = bool(
+                getattr(pipeline.diffusion, "has_active_adapters", lambda: False)()
             )
+            if need_disable_adapters:
+                pipeline.diffusion.disable_adapters()
+            try:
+                z_batch = pipeline.diffusion.flow_ode_sample(
+                    context=condition_batch,
+                    shape=latent_shape,
+                    graph_data=graph_ctx_for_guidance,
+                    num_steps=max(2, int(num_diffusion_steps)),
+                )
+            finally:
+                if need_disable_adapters:
+                    pipeline.diffusion.enable_adapters()
             pipeline._bump_diagnostic("flow_ode_sampling_used")
         elif use_fast_sampling and pipeline.diffusion.supports_fast_sampling():
             z_batch = pipeline.diffusion.fast_sample(
@@ -685,16 +734,30 @@ def generate_room_batch(
         else:
             if use_fast_sampling:
                 pipeline._bump_diagnostic("fast_sampling_unavailable_fallback")
-            z_batch = pipeline.diffusion.ddim_sample(
-                context=condition_batch,
-                shape=latent_shape,
-                num_steps=max(1, int(num_diffusion_steps)),
-                graph_data=graph_ctx_for_guidance,
+            need_disable_adapters = bool(
+                getattr(pipeline.diffusion, "has_active_adapters", lambda: False)()
             )
+            if need_disable_adapters:
+                pipeline.diffusion.disable_adapters()
+            try:
+                z_batch = pipeline.diffusion.ddim_sample(
+                    context=condition_batch,
+                    shape=latent_shape,
+                    num_steps=max(1, int(num_diffusion_steps)),
+                    graph_data=graph_ctx_for_guidance,
+                )
+            finally:
+                if need_disable_adapters:
+                    pipeline.diffusion.enable_adapters()
         _record_stage_time(batch_stage_times, "batch_diffusion_sample_time_sec", sampler_started_at)
 
         if pipeline.use_latent_boundary_masking:
+            from src.pipeline.generation.room_processing import _select_graph_guidance_batch
+
             inpaint_started_at = time.perf_counter()
+            active_indices: List[int] = []
+            active_z_refs: List[torch.Tensor] = []
+            active_masks: List[torch.Tensor] = []
             for i, inp in enumerate(per_room_inputs):
                 try:
                     z_ref, boundary_edit_mask, has_boundary_constraints = build_neighbor_boundary_inpaint_inputs(
@@ -703,17 +766,51 @@ def generate_room_batch(
                         band=1,
                     )
                     if has_boundary_constraints:
-                        room_graph_guidance = pipeline._slice_graph_guidance_batch(graph_ctx_for_guidance, i)
-                        z_batch[i:i + 1] = pipeline.diffusion.inpaint(
-                            x_0=z_ref,
-                            mask=boundary_edit_mask,
-                            context=condition_batch[i:i + 1],
-                            graph_data=room_graph_guidance,
-                            num_steps=max(8, int(num_diffusion_steps) // 2),
-                        )
+                        active_indices.append(i)
+                        active_z_refs.append(z_ref)
+                        active_masks.append(boundary_edit_mask)
                 except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
                     raise RuntimeError(
                         f"Boundary latent inpainting failed for room {inp['room_id']!r}"
+                    ) from exc
+
+            if active_indices:
+                try:
+                    if len(active_indices) == B:
+                        z_ref_batch = torch.cat(active_z_refs, dim=0)
+                        mask_batch = torch.cat(active_masks, dim=0)
+                        cond_active = condition_batch
+                        graph_active = graph_ctx_for_guidance
+                    elif len(active_indices) == 1:
+                        idx0 = active_indices[0]
+                        z_ref_batch = active_z_refs[0]
+                        mask_batch = active_masks[0]
+                        cond_active = condition_batch[idx0:idx0 + 1] if condition_batch is not None else None
+                        graph_active = pipeline._slice_graph_guidance_batch(graph_ctx_for_guidance, idx0)
+                    else:
+                        z_ref_batch = torch.cat(active_z_refs, dim=0)
+                        mask_batch = torch.cat(active_masks, dim=0)
+                        cond_active = condition_batch[active_indices] if condition_batch is not None else None
+                        graph_active = _select_graph_guidance_batch(graph_ctx_for_guidance, active_indices)
+                    inpainted_active = pipeline.diffusion.inpaint(
+                        x_0=z_ref_batch,
+                        mask=mask_batch,
+                        context=cond_active,
+                        graph_data=graph_active,
+                        num_steps=max(8, int(num_diffusion_steps) // 2),
+                        noise_strength=0.25,
+                    )
+                    for pos, orig_idx in enumerate(active_indices):
+                        z_batch[orig_idx:orig_idx + 1] = inpainted_active[pos:pos + 1]
+                except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
+                    active_room_ids = [per_room_inputs[idx]['room_id'] for idx in active_indices]
+                    target_desc = (
+                        f"room {active_room_ids[0]!r}"
+                        if len(active_room_ids) == 1
+                        else f"rooms {active_room_ids!r}"
+                    )
+                    raise RuntimeError(
+                        f"Boundary latent inpainting failed for {target_desc}"
                     ) from exc
             _record_stage_time(batch_stage_times, "batch_boundary_inpaint_time_sec", inpaint_started_at)
         decode_started_at = time.perf_counter()
@@ -960,6 +1057,7 @@ def generate_room(
             fixed_tokens,
             fixed_mask,
             neighbor_latents,
+            reference_room_maps=reference_room_maps,
         )
         if boundary_anchor_count > 0:
             pipeline._bump_diagnostic("masked_room_neighbor_boundary_tokens_applied")
@@ -1048,12 +1146,21 @@ def generate_room(
         if use_flow_ode:
             if use_fast_sampling:
                 pipeline._bump_diagnostic("fast_sampling_unavailable_flow_matching")
-            z_latent = pipeline.diffusion.flow_ode_sample(
-                context=condition,
-                shape=latent_shape,
-                graph_data=graph_data,
-                num_steps=max(2, int(num_diffusion_steps)),
+            need_disable_adapters = bool(
+                getattr(pipeline.diffusion, "has_active_adapters", lambda: False)()
             )
+            if need_disable_adapters:
+                pipeline.diffusion.disable_adapters()
+            try:
+                z_latent = pipeline.diffusion.flow_ode_sample(
+                    context=condition,
+                    shape=latent_shape,
+                    graph_data=graph_data,
+                    num_steps=max(2, int(num_diffusion_steps)),
+                )
+            finally:
+                if need_disable_adapters:
+                    pipeline.diffusion.enable_adapters()
             pipeline._bump_diagnostic("flow_ode_sampling_used")
         elif use_fast_sampling and pipeline.diffusion.supports_fast_sampling():
             z_latent = pipeline.diffusion.fast_sample(
@@ -1068,20 +1175,38 @@ def generate_room(
         elif use_ddim:
             if use_fast_sampling:
                 pipeline._bump_diagnostic("fast_sampling_unavailable_fallback")
-            z_latent = pipeline.diffusion.ddim_sample(
-                context=condition,
-                shape=latent_shape,
-                num_steps=max(1, int(num_diffusion_steps)),
-                graph_data=graph_data,
+            need_disable_adapters = bool(
+                getattr(pipeline.diffusion, "has_active_adapters", lambda: False)()
             )
+            if need_disable_adapters:
+                pipeline.diffusion.disable_adapters()
+            try:
+                z_latent = pipeline.diffusion.ddim_sample(
+                    context=condition,
+                    shape=latent_shape,
+                    num_steps=max(1, int(num_diffusion_steps)),
+                    graph_data=graph_data,
+                )
+            finally:
+                if need_disable_adapters:
+                    pipeline.diffusion.enable_adapters()
         else:
             if use_fast_sampling:
                 pipeline._bump_diagnostic("fast_sampling_unavailable_fallback")
-            z_latent = pipeline.diffusion.sample(
-                context=condition,
-                shape=latent_shape,
-                graph_data=graph_data,
+            need_disable_adapters = bool(
+                getattr(pipeline.diffusion, "has_active_adapters", lambda: False)()
             )
+            if need_disable_adapters:
+                pipeline.diffusion.disable_adapters()
+            try:
+                z_latent = pipeline.diffusion.sample(
+                    context=condition,
+                    shape=latent_shape,
+                    graph_data=graph_data,
+                )
+            finally:
+                if need_disable_adapters:
+                    pipeline.diffusion.enable_adapters()
         _record_stage_time(stage_times, "diffusion_sample_time_sec", sampler_started_at)
 
         validate_tensor_contract(
@@ -1307,7 +1432,7 @@ def generate_room(
         "interior_obstacle_tiles_removed": 0,
         "interior_obstacle_components_removed": 0,
     }
-    if effective_room_generator_mode == "latent_diffusion":
+    if effective_room_generator_mode in {"latent_diffusion", "discrete_masked"}:
         neural_grid, neural_structural_cleanup = pipeline._strip_structural_room_artifacts(
             neural_grid,
             graph=mission_graph_for_room,
@@ -1509,7 +1634,7 @@ def generate_room(
                         repaired_semantic_preserved_count,
                         repaired_semantic_preserved_ids,
                     )
-                if effective_room_generator_mode == "latent_diffusion":
+                if effective_room_generator_mode in {"latent_diffusion", "discrete_masked"}:
                     repaired_grid, repaired_structural_cleanup = pipeline._strip_structural_room_artifacts(
                         repaired_grid,
                         graph=mission_graph_for_room,

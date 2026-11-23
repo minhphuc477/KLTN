@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Mapping, Optional
 
 import torch
+from src.utils.training_rng import capture_training_rng, restore_training_rng
 
 from src.pipeline.room_topology_conditioning import build_topology_anchor_policy_metadata
 from src.training.diffusion_checkpoint_contracts import load_checkpoint_metadata_sidecar
@@ -49,6 +50,8 @@ def build_resume_checkpoint_payload(trainer: Any, metrics: Optional[Dict] = None
         "config": trainer.config.to_dict(),
         "metrics": metrics,
         "schedule_type": trainer.config.schedule_type,
+        "training_rng_state": capture_training_rng(sampler=getattr(trainer, "_training_sampler", None)),
+        "rng_world_size": int(getattr(getattr(trainer, "distributed_context", None), "world_size", 1)),
     }
     grad_scaler = getattr(trainer, "_grad_scaler", None)
     if grad_scaler is not None:
@@ -414,6 +417,7 @@ def load_checkpoint(
             "global_step",
             "optimizer_state_dict",
             "scheduler_state_dict",
+            "training_rng_state",
         }
         if bool(getattr(trainer.config, "use_amp", False)):
             required_resume_keys.add("grad_scaler_state_dict")
@@ -423,6 +427,9 @@ def load_checkpoint(
                 f"Checkpoint {path} is not a complete resume artifact; missing "
                 f"{missing_resume_keys}. Use warm_start_checkpoint for weights-only artifacts."
             )
+        if (int(checkpoint.get("rng_world_size", 1)) != 1
+                or int(getattr(getattr(trainer, "distributed_context", None), "world_size", 1)) != 1):
+            raise ValueError("Exact distributed resume requires per-rank RNG snapshots; this artifact cannot provide them.")
 
     if restore_training_state:
         trainer.epoch = int(checkpoint["epoch"])
@@ -507,6 +514,7 @@ def load_checkpoint(
     metrics = checkpoint.get("metrics", {}) if restore_training_state else {}
     trainer._loaded_checkpoint_metrics = dict(metrics) if isinstance(metrics, dict) else {}
     if restore_training_state:
+        restore_training_rng(checkpoint["training_rng_state"], sampler=getattr(trainer, "_training_sampler", None))
         logger.info("Resumed complete training state from %s (epoch %s)", path, trainer.epoch)
     else:
         logger.info(

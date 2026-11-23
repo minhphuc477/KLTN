@@ -6,3 +6,6 @@ training:
 
 diffusion:
   condition_use_rrwp_edge_features: false
+
+masked_room:
+  condition_use_rrwp_edge_features: false

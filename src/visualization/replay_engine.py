@@ -1,4 +1,4 @@
-﻿"""
+"""
 Dungeon Replay Engine - Scientific Visualization System
 =======================================================
 

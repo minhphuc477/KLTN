@@ -143,7 +143,7 @@ CONFIG_FIELDS: List[ConfigField] = [
     ConfigField("dataset.shuffle_val", bool, False, "Shuffle the validation loader."),
     ConfigField("dataset.use_vglc", bool, True, "Use VGLC-format dataset adapter."),
     ConfigField("dataset.normalize", bool, True, "Normalize room grids to [0,1]."),
-    ConfigField("dataset.grid_augmentation", bool, False, "Enable shape-preserving random grid augmentation for non-graph autoencoder training. Graph-conditioned stages keep this disabled unless graph metadata is transformed in lockstep."),
+    ConfigField("dataset.grid_augmentation", bool, False, "Enable shape-preserving random grid symmetry augmentation during training (validation splits remain unaugmented). Supports non-graph autoencoders and room-level graph-conditioned stages via lockstep V4 topology transforms."),
     ConfigField("dataset.room_level", bool, True, "Train on individual rooms instead of stitched dungeons."),
     ConfigField("dataset.dungeon_batch_mode", bool, True, "For room-level diffusion, batch all rooms from one dungeon variant for global graph loss."),
     ConfigField("dataset.load_graphs", bool, True, "Load graph side-information from dataset."),
@@ -164,6 +164,7 @@ CONFIG_FIELDS: List[ConfigField] = [
     ConfigField("vqvae.learning_rate", float, 3e-4, "VQ-VAE learning rate.", min_value=1e-8),
     ConfigField("vqvae.weight_decay", float, 1e-5, "VQ-VAE optimizer weight decay.", min_value=0.0),
     ConfigField("vqvae.grad_clip_norm", float, 1.0, "VQ-VAE gradient clipping norm.", min_value=0.0),
+    ConfigField("vqvae.nonfinite_policy", str, "skip", "How tokenizer training and validation handle non-finite values. Publication runs abort.", choices=("skip", "error")),
     ConfigField("vqvae.scheduler_eta_min", float, 1e-6, "VQ-VAE cosine scheduler minimum learning rate.", min_value=0.0),
     ConfigField("vqvae.save_every", int, 50, "VQ-VAE checkpoint interval.", min_value=1),
     ConfigField("vqvae.keep_last", int, 2, "Number of retained full-resume VQ-VAE checkpoints besides latest_resume/best.", min_value=0),
@@ -178,11 +179,11 @@ CONFIG_FIELDS: List[ConfigField] = [
     ConfigField("vqvae.use_ema", bool, True, "Use EMA VQ codebook updates."),
     ConfigField("vqvae.use_coordconv", bool, True, "Use CoordConv in VQ-VAE encoder."),
     ConfigField("vqvae.mrf_penalty_weight", float, 0.05, "Illegal-adjacency penalty coefficient.", min_value=0.0),
-    ConfigField("vqvae.dead_code_reset_interval", int, 100, "Check for dead VQ codes every N optimizer steps.", min_value=1),
+    ConfigField("vqvae.dead_code_reset_interval", int, 25, "Check for dead VQ codes every N optimizer steps.", min_value=1),
     ConfigField("vqvae.dead_code_threshold", float, 0.05, "EMA assignment-count threshold below which a VQ code is considered dead.", min_value=0.0),
-    ConfigField("vqvae.dead_code_warmup_steps", int, 500, "Do not reset VQ codes until at least this many optimizer steps have elapsed.", min_value=0),
+    ConfigField("vqvae.dead_code_warmup_steps", int, 50, "Do not reset VQ codes until at least this many optimizer steps have elapsed.", min_value=0),
     ConfigField("vqvae.protect_active_codes_during_reset", bool, True, "Never reset VQ codes that are still active in the current batch."),
-    ConfigField("vqvae.max_dead_code_resets_per_event", int, 16, "Maximum number of VQ codes to reset in a single maintenance event; 0 disables the cap.", min_value=0),
+    ConfigField("vqvae.max_dead_code_resets_per_event", int, 64, "Maximum number of VQ codes to reset in a single maintenance event; 0 disables the cap.", min_value=0),
     ConfigField("vqvae.validation_fraction", float, 0.1, "Held-out validation fraction for VQ-VAE model selection and reporting. Set to 0 to disable a validation split.", min_value=0.0, max_value=0.5),
     ConfigField("vqvae.validation_max_batches", int, 16, "Maximum number of mini-batches evaluated on the VQ-VAE validation split each epoch.", min_value=1),
     ConfigField("vqvae.best_checkpoint_metric", str, "val_loss", "Metric used to select the best VQ-VAE checkpoint. Falls back to train_loss when no validation split exists.", choices=("val_loss", "train_loss")),
@@ -206,6 +207,8 @@ CONFIG_FIELDS: List[ConfigField] = [
     ConfigField("diffusion.nonfinite_policy", str, "skip", "How diffusion training handles non-finite losses or gradients. Publication runs use error so arms cannot silently receive different update counts.", choices=("skip", "error")),
     ConfigField("diffusion.latent_dim", int, 64, "Diffusion latent width.", min_value=1),
     ConfigField("diffusion.latent_scale_factor", float, 1.0, "Fixed multiplier from raw VQ-VAE latents to diffusion space. Use a corpus-calibrated reciprocal standard deviation for the scaled-latent ablation; 1.0 preserves legacy checkpoints.", min_value=1e-8),
+    ConfigField("diffusion.latent_clip_bound", float, 5.0, "Symmetric clamp bound applied to clean-latent predictions; null disables hard clipping.", min_value=1e-4, allow_none=True),
+    ConfigField("diffusion.aux_max_timestep_fraction", float, 0.5, "Maximum timestep fraction used for auxiliary one-step x0 supervision to avoid near-T noise variance blowup.", min_value=0.05, max_value=1.0),
     ConfigField("diffusion.model_channels", int, 96, "Diffusion U-Net base channels.", min_value=8),
     ConfigField("diffusion.context_dim", int, 256, "Conditioning context width.", min_value=8),
     ConfigField("diffusion.denoiser_backbone", str, "unet", "Latent denoiser backbone ablation.", choices=("unet", "dit")),
@@ -244,7 +247,7 @@ CONFIG_FIELDS: List[ConfigField] = [
     ConfigField("diffusion.graph_to_grid_edge_semantics", bool, False, "Ablation: inject edge-label semantics into graph-to-grid spatial attention."),
     ConfigField("diffusion.spatial_graph_gate_init", float, -2.0, "Initial logit for graph-conditioning gate."),
     ConfigField("diffusion.spatial_topology_gate_init", float, -2.0, "Initial logit for room-topology gate."),
-    ConfigField("diffusion.use_teacher_forced_neighbor_latents", bool, True, "Use real adjacent room maps during room-level diffusion training to encode neighbor latents."),
+    ConfigField("diffusion.use_teacher_forced_neighbor_latents", bool, True, "Use real, causally available mission-graph neighbor maps during room-level diffusion training to encode neighbor latents."),
     ConfigField("diffusion.puzzle_structure_dropout_prob", float, 0.0, "Experimental only: a solver-validated puzzle-on/puzzle-off counterfactual rate. Disabled by default because removing BLOCK tiles without recompiling the stage plan creates contradictory supervision.", min_value=0.0, max_value=1.0),
     ConfigField("diffusion.puzzle_stage_conditioning_enabled", bool, False, "Append deterministic ordered puzzle-stage tokens to graph conditioning so retrains can learn explicit multi-step puzzle semantics."),
     ConfigField("diffusion.puzzle_stage_token_scale", float, 0.20, "Scale of deterministic puzzle-stage control tokens appended to diffusion graph conditioning.", min_value=0.0, max_value=2.0),
@@ -278,6 +281,7 @@ CONFIG_FIELDS: List[ConfigField] = [
     ConfigField("diffusion.logic_final_temperature", float, 0.05, "Final LogicNet soft-planning temperature.", min_value=1e-6),
     ConfigField("diffusion.logic_topology_trace_weight", float, 0.25, "Additional LogicNet weight on room-topology traversability traces.", min_value=0.0),
     ConfigField("diffusion.logic_topology_anchor_weight", float, 0.25, "Additional LogicNet weight on start/goal/door anchor walkability.", min_value=0.0),
+    ConfigField("diffusion.logic_lock_weight", float, 0.5, "LogicNet weight on mission key/item/token-to-gate ordering.", min_value=0.0),
     ConfigField("diffusion.logic_global_reach_weight", float, 1.0, "LogicNet weight on dungeon-level mission-graph reachability.", min_value=0.0),
     ConfigField("diffusion.logic_global_room_weight", float, 0.25, "LogicNet weight on lifting room passability into mission-graph node costs.", min_value=0.0),
     ConfigField("diffusion.guidance_scale", float, 1.0, "Logic guidance scale.", min_value=0.0),
@@ -443,6 +447,7 @@ CONFIG_FIELDS: List[ConfigField] = [
     ConfigField("masked_room.condition_reference_tile_vocab_size", int, 44, "Tile vocabulary size used by the masked-room exemplar encoder.", min_value=2),
     ConfigField("masked_room.condition_reference_embedding_dim", int, 32, "Embedding width for the masked-room exemplar encoder.", min_value=4),
     ConfigField("masked_room.condition_reference_hidden_dim", int, 64, "CNN hidden width for the masked-room exemplar encoder.", min_value=4),
+    ConfigField("masked_room.condition_use_rrwp_edge_features", bool, True, "Inject RRWP edge encodings into masked-room graph conditioning edge attributes when condition_gnn_type supports edge RRWP (gat/gps)."),
     ConfigField("masked_room.condition_strict_schema", bool, True, "Fail on masked-room graph-conditioning schema shape drift instead of pad/truncate compatibility alignment. Set false only for explicit legacy-checkpoint migration."),
     ConfigField("masked_room.graph_conditioning_mode", str, "node_sequence", "Masked-room graph-conditioning mode.", choices=("node_sequence", "pooled")),
     ConfigField("masked_room.use_current_node_distance_features", bool, True, "Inject current-room distance features into masked-room graph conditioning."),
@@ -494,6 +499,8 @@ CONFIG_FIELDS: List[ConfigField] = [
     ConfigField("masked_room.validation_max_batches", int, 16, "Maximum number of mini-batches evaluated on the masked-room validation split each epoch.", min_value=1),
     ConfigField("masked_room.best_checkpoint_metric", str, "val_loss", "Metric used to select the best masked-room checkpoint. Falls back to train_loss when no validation split exists.", choices=("val_loss", "val_topology_focus_loss", "val_puzzle_stage_semantic_loss", "train_loss")),
     ConfigField("masked_room.room_topology_channels", int, ROOM_TOPOLOGY_CHANNEL_COUNT, "Masked-room topology-channel count.", min_value=1),
+    ConfigField("masked_room.rare_tile_weight", float, 1.0, "Extra loss weight applied to masked rare structural tiles (doors, keys, items, boss, triforce, stairs, switches, etc.) in DiscreteMaskedRoomModel.", min_value=1.0),
+    ConfigField("masked_room.focal_gamma", float, 0.0, "Focal modulating exponent gamma >= 0 for DiscreteMaskedRoomModel masked cross-entropy loss (0.0 disables focal down-weighting).", min_value=0.0),
 ]
 
 
@@ -741,6 +748,21 @@ def validate_config(config: Dict[str, Any]) -> Dict[str, Any]:
         validated["diffusion"]["guidance_scale"] = 0.0
         validated["diffusion"]["alpha_logic"] = 0.0
         validated["diffusion"]["alpha_logic_tile"] = 0.0
+    if (
+        bool(validated["diffusion"]["logic_net_enabled"])
+        and float(validated["diffusion"]["alpha_logic"]) > 0.0
+        and bool(validated["dataset"]["room_level"])
+    ):
+        if not bool(validated["dataset"]["dungeon_batch_mode"]):
+            raise ValueError(
+                "Room-level global LogicNet training requires "
+                "dataset.dungeon_batch_mode=true."
+            )
+        if bool(validated["distributed"]["enabled"]):
+            raise ValueError(
+                "Distributed room-level global LogicNet training is unsupported because "
+                "the distributed sampler fragments dungeon variants."
+            )
     if not bool(validated["diffusion"]["condition_global_graph_enabled"]):
         if validated["diffusion"]["graph_conditioning_mode"] != "pooled":
             raise ValueError(

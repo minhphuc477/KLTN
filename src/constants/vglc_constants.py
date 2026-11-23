@@ -100,7 +100,7 @@ EDGE_TYPE_MAP: Dict[str, str] = {
     'K': 'boss_locked',       # Boss key required
     'b': 'bombable',          # Bombable wall (secret passage, looks like wall)
     'l': 'soft_lock',         # Soft-locked (shutters, usually one-way after event)
-    's': 'stairs_warp',       # Stairs/warp (NOT physically adjacent in grid)
+    's': 'impassable',        # Visibility relation, not a traversable connection
     'I': 'item_locked',       # Key-item gate
     'S': 'switch_lock',       # Switch/puzzle gate
     'S1': 'switch_lock',      # Switch variant

@@ -21,6 +21,7 @@ from .records import (
 )
 from .analysis import (
     aggregate_publication_records,
+    holm_adjust_pvalues,
     paired_exact_validity_by_fold,
     paired_guidance_validity_by_fold,
 )
@@ -49,6 +50,7 @@ __all__ = [
     "StageResult",
     "apply_publication_variant",
     "aggregate_publication_records",
+    "holm_adjust_pvalues",
     "build_publication_result_record",
     "build_leave_one_dungeon_out_folds",
     "build_protocol_manifest",

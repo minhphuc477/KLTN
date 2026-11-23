@@ -1,4 +1,4 @@
-﻿"""
+"""
 VGLC Compliance Demonstration
 ==============================
 

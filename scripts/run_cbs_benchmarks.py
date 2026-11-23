@@ -1,4 +1,4 @@
-﻿"""
+"""
 Run CBS+ and A* benchmarks on Zelda dungeons (levels 1-9).
 
 This script:

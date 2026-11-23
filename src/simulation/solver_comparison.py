@@ -1,4 +1,4 @@
-﻿"""
+"""
 Solver Comparison Mode - Compare Multiple Search Algorithms
 ==========================================================
 

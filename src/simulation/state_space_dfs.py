@@ -26,7 +26,7 @@ from dataclasses import dataclass
 
 from .validator import (
     GameState, ZeldaLogicEnv, SolverDiagnostics,
-    SEMANTIC_PALETTE, BLOCKING_IDS, game_state_key,
+    SEMANTIC_PALETTE, StateSpaceAStar, game_state_key,
 )
 
 logger = logging.getLogger(__name__)
@@ -70,7 +70,7 @@ class StateSpaceDFS:
     
     def __init__(self, env: ZeldaLogicEnv, timeout: int = 50000, 
                  max_depth: int = 500, allow_diagonals: bool = False,
-                 use_iddfs: bool = True):
+                 use_iddfs: bool = True, rules_profile: Optional[str] = None):
         """
         Initialize DFS solver.
         
@@ -86,6 +86,10 @@ class StateSpaceDFS:
         self.max_depth = max_depth
         self.allow_diagonals = allow_diagonals
         self.use_iddfs = use_iddfs
+        options = {"representation": "tile", "allow_diagonals": bool(allow_diagonals)}
+        if rules_profile is not None:
+            options["rules_profile"] = rules_profile
+        self._transition_solver = StateSpaceAStar(env, priority_options=options)
         
         # Statistics
         self.metrics = DFSMetrics()
@@ -285,7 +289,7 @@ class StateSpaceDFS:
         
         # Stack stores states only; paths are reconstructed from parent links.
         stack = [(start_state, 0, 0)]
-        visited = set()
+        best_depth: Dict[Tuple, int] = {}
         parents: Dict[int, Optional[int]] = {0: None}
         positions: Dict[int, Tuple[int, int]] = {0: start_state.position}
         next_entry_id = 1
@@ -306,11 +310,11 @@ class StateSpaceDFS:
             state_key = game_state_key(state)
             
             # Cycle detection
-            if state_key in visited:
+            if best_depth.get(state_key, self.max_depth + 1) <= depth:
                 self.metrics.cycle_detections += 1
                 continue
             
-            visited.add(state_key)
+            best_depth[state_key] = depth
             self.states_explored += 1
             
             # Track depth metrics
@@ -329,13 +333,13 @@ class StateSpaceDFS:
             successors = self._get_successors(state)
             if depth >= self.max_depth:
                 depth_cutoff = depth_cutoff or any(
-                    game_state_key(next_state) not in visited
+                    game_state_key(next_state) not in best_depth
                     for next_state in successors
                 )
                 continue
             for next_state in reversed(successors):
                 next_key = game_state_key(next_state)
-                if next_key not in visited:
+                if depth + 1 < best_depth.get(next_key, self.max_depth + 1):
                     successor_entry_id = next_entry_id
                     next_entry_id += 1
                     parents[successor_entry_id] = entry_id
@@ -361,67 +365,9 @@ class StateSpaceDFS:
         return False, [], self.states_explored
     
     def _get_successors(self, state: GameState) -> List[GameState]:
-        """
-        Generate all valid successor states from current state.
-        
-        Handles:
-        - 4-directional or 8-directional movement
-        - Door unlocking with keys/bombs/boss key
-        - Item pickup and inventory updates
-        - Block pushing
-        - Water crossing with ladder
-        
-        Args:
-            state: Current game state
-            
-        Returns:
-            List of valid successor GameStates
-        """
-        successors = []
-        curr_r, curr_c = state.position
-        
-        # Cardinal directions (UP, DOWN, LEFT, RIGHT)
-        cardinal_deltas = [(-1, 0), (1, 0), (0, -1), (0, 1)]
-        
-        # Diagonal directions (if enabled)
-        diagonal_deltas = [(-1, -1), (-1, 1), (1, -1), (1, 1)]
-        
-        # Try cardinal moves
-        for dr, dc in cardinal_deltas:
-            new_r, new_c = curr_r + dr, curr_c + dc
-            
-            if not (0 <= new_r < self.height and 0 <= new_c < self.width):
-                continue
-            
-            target_tile = self.grid[new_r, new_c]
-            can_move, new_state = self._try_move(state, (new_r, new_c), target_tile)
-            
-            if can_move:
-                successors.append(new_state)
-        
-        # Try diagonal moves (if enabled)
-        if self.allow_diagonals:
-            for dr, dc in diagonal_deltas:
-                new_r, new_c = curr_r + dr, curr_c + dc
-                
-                if not (0 <= new_r < self.height and 0 <= new_c < self.width):
-                    continue
-                
-                # Check corner cutting (can't move diagonally through walls)
-                adj_r_tile = self.grid[curr_r + dr, curr_c]
-                adj_c_tile = self.grid[curr_r, curr_c + dc]
-                
-                if adj_r_tile in BLOCKING_IDS or adj_c_tile in BLOCKING_IDS:
-                    continue
-                
-                target_tile = self.grid[new_r, new_c]
-                can_move, new_state = self._try_move(state, (new_r, new_c), target_tile)
-                
-                if can_move:
-                    successors.append(new_state)
-        
-        return successors
-    
+        """Use the same tile and graph transitions as the canonical oracle."""
+        return [successor for successor, _cost in self._transition_solver.iter_successors(state)]
+
     def _try_move(self, state: GameState, target_pos: Tuple[int, int], 
                   target_tile: int) -> Tuple[bool, GameState]:
         """

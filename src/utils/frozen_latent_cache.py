@@ -73,7 +73,15 @@ class FrozenLatentCache:
             digest.update(str(tuple(int(dim) for dim in sample.shape)).encode("ascii"))
             digest.update(str(sample.dtype).encode("ascii"))
             if sample.numel() > 0:
-                digest.update(sample.reshape(-1).view(torch.uint8).numpy().tobytes())
+                # ``ndarray.tobytes()`` duplicates the complete parameter in
+                # host memory.  Large frozen tokenizers can therefore fail
+                # before training even starts.  A byte-cast memoryview shares
+                # the tensor's contiguous CPU storage and can be hashed in
+                # bounded slices without another full-size allocation.
+                raw_bytes = memoryview(sample.reshape(-1).view(torch.uint8).numpy()).cast("B")
+                chunk_size = 1024 * 1024
+                for offset in range(0, len(raw_bytes), chunk_size):
+                    digest.update(raw_bytes[offset : offset + chunk_size])
         return digest.hexdigest()
 
     def key_for_tensor(
@@ -90,7 +98,8 @@ class FrozenLatentCache:
         sample = tensor.detach().to(device="cpu").contiguous()
         if not bool(torch.isfinite(sample).all()):
             return None
-        digest = hashlib.blake2b(sample.numpy().tobytes(), digest_size=16).hexdigest()
+        raw_bytes = memoryview(sample.reshape(-1).view(torch.uint8).numpy()).cast("B")
+        digest = hashlib.blake2b(raw_bytes, digest_size=16).hexdigest()
         return (*namespace, tuple(int(dim) for dim in sample.shape), str(sample.dtype), digest)
 
     def get(self, key: Optional[Tuple[Any, ...]], *, device: torch.device) -> Optional[torch.Tensor]:
@@ -102,12 +111,12 @@ class FrozenLatentCache:
             return None
         self._items.move_to_end(key)
         self.hits += 1
-        return cached.to(device=device, non_blocking=True)
+        return cached.to(device=device, non_blocking=True, copy=True)
 
     def put(self, key: Optional[Tuple[Any, ...]], value: torch.Tensor) -> None:
         if key is None or not self.enabled or self.max_items <= 0:
             return
-        self._items[key] = value.detach().to(device="cpu")
+        self._items[key] = value.detach().to(device="cpu", copy=True)
         self._items.move_to_end(key)
         while len(self._items) > self.max_items:
             self._items.popitem(last=False)

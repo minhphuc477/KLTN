@@ -10,7 +10,7 @@ Validated against:
 - `gui_runner.py`
 - `src/simulation/*`
 
-Last updated: 2026-02-23.
+Last updated: 2026-11-12.
 
 ## 1. Solver Architecture
 
@@ -87,17 +87,14 @@ Priority options:
 
 ### 3.3 Heuristic Logic (StateSpaceAStar)
 
-Baseline:
-- Manhattan distance to goal
+`StateSpaceAStar._heuristic` (`src/simulation/validator.py`) computes:
 
-Enhancements:
-- Graph BFS distance to goal room (when topology graph available)
-- Locked-door requirement estimate
-- Penalties if inventory is insufficient:
-  - missing keys for locked doors
-  - missing bombs for bomb doors
-  - missing boss key for boss doors
-  - missing ladder/item for element tiles
+- **Portal / warp guard**: returns `0.0` immediately whenever `env.graph_bridge.portals` is non-empty, since grid coordinate distance is not an admissible lower bound across non-local warps.
+- **Spatial distance lower bound**: Manhattan distance (`|dr| + |dc|`) by default, or Chebyshev distance (`max(|dr|, |dc|)`) when `allow_diagonals=True` (unit diagonal step cost).
+- **Strict admissible A\* mode (`search_mode == "astar"` and `not enable_ara`)**:
+  - Without graph topology metadata: returns the spatial distance lower bound.
+  - With graph topology (`graph`, `room_to_node`, `room_positions`): returns `max(base_lb, graph_hops_lb, locked_edges_lb)`, where `base_lb = 0.0` if `_has_nonlocal_transitions` else spatial distance, `graph_hops_lb` is cached BFS hop count to the goal room, and `locked_edges_lb` is the minimum number of locked edges (`min_locked_needed_node[node]`) along paths to goal.
+- **Non-strict modes (`greedy` or legacy weighted A\* via `enable_ara`)**: scales topology guidance (`graph_hops_lb * (ROOM_HEIGHT + ROOM_WIDTH) * 0.4` and `locked_edges_lb * 20.0`) for faster inadmissible search.
 - Optional plan-guided correction from room-level abstract plan
 - Persona modes (`balanced`, `speedrunner`, `completionist`) adjust weighting
 
@@ -343,7 +340,6 @@ Route export includes:
 4. Use CBS personas when you want bounded-agent proxy metrics, not shortest-path optimality.
 5. Treat `parallel_search`, `multi_goal`, and `dynamic_difficulty` as experimental/scaffolded until fully wired.
 
-## 8. Notes on Legacy Docs
+## 8. Notes on Role Separation
 
-`docs/ZELDA_SOLVER_DOCUMENTATION.md` contains historical material.
-Use this file as the canonical runtime reference for current code paths.
+This file is the canonical solver and GUI reference. Report-facing search algorithm selection (`hard_oracle` vs `behavioral_probe` vs `diagnostic`) is enforced centrally in `src/simulation/search_factory.py` and benchmarked via `scripts/run_search_role_benchmark.py`.

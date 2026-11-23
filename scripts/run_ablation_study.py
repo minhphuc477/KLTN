@@ -1,4 +1,4 @@
-﻿"""
+"""
 Thesis-grade ablation runner with fixed-seed paired comparisons.
 
 Implements:
@@ -387,6 +387,13 @@ ABLATION_DESIGN_NOTES: Dict[str, Dict[str, str]] = {
         "comparison": "FULL and COND_NO_TPE",
         "isolates": "TPE disabled and graph-node cross-attention removed",
         "interpretation": "Intermediate condition between full graph conditioning and fully graph-free generation.",
+    },
+    "DISCRETE_MASKED": {
+        "tier": "block_iv",
+        "component": "discrete masked G-LMDM generator",
+        "comparison": "FULL and LATENT_DIFFUSION",
+        "isolates": "1-stage discrete masked transformer decoding over room tokens without VQ-VAE latent diffusion",
+        "interpretation": "Compares the canonical 1-stage discrete masked room generator against 2-stage latent diffusion.",
     },
 }
 
@@ -1331,11 +1338,18 @@ class AblationStudy:
                 )
             else:
                 assert pipeline is not None
+                diffusion_model = getattr(pipeline, "diffusion", None)
                 original_graph_token_flag = bool(getattr(pipeline, "use_graph_node_cross_attention", True))
-                original_topology_mode = str(getattr(pipeline.diffusion, "get_topology_refinement_mode", lambda: "gat2")())
+                original_topology_mode = (
+                    str(getattr(diffusion_model, "get_topology_refinement_mode", lambda: "gat2")())
+                    if diffusion_model is not None
+                    else None
+                )
                 original_reference_flag = bool(getattr(getattr(pipeline, "condition_encoder", None), "use_reference_room_maps", False))
-                original_guidance_active_fraction = float(
-                    getattr(getattr(pipeline.diffusion, "guidance", object()), "active_fraction", 1.0)
+                original_guidance_active_fraction = (
+                    float(getattr(getattr(diffusion_model, "guidance", object()), "active_fraction", 1.0))
+                    if diffusion_model is not None
+                    else None
                 )
                 pipeline.use_graph_node_cross_attention = not bool(cfg.disable_graph_node_cross_attention)
                 if cfg.use_reference_room_maps is not None and getattr(pipeline, "condition_encoder", None) is not None:
@@ -1346,14 +1360,15 @@ class AblationStudy:
                             "but the loaded condition encoder has no reference encoder."
                         )
                     pipeline.condition_encoder.use_reference_room_maps = bool(cfg.use_reference_room_maps)
-                set_topology_refinement_mode_or_raise(
-                    pipeline.diffusion,
-                    cfg.topology_refinement_mode,
-                )
-                if cfg.logic_guidance_active_fraction is not None:
-                    pipeline.diffusion.guidance.active_fraction = float(
-                        max(0.05, min(1.0, float(cfg.logic_guidance_active_fraction)))
+                if diffusion_model is not None:
+                    set_topology_refinement_mode_or_raise(
+                        diffusion_model,
+                        cfg.topology_refinement_mode,
                     )
+                    if cfg.logic_guidance_active_fraction is not None:
+                        diffusion_model.guidance.active_fraction = float(
+                            max(0.05, min(1.0, float(cfg.logic_guidance_active_fraction)))
+                        )
                 result = pipeline.generate_dungeon(
                     mission_graph=mission_graph,
                     generate_topology=False,
@@ -1375,11 +1390,13 @@ class AblationStudy:
                 pipeline.use_graph_node_cross_attention = original_graph_token_flag
                 if getattr(pipeline, "condition_encoder", None) is not None:
                     pipeline.condition_encoder.use_reference_room_maps = original_reference_flag
-                set_topology_refinement_mode_or_raise(
-                    pipeline.diffusion,
-                    original_topology_mode,
-                )
-                pipeline.diffusion.guidance.active_fraction = original_guidance_active_fraction
+                if diffusion_model is not None and original_topology_mode is not None:
+                    set_topology_refinement_mode_or_raise(
+                        diffusion_model,
+                        original_topology_mode,
+                    )
+                if diffusion_model is not None and original_guidance_active_fraction is not None:
+                    diffusion_model.guidance.active_fraction = original_guidance_active_fraction
 
             grid = np.asarray(result.dungeon_grid, dtype=np.int32)
             graph = result.mission_graph
@@ -1459,9 +1476,17 @@ class AblationStudy:
                 dungeon_grid=grid,
             )
             diffusion_model = getattr(pipeline, "diffusion", None) if pipeline is not None else None
+            masked_room_model = getattr(pipeline, "masked_room_model", None) if pipeline is not None else None
+            if (
+                str(getattr(cfg, "room_generator_mode", "")).strip().lower() == "discrete_masked"
+                and masked_room_model is not None
+            ):
+                active_room_model = masked_room_model
+            else:
+                active_room_model = diffusion_model
             model_parameter_count = (
-                int(sum(parameter.numel() for parameter in diffusion_model.parameters()))
-                if diffusion_model is not None
+                int(sum(parameter.numel() for parameter in active_room_model.parameters()))
+                if active_room_model is not None
                 else 0
             )
 
@@ -1499,24 +1524,27 @@ class AblationStudy:
             row["generation_time_sec"] = float(time.time() - started)
             row["error"] = f"{type(e).__name__}: {e}"
             try:
-                if "pipeline" in locals():
+                if "pipeline" in locals() and pipeline is not None:
                     pipeline.use_graph_node_cross_attention = original_graph_token_flag
                     if getattr(pipeline, "condition_encoder", None) is not None:
                         pipeline.condition_encoder.use_reference_room_maps = original_reference_flag
-                    try:
-                        set_topology_refinement_mode_or_raise(
-                            pipeline.diffusion,
-                            original_topology_mode,
-                        )
-                    except (AttributeError, RuntimeError, ValueError, TypeError) as restore_error:
-                        for key, cached in list(self._pipeline_cache.items()):
-                            if cached is pipeline:
-                                del self._pipeline_cache[key]
-                        logger.warning(
-                            "Discarded cached ablation pipeline after topology-mode restoration failed: %s",
-                            restore_error,
-                        )
-                    pipeline.diffusion.guidance.active_fraction = original_guidance_active_fraction
+                    diffusion_model = getattr(pipeline, "diffusion", None)
+                    if diffusion_model is not None and original_topology_mode is not None:
+                        try:
+                            set_topology_refinement_mode_or_raise(
+                                diffusion_model,
+                                original_topology_mode,
+                            )
+                        except (AttributeError, RuntimeError, ValueError, TypeError) as restore_error:
+                            for key, cached in list(self._pipeline_cache.items()):
+                                if cached is pipeline:
+                                    del self._pipeline_cache[key]
+                            logger.warning(
+                                "Discarded cached ablation pipeline after topology-mode restoration failed: %s",
+                                restore_error,
+                            )
+                    if diffusion_model is not None and original_guidance_active_fraction is not None:
+                        diffusion_model.guidance.active_fraction = original_guidance_active_fraction
             except (AttributeError, RuntimeError, ValueError, TypeError) as restore_error:
                 logger.debug("Failed to restore ablation runner state after error: %s", restore_error)
         return row
@@ -1826,6 +1854,10 @@ def build_experiment_set(include_extended: bool = True) -> List[ExperimentConfig
         ExperimentConfig(
             name="DIFFUSION_TOPO_SPADE",
             diffusion_topology_conditioning_mode="spade",
+        ),
+        ExperimentConfig(
+            name="DISCRETE_MASKED",
+            room_generator_mode="discrete_masked",
         ),
     ]
     return core + extended

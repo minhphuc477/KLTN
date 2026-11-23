@@ -228,6 +228,8 @@ def test_symbolic_only_pipeline_repair_and_stitch_dungeon_public_api():
     assert set(result.rooms.keys()) == {0, 1}
     assert result.metrics["symbolic_only"] is True
     assert result.map_elites_score is None
+    assert result.physical_mission_graph is graph
+    assert result.metrics["graph_semantic_compilation_applied"] is True
 
 
 def test_pipeline_initialization_disables_uncheckpointed_logic_guidance(pipeline):
@@ -1469,6 +1471,102 @@ def test_complete_pipeline_smoke(pipeline):
     print("="*70)
     print("✓ COMPLETE PIPELINE SMOKE TEST PASSED")
     print("="*70 + "\n")
+
+
+def test_causal_generation_layers_partitions_undirected_and_cyclic_graphs_into_independent_waves():
+    from src.pipeline.spatial_utils import causal_generation_layers, earlier_generation_neighbors
+
+    cycle4 = nx.cycle_graph(4)
+    waves_undir = causal_generation_layers(cycle4)
+    assert waves_undir == [[0, 2], [1, 3]]
+
+    bidir = cycle4.to_directed()
+    waves_dir = causal_generation_layers(bidir)
+    assert waves_dir == [[0, 2], [1, 3]]
+    assert earlier_generation_neighbors(bidir, 1) == {0, 2}
+    assert earlier_generation_neighbors(bidir, 3) == {0, 2}
+
+
+def test_generate_room_batch_batches_boundary_inpainting_with_matching_noise_strength(monkeypatch, pipeline):
+    _enable_untrained_artifact_reporting(pipeline)
+    G = nx.Graph()
+    G.add_nodes_from([0, 1, 2])
+    G.add_edges_from([(0, 1), (0, 2)])
+    for nid, pos in [(0, (0, 0)), (1, (0, 1)), (2, (1, 0))]:
+        G.nodes[nid]["pos"] = pos
+    G.nodes[0]["is_start"] = True
+    G.nodes[2]["has_triforce"] = True
+
+    prepared = pipeline.prepare_dungeon_generation(mission_graph=G, generate_topology=False)
+    # Build two already-generated neighbors of node 1 and node 2 -> wave 1 batch has [1, 2]
+    room_latents = {0: torch.zeros(1, 64, 4, 3)}
+    floor = int(SEMANTIC_PALETTE["FLOOR"])
+    grid0 = np.full((ROOM_HEIGHT, ROOM_WIDTH), floor, dtype=np.int32)
+    generated_rooms = {
+        0: RoomGenerationResult(
+            room_id=0,
+            room_grid=grid0,
+            latent=room_latents[0],
+            neural_grid=grid0.copy(),
+            was_repaired=False,
+            repair_mask=None,
+            neural_probs=None,
+            metrics={},
+        )
+    }
+
+    inpaint_calls = []
+
+    def fake_ddim_sample(*, context, shape, num_steps, graph_data, **kwargs):
+        return torch.zeros(shape, device=pipeline.device)
+
+    def fake_inpaint(*, x_0, mask, context, graph_data, num_steps, noise_strength=0.35, **kwargs):
+        inpaint_calls.append((tuple(x_0.shape), tuple(mask.shape), float(noise_strength)))
+        return x_0 + 0.1
+
+    monkeypatch.setattr(pipeline.diffusion, "ddim_sample", fake_ddim_sample)
+    monkeypatch.setattr(pipeline.diffusion, "inpaint", fake_inpaint)
+    monkeypatch.setattr(
+        pipeline,
+        "_decode_latent_with_vqvae",
+        lambda z: torch.zeros((int(z.shape[0]), int(getattr(pipeline.vqvae, "num_classes", 44)), ROOM_HEIGHT, ROOM_WIDTH), device=z.device),
+    )
+
+    out = pipeline._generate_room_batch(
+        room_ids=[1, 2],
+        mission_graph_physical=prepared.mission_graph_physical,
+        graph_data=prepared.graph_data,
+        generated_rooms=generated_rooms,
+        room_latents=room_latents,
+        guidance_scale=1.0,
+        logic_guidance_scale=0.0,
+        num_diffusion_steps=8,
+        use_fast_sampling=False,
+        latent_sampler="diffusion",
+        categorical_codebook_size=None,
+        apply_repair=False,
+        seed=42,
+        layer_offset=1,
+    )
+
+    assert set(out.keys()) == {1, 2}
+    assert len(inpaint_calls) == 1
+    assert inpaint_calls[0][0] == (2, 64, 4, 3)
+    assert inpaint_calls[0][2] == pytest.approx(0.25)
+
+
+def test_src_generate_has_no_gui_imports():
+    import ast
+    from pathlib import Path
+
+    generate_path = Path(__file__).resolve().parents[1] / "src" / "generate.py"
+    tree = ast.parse(generate_path.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                assert not alias.name.startswith("src.gui")
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            assert not node.module.startswith("src.gui")
 
 
 if __name__ == '__main__':

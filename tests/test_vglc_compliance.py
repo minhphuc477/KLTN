@@ -1,4 +1,4 @@
-﻿"""
+"""
 VGLC Compliance Tests
 =====================
 
@@ -62,7 +62,7 @@ def parse_edge_label(label: str) -> str:
     elif label == 'l':
         return 'soft_lock'
     elif label == 's':
-        return 'stairs_warp'
+        return edge_type_from_data({'label': label})
     return label
 
 def has_node_type(graph: nx.Graph, node_id: int, node_type: str) -> bool:
@@ -345,9 +345,10 @@ class TestEdgeTypes:
         """Test parsing soft-locked door."""
         assert parse_edge_label('l') == 'soft_lock'
     
-    def test_parse_stairs(self):
-        """Test parsing stairs/warp."""
-        assert parse_edge_label('s') == 'stairs_warp'
+    def test_parse_visibility_relation(self):
+        """VGLC graph s is impassable; only tile S denotes stairs."""
+        assert parse_edge_label('s') == 'impassable'
+        assert edge_type_from_data({'edge_type': 'stair'}) == 'stair'
     
     def test_get_edge_type_from_graph(self):
         """Test getting edge type from graph."""

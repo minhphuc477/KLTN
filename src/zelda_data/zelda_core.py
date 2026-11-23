@@ -31,8 +31,6 @@ from typing import Dict, List, Tuple, Optional, Set
 from dataclasses import dataclass, field
 from pathlib import Path
 
-logger = logging.getLogger(__name__) 
-
 # ==========================================
 # CONSTANTS - Import from canonical source
 # ==========================================
@@ -129,6 +127,8 @@ from src.zelda_data.features.ml_features import MLFeatureExtractor as MLFeatureE
 from src.zelda_data.layout.hybrid_layout import HybridLayoutEngine as HybridLayoutEngineImpl
 from src.zelda_data.solver.state_space import StateSpaceGraphSolverCore
 from src.zelda_data.reporting.virtual_node_reporting import log_virtual_node_report
+
+logger = logging.getLogger(__name__)
 
 
 # ==========================================
@@ -330,7 +330,7 @@ class StateSpaceGraphSolver:
     - Key consumption for 'k' (key-locked) edges
     - Bombable walls 'b' (assumed infinite bombs)
     - Soft-locked doors 'l' (one-way, always passable forward)
-    - Stairs/warps 's' (bidirectional teleports)
+    - Explicit stair/warp edges (VGLC 's' visibility edges are impassable)
     """
     
     def __init__(self, graph: nx.DiGraph, mode: str = ValidationMode.FULL):
@@ -610,7 +610,7 @@ class RoomGraphMatcher:
         # ============================================================
         # FIX 1: Handle Stair Edges (non-spatial warp connections)
         # ============================================================
-        # After main BFS, match nodes connected via stair edges ('s' type)
+        # After main BFS, match nodes connected via explicit stair edges
         # to rooms containing STAIR tiles. Stair edges represent non-adjacent
         # teleport connections that BFS cannot discover via room adjacency.
         still_unmapped_nodes = sorted([n for n in graph.nodes() if n not in node_to_room
@@ -625,7 +625,7 @@ class RoomGraphMatcher:
             for neighbor in list(graph.successors(unmapped_n)) + list(graph.predecessors(unmapped_n)):
                 edge_data = graph.get_edge_data(unmapped_n, neighbor) or graph.get_edge_data(neighbor, unmapped_n) or {}
                 edge_type = edge_data.get('edge_type', '') or edge_data.get('label', '')
-                if edge_type in ('stair', 's'):
+                if edge_type == 'stair':
                     has_stair_edge = True
                     if neighbor in node_to_room:
                         _mapped_neighbor = neighbor

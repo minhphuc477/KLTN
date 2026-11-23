@@ -513,8 +513,10 @@ class BranchRule(ProductionRule):
         graph: MissionGraph,
         context: Dict[str, Any],
     ) -> bool:
-        """Can apply if there's a node with degree < 4."""
+        """Can apply if there's an interior (non-START/GOAL) node with degree < 4."""
         for node in graph.nodes.values():
+            if node.node_type in (NodeType.START, NodeType.GOAL):
+                continue
             if len(graph._adjacency.get(node.id, [])) < 4:
                 return True
         return False
@@ -563,6 +565,7 @@ class BranchRule(ProductionRule):
         )
         graph.add_node(new_node)
         graph.add_edge(branch_node.id, new_id, EdgeType.PATH)
+        graph.sanitize()
 
         return graph
 

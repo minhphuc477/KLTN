@@ -1,6 +1,6 @@
 # Canonical Model Rationale, Ablation, And Complexity Guide
 
-Last updated: 2026-04-15
+Last updated: 2026-11-12
 
 This document is the canonical report-writing reference for the current Zelda
 generation stack. It explains:
@@ -23,38 +23,30 @@ Important note:
 - this document explains the `design rationale`
 - [`CURRENT_ARCHITECTURE.md`](CURRENT_ARCHITECTURE.md) owns the exact live
   implementation snapshot
-- the latest VQ-VAE-2, LogicNet, repair, and ablation protocol is in
-  [`VQVAE2_LOGICNET_REPAIR_ABLATION_PROTOCOL_2026_05_23.md`](VQVAE2_LOGICNET_REPAIR_ABLATION_PROTOCOL_2026_05_23.md)
-- the older codebook512 downstream result snapshot is archived at
-  [`archive/2026-q2/DOWNSTREAM_CODEBOOK512_PUZZLE_SUBTYPE_PROTOCOL_RESULTS_2026_04_15.md`](archive/2026-q2/DOWNSTREAM_CODEBOOK512_PUZZLE_SUBTYPE_PROTOCOL_RESULTS_2026_04_15.md)
-- the canonical YAML still keeps a conservative `codebook_size=256`, while the
-  latest downstream experiment used an explicit external `codebook512`
-  checkpoint
+- the canonical YAML uses `codebook_size=256`, `denoiser_backbone=unet` with `unet_channel_mult=[1, 2]`, and supports optional `vqvae2` / `fsq` quantization as well as `dit` and `flow_matching` ablation configs under `configs/ablation_*.yaml`
 
-This guide is intentionally detailed enough to support thesis/report writing.
+This guide is intentionally detailed enough to support research paper writing and peer-review audits.
 It should be read together with:
 
 - [`CURRENT_ARCHITECTURE.md`](CURRENT_ARCHITECTURE.md)
 - [`BLOCK_IO_REFERENCE.md`](BLOCK_IO_REFERENCE.md)
-- [`archive/2026-q2/ARCHITECTURE_RESEARCH_AUDIT_2026_03_31.md`](archive/2026-q2/ARCHITECTURE_RESEARCH_AUDIT_2026_03_31.md)
-- [`archive/2026-q2/ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md`](archive/2026-q2/ARCHITECTURE_RESEARCH_AUDIT_TOPOLOGY_SIGNAL_2026_04_04.md)
+- [`PUBLICATION_GUIDANCE_AND_CARDS.md`](PUBLICATION_GUIDANCE_AND_CARDS.md)
+- [`architecture_audit_research_notes.md`](architecture_audit_research_notes.md)
 
 ## 1. Executive Summary
 
-The current model is best described as a `hybrid neural-symbolic dungeon
-generator` with a `graph-first` control policy.
+The repository centers on **`G-LMDM` (`Graph-Conditioned Logic-Regularized Masked Discrete Model`)**, a repair-aware discrete neuro-symbolic dungeon generator evaluated head-to-head against continuous latent diffusion/flow comparators (`VQ-VAE + UNet[1,2]`, `DiT+Flow`) and external symbolic baselines (`Random`, `WFC`, `Grammar-only`) under the 1-to-1 protocol (`RG1(FG1)–RG4(FG4) -> PS1–PS4 -> RO1–RO4 -> RQ1–RQ4 -> H1–H4` in [`publication_guidance_card.json`](publication_guidance_card.json)):
 
-It is not a single monolithic network. Instead, it is a staged architecture:
+1. `Block I` generates a dungeon topology/mission graph.
+2. `Block II` *(continuous comparator path only)* compresses room layouts with `SemanticVQVAE` (`17.37M`).
+3. `Block III` encodes mission-graph context (`GraphGPS + RRWP`) and directional neighbor/boundary context.
+4. `Block IV` generates $16\times 11$ rooms directly in discrete token space via **`G-LMDM`** (`DiscreteMaskedRoomModel`, `84,764` denoiser, `3.58M` train / `3.36M` infer) or via continuous latent comparators (`UNet[1,2]` `47.13M` total; `DiT+Flow` `22.44M` total).
+5. `Block IV-B` distills a faster few-step sampler from the continuous teacher *(optional extension)*.
+6. `Block V` applies differentiable Soft Bellman-Ford `LogicNet` regularization directly onto discrete $16\times 11$ `tile_logits` (`alpha_logic=0.1` in `G-LMDM`, or decoded latents in diffusion).
+7. `Block VI` enforces constraints, repairs invalid structure, overlays graph-owned semantics, and attributes `raw -> constrained -> repaired -> compiled` stages cleanly.
+8. `Block VII` evaluates formal `StateSpaceAStar` solvability proofs separately from bounded `P-CBS` proxy diagnostics.
 
-1. `Block I` generates a dungeon topology graph.
-2. `Block II` compresses room layouts into a discrete latent space with VQ-VAE.
-3. `Block III` encodes graph context and local room context.
-4. `Block IV` generates room latents with a diffusion teacher.
-5. `Block IV-B` distills a faster few-step sampler from the diffusion teacher.
-6. The masked-room branch provides a discrete auxiliary room generator.
-7. `Block V` provides LogicNet guidance and differentiable validity pressure.
-8. `Block VI` repairs invalid structure and overlays graph-owned semantics.
-9. `Block VII` evaluates solvability, behavior, and quality-diversity metrics.
+VGLC empirical ground truth (`Data/The Legend of Zelda`): `450` room instances across `9` dungeons (`Quests 1–2`); held-out split puts Dungeons `1–8` in training (`349` instances, `217` unique $16\times 11$ grids, **`43` unique $12\times 7$ structural interiors**, `8` active train IDs of `44` with `88.60%` `WALL+FLOOR` vs `0.68%` `ENEMY` and `0.05%` `STAIR`) and Dungeon `9` (`101` instances) in testing.
 
 This factorization was chosen because the Zelda corpus is small. Literature on
 structured generation and game-PCG consistently suggests that when data is
@@ -135,7 +127,7 @@ flowchart TD
     B --> C[Block III: dual-stream condition encoder]
     C --> D[Block IV: latent diffusion teacher]
     D --> E[Block IV-B: fast sampler distillation]
-    C --> F[Auxiliary masked-room branch]
+    C --> F["Active discrete contender<br/>(MaskedRoom / Block V-Alt)"]
     D --> L[Block V: LogicNet guidance]
     D --> G[Block VI: symbolic repair and semantic overlay]
     E --> G
@@ -153,7 +145,7 @@ flowchart TD
 | Block III | [`src/core/condition_encoder.py`](../src/core/condition_encoder.py) | Encode graph context, local context, and reference rooms | conditioning tokens/features |
 | Block IV | [`src/core/latent_diffusion.py`](../src/core/latent_diffusion.py) | Generate room latents under graph/topology conditioning | latent room sample |
 | Block IV-B | [`src/train_lcm.py`](../src/train_lcm.py), [`src/optimization/lcm_lora.py`](../src/optimization/lcm_lora.py) | Distill a few-step fast sampler from the teacher | LoRA student adapters |
-| Auxiliary | [`src/core/discrete_masked_model.py`](../src/core/discrete_masked_model.py), [`src/train_masked_room.py`](../src/train_masked_room.py) | Parallel discrete alternative room generator | discrete room tokens |
+| Active Discrete Contender (`Block V-Alt`) | [`src/core/discrete_masked_model.py`](../src/core/discrete_masked_model.py), [`src/train_masked_room.py`](../src/train_masked_room.py) | Categorical masked-token room generator (`RO1`/`RQ1`/`H2`) preserving exact tile IDs and hard pinning | discrete room tokens |
 | Block V | [`src/core/logic_net.py`](../src/core/logic_net.py), [`src/core/latent_diffusion.py`](../src/core/latent_diffusion.py) | Differentiable logic guidance and validity pressure | logic losses / guidance gradients |
 | Block VI | [`src/pipeline/dungeon_pipeline.py`](../src/pipeline/dungeon_pipeline.py), `src/pipeline/room_stitching.py` | Repair, marker placement, stitching, export | full dungeon grid |
 | Block VII | `src/evaluation/*`, `src/simulation/*` | Mechanical validation, P-CBS, and QD metrics | reports / metrics |
@@ -256,8 +248,9 @@ That token compression is the main reason latent diffusion is practical here.
 ### Why not increase VQ-VAE again
 
 The earlier architecture audit recorded an older VQ-VAE at about `31.10M`
-parameters. The current canonical VQ-VAE is about `17.62M`. On this dataset,
-the smaller model is the better tradeoff because VQ-VAE is only a
+parameters. The current canonical `SemanticVQVAE` is `17.37M` (`17,365,900`), and
+`SemanticVQVAE2` with `FSQ` is `17.56M` (`17,556,500`). On this dataset,
+the ~17M budget is the better tradeoff because VQ-VAE is only a
 representation stage, not the final semantic controller.
 
 ## 4.3 Block III - Dual-Stream Condition Encoder
@@ -296,21 +289,16 @@ Because the room generator needs two qualitatively different kinds of context:
 Merging them too early loses this separation. Keeping them separate and then
 fusing them is more expressive.
 
-### Why `gps` for diffusion but `gcn` for masked-room
+### Why `gps` (with `RRWP`) is now canonical for both `G-LMDM` (`masked_room`) and continuous `diffusion`
 
-Current canonical choice:
+Current canonical choice in `configs/zelda_hmolqd.yaml`:
 
-- diffusion conditioner: `gps`
-- masked-room conditioner: `gcn`
+- **Primary `G-LMDM` (`masked_room`) conditioner**: `gps` (with Random Walk Structural / Relative Random Walk Probabilities `RRWP`, inspired by GRIT, Ma et al. 2023, `arXiv:2305.17589`) -> `3,272,497` parameters (`3.36M` inference / `3.58M` train with `LogicNet`), vs. `gcn` (`2,011,825` parameters) and `No-RRWP` ablations in Track `B1` (`RQ1` / `H1`).
+- **Continuous diffusion comparator (`diffusion`)**: matched `gps` + `RRWP` conditioner (`3,200,113` parameters without reference room maps) for apples-to-apples discrete-vs-continuous comparison (`RQ2` / `H2`).
 
 Reason:
 
-- the diffusion branch is the main quality path, so it uses the stronger graph
-  backbone
-- the masked-room branch already operates at full room resolution, so it is
-  computationally heavier on the token side and more exposed to small-data
-  overfitting
-- using a lighter graph encoder there is a deliberate cost-control decision
+- Small dungeon mission graphs ($N \approx 12\text{--}66$, mean `29.5` nodes) fit comfortably inside `GPS + RRWP` without quadratic memory blowup, directly addressing `FG1`/`RG1` (*semantic-geometric disconnect*) by giving both `G-LMDM` and diffusion comparators multi-hop topological awareness across incident doors and lock-key progression paths (`N` vs. `No-RRWP` vs. `No-GPS (gcn)` vs. `G` in `B1`).
 
 ### Why reference-room maps are enabled
 
@@ -332,12 +320,12 @@ Reason:
 Main implementation:
 
 - [`LatentDiffusionModel`](../src/core/latent_diffusion.py)
-- U-Net denoiser
-- self-attention and cross-attention
+- U-Net (`[1, 2]` canonical) or `DiTDenoiser` (`dit`) transformer backbone
+- self-attention and cross-attention (`unet_attention_resolutions: [0, 1]`)
 - topology conditioning path
-- DDPM/DDIM samplers
-- classifier-free guidance support
-- Min-SNR training reweighting
+- DDPM / DDIM / Flow-Matching (`training_objective`) samplers
+- classifier-free guidance support and `latent_clip_bound=5.0`
+- Min-SNR training reweighting (`min_snr_gamma=5.0`) and FP16 AMP support (`use_amp=true`)
 
 ### What it does
 
@@ -369,27 +357,44 @@ Reason:
 - this is especially useful when start, goal, key, boss, and puzzle anchors are
   localized in the topology map
 
-### Why the diffusion teacher is still the main quality path
+### Why the diffusion teacher is currently the primary quality path
 
-Because it has:
+The continuous latent diffusion path (`UNet[1,2]`, `DiT+Flow`) is the primary
+research vehicle for the causal conditioning ablations (`N`, `G`, `G-L`, `G-LG`).
 
-- the strongest graph conditioner
-- the most expressive generative process
-- the cleanest training objective
-
-The fast sampler and masked-room branch both exist partly to trade off against
-the teacher, not to replace it as the default highest-fidelity path.
+> [!WARNING]
+> **Literature caution (Schrum et al. AIIDE 2025; Zhang et al. AIIDE 2020):**
+> On small discrete tile corpora (~450 rooms, 11×16 grid), continuous VQ-VAE +
+> latent diffusion faces documented failure modes:
+> - **Codebook collapse:** <0.6% Key/Door/Player tiles treated as reconstruction
+>   noise → frequently erased in generated output.
+> - **Argmax projection artifacts:** Non-ordinal categorical tile indices
+>   do not support continuous interpolation; boundary hallucination at argmax.
+> - **Raw playability without guidance:** 72–94% scene level (not full dungeon);
+>   generate-then-repair remains necessary (Zhang et al.: raw GAN 24.3%; +MILP = 100%).
+>
+> The fast sampler and masked-room branch are **not** simply efficiency trade-offs;
+> per the external literature `MaskedRoom` (`2.10M`, discrete iterative refinement)
+> is a **first-class contender** on small discrete tile corpora and may outperform
+> continuous latent diffusion on raw tile-pattern fidelity. This is a primary
+> empirical question (`H2`, `RQ1`) to be answered by runs `R011` and the `B2` track,
+> not assumed in advance.
 
 ### Current canonical diffusion choices
 
 | Hyperparameter | Value | Why |
 |---|---:|---|
+| `diffusion.denoiser_backbone` | `unet` | Canonical 2-scale `[1, 2]` convolutional denoiser (`dit` transformer available for capacity/speed ablations). |
+| `diffusion.unet_channel_mult` | `[1, 2]` | Reduced from `[1, 2, 4]` to cut denoiser size from `~66.6M` to `~26.33M` while preserving `4x3` latent spatial resolution. |
+| `diffusion.unet_attention_resolutions` | `[0, 1]` | Enables spatial attention at both scales of the 2-level U-Net. |
 | `diffusion.model_channels` | `96` | Main capacity knob for the teacher. Large enough for quality, smaller than an unnecessarily overbuilt teacher. |
 | `diffusion.context_dim` | `256` | Enough room for graph tokens, local features, and spatial priors to coexist. |
 | `diffusion.condition_hidden_dim` | `192` | Reduced from older wider profiles to lower overfitting risk while keeping graph expressivity. |
 | `diffusion.condition_num_gnn_layers` | `2` | Avoids excessive graph smoothing and unnecessary compute on small room graphs. |
 | `diffusion.condition_gnn_type` | `gps` | Better local-global graph processing than plain GCN for the main quality path. |
 | `diffusion.condition_use_reference_room_maps` | `true` | Gives the model cheap local neighborhood context. |
+| `diffusion.training_objective` | `diffusion` | Standard noise/v-prediction schedule (`flow_matching` ODE supported as a dedicated ablation). |
+| `diffusion.latent_clip_bound` | `5.0` | Bounds latent explosion under CFG without clipping normal `±1σ..±4σ` signal. |
 | `diffusion.num_timesteps` | `1000` | Standard teacher schedule resolution; compatible with DDIM-style subsampling at inference. |
 | `diffusion.schedule_type` | `cosine` | Stable modern default for diffusion schedules. |
 | `diffusion.cfg_scale` | `3.0` | Matches the trained teacher regime; prevents the earlier runtime mismatch problem. |
@@ -456,57 +461,50 @@ Because a speed-up layer should not be allowed to silently lower overall system
 quality when the teacher is available. The fallback is therefore a practical
 quality guard, not a theoretical ideal.
 
-## 4.6 Auxiliary Branch - Masked-Room Generator
+## 4.6 Primary Discrete Generator — `G-LMDM` (`MaskedRoom`)
+
+> [!IMPORTANT]
+> Per D3PM (`arXiv:2107.03006`), MaskGIT (`arXiv:2202.04200`), LayoutDM (`arXiv:2303.08137`), MDLM (`arXiv:2406.07524`), and Schrum et al. (AIIDE 2025, `arXiv:2507.00184`), absorbing-state discrete generators avoid continuous `VQ-VAE` reconstruction loss and rarity erasure (`<0.7%` `ENEMY`/`STAIR` on `349` VGLC train rooms spanning `43` unique $12\times 7$ interiors) while allowing exact $t=0$ boundary clamping. **`G-LMDM`** (`3.58M` train / `3.36M` infer) is therefore the canonical primary architecture in `configs/zelda_hmolqd.yaml`, benchmarked head-to-head against continuous `VQ-VAE + UNet[1,2]` (`47.13M`) and `DiT+Flow` (`22.44M`) under `RQ2`/`H2`.
 
 ### What it contains
 
 Main implementation:
 
-- [`DiscreteMaskedRoomModel`](../src/core/discrete_masked_model.py)
-- U-Net-like token refinement stack
-- topology-derived fixed-token mask
-- graph condition encoder
+- [`DiscreteMaskedRoomModel`](../src/core/discrete_masked_model.py) (`MaskedTokenTransformerBackbone`, `84,764` params)
+- Block III `DualStreamConditionEncoder` (`condition_gnn_type=gps`, `RRWP`, reference room maps, `3,272,497` params)
+- Topology-derived fixed semantic anchors & boundary clamping ($t=0$)
+- Direct $16\times 11$ Soft Bellman-Ford `LogicNet` training supervision (`logic_net_enabled=true`, `alpha_logic=0.1`, `227,644` frozen teacher params)
 
 ### What it does
 
-It masks part of a room and predicts the missing semantic tiles in iterative
-parallel refinement steps.
+It models $p_\theta(X_0 \mid G, \text{ctx})$ directly on the discrete $16\times 11$ semantic grid with cosine masking (`min_mask_ratio=0.0`, `max_mask_ratio=1.0`), exact boundary/anchor pinning, and optional Gibbs/corrector refinement (`masked_room_corrector_steps=1`).
 
-### Why keep this branch
+### Why it replaces continuous `VQ-VAE` as primary
 
-It serves three purposes:
-
-1. an alternative generation path
-2. a discrete ablation against the diffusion teacher
-3. a stronger path when token-level semantic anchoring matters more than latent
-   photorealism-like synthesis
+1. Eliminates `17.37M` continuous tokenization overhead and `88.60%` `WALL+FLOOR` smoothing error on `43` unique $12\times 7$ interiors.
+2. Enables exact discrete $t=0$ boundary clamping for adjacent door/wall interfaces.
+3. Feeds predicted $16\times 11$ `tile_logits` directly to differentiable Soft Bellman-Ford `LogicNet` (`RG3`/`RQ3`).
 
 ### Why it was downsized so aggressively
 
-Earlier audits measured an oversized masked-room setup at about `65.78M`
-parameters. The current canonical masked-room stack is about `12.45M` total.
+Earlier audits measured an oversized masked-room setup at about `65.78M` parameters, which was reduced to `12.45M` and then downsized to `hidden_dim=48, model_channels=64`: denoiser `84,764` (`0.085M`) + `GPS` conditioner `3,272,497` (`3.27M`) + frozen `LogicNet` `227,644` (`0.23M`) = **`3,584,905` (`3.58M` train / `3,357,261` `3.36M` inference)**, with the `gcn` `No-GPS` ablation at `2,096,589` (`2.10M`, `logic=false`) or `2,324,233` (`2.32M`, `logic=true`).
 
-This is intentional because:
-
-- it works on the full `16x11 = 176` cell room grid, not the `12`-token latent
-  grid
-- full-resolution token interaction is inherently much more expensive
-- the Zelda corpus is too small to justify a near-teacher-sized masked model
-
-### Current canonical masked-room choices
+### Current canonical `G-LMDM` (`masked_room`) choices
 
 | Hyperparameter | Value | Why |
 |---|---:|---|
-| `masked_room.model_channels` | `64` | Keeps the auxiliary branch under the small-data danger zone. |
-| `masked_room.hidden_dim` | `48` | Enough semantic token width for room semantics without approaching teacher-scale cost. |
-| `masked_room.unet_channel_mult` | `[1,2]` | Shallower than diffusion because it already runs at full spatial resolution. |
-| `masked_room.unet_num_res_blocks` | `1` | Avoids unnecessary depth on a tiny dataset. |
-| `masked_room.unet_num_heads` | `4` | Sufficient for token interactions at this scale. |
-| `masked_room.masked_steps` | `8` | Enough iterative refinement without becoming too slow. |
-| `masked_room.min_mask_ratio` | `0.12` | Prevents trivial identity training. |
-| `masked_room.max_mask_ratio` | `0.85` | Forces completion behavior under difficult masks without making the task impossible. |
-| `masked_room.topology_conditioning_mode` | `additive` | Cheaper than SPADE and adequate for the smaller auxiliary branch. |
-| `masked_room.condition_gnn_type` | `gcn` | Cheaper graph backbone, appropriate for the auxiliary path. |
+| `masked_room.model_channels` | `64` | Compact small-data residual/attention stem capacity. |
+| `masked_room.hidden_dim` | `48` | Token embedding width (`84,764` denoiser params) preventing memorization of `43` interiors. |
+| `masked_room.unet_channel_mult` | `[1,2]` | Compact spatial refinement directly at $16\times 11$. |
+| `masked_room.unet_num_res_blocks` | `1` | Avoids overfitting depth on `349` train rooms. |
+| `masked_room.unet_num_heads` | `4` | Matches `hidden_dim=48` cleanly (`48 % 4 == 0`). |
+| `masked_room.masked_steps` | `8` | Iterative parallel discrete decoding steps with corrector pass. |
+| `masked_room.min_mask_ratio` | `0.0` | Allows full-span difficulty sampling during cosine schedule training. |
+| `masked_room.max_mask_ratio` | `1.0` | Supports full conditional synthesis from masked rooms at inference. |
+| `masked_room.topology_conditioning_mode` | `additive` | Lightweight spatial anchor injection alongside fixed token clamping. |
+| `masked_room.condition_gnn_type` | `gps` | Canonical `GraphGPS + RRWP` graph conditioner (`RG1`/`RQ1`). |
+| `masked_room.logic_net_enabled` | `true` | Enables direct `16x11` Soft Bellman-Ford `LogicNet` supervision (`RG3`/`RQ3`). |
+| `masked_room.alpha_logic` | `0.1` | Balanced direct solvability loss weight (`zelda_hmolqd_masked_small.yaml` sets `false`/`0.0` for `G`). |
 
 ### Why semantic anchors matter more here than before
 
@@ -534,6 +532,9 @@ This stage:
 
 Because the architecture prioritizes correctness and controllability over a
 fully end-to-end claim.
+
+> [!NOTE]
+> Literature backing (`RG3`): Pure neural generators achieve low un-repaired solvability on multi-lock levels (e.g., 24.3% raw GAN validity in Zhang et al., AIIDE 2020, `arXiv:2010.06627`; 12–27% raw DDPM playability in Schrum et al., AIIDE 2025, `arXiv:2507.00184`), making Block VI symbolic repair architecturally necessary rather than an ad-hoc patch. Consequently, `repair_rate` and `tiles_repaired_mean` (`RO3`/`RQ4`/`H6`) directly quantify how much symbolic edit effort the graph-and-logic-supervised neural prior saves relative to unconditioned `N` or unguided `G`.
 
 ### Why it is placed at the end
 
@@ -650,12 +651,16 @@ scientific behavior of the model.
 
 | Parameter | Current value | Rationale |
 |---|---:|---|
+| `diffusion.denoiser_backbone` | `unet` | 2-scale `[1, 2]` U-Net canonical default (`dit` available for lightweight transformer comparison). |
+| `diffusion.unet_channel_mult` | `[1, 2]` | Preserves `4x3` latent resolution while keeping denoiser capacity at `26.33M` instead of `66.60M`. |
 | `diffusion.model_channels` | `96` | Main capacity knob for the teacher. Large enough for quality, smaller than an unnecessarily overbuilt teacher. |
 | `diffusion.context_dim` | `256` | Enough room for graph tokens, local features, and spatial priors to coexist. |
 | `diffusion.condition_hidden_dim` | `192` | Reduced from older wider profiles to lower overfitting risk while keeping graph expressivity. |
 | `diffusion.condition_num_gnn_layers` | `2` | Avoids excessive graph smoothing and unnecessary compute on small room graphs. |
 | `diffusion.condition_gnn_type` | `gps` | Better local-global graph processing than plain GCN for the main quality path. |
 | `diffusion.condition_use_reference_room_maps` | `true` | Gives the model cheap local neighborhood context. |
+| `diffusion.training_objective` | `diffusion` | Noise/v-prediction schedule (`flow_matching` ODE supported for solver/trajectory ablations). |
+| `diffusion.latent_clip_bound` | `5.0` | Prevents CFG latent divergence without clipping in-distribution latent variance. |
 | `diffusion.num_timesteps` | `1000` | Standard teacher schedule resolution; compatible with DDIM-style subsampling at inference. |
 | `diffusion.schedule_type` | `cosine` | Stable modern default for diffusion schedules. |
 | `diffusion.cfg_scale` | `3.0` | Matches the trained teacher regime; prevents the earlier runtime mismatch problem. |
@@ -676,18 +681,19 @@ scientific behavior of the model.
 | `generation.semantic_puzzle_offset` | `2` | Keeps puzzle anchors away from exact central collision with other semantic markers. |
 | `generation.fast_sampler_teacher_fallback_enabled` | `false` | Exposes standalone fast-sampler quality by default; enable only for guarded-runtime ablations. |
 
-## 6.4 Masked-room config rationale
+## 6.4 `G-LMDM` (`masked_room`) config rationale
 
 | Parameter | Current value | Rationale |
 |---|---:|---|
-| `masked_room.model_channels` | `64` | Keeps the auxiliary branch in a safer small-data capacity regime. |
-| `masked_room.hidden_dim` | `48` | Enough semantic token width without approaching teacher-scale cost. |
-| `masked_room.condition_hidden_dim` | `192` | Matches the diffusion conditioner width policy closely enough for reuse, but still respects the smaller branch. |
-| `masked_room.condition_gnn_type` | `gcn` | Lightweight graph encoder to control cost at full room resolution. |
-| `masked_room.topology_conditioning_mode` | `additive` | Cheaper than SPADE and acceptable for the auxiliary branch. |
-| `masked_room.min_mask_ratio` | `0.12` | Avoids trivial near-copy tasks. |
-| `masked_room.max_mask_ratio` | `0.85` | Forces completion behavior under difficult masks without making the task impossible. |
-| `masked_room.epochs` | `100` | The masked-room branch needs a longer training horizon than the fast sampler because it is learned directly from data, not distilled. |
+| `masked_room.model_channels` | `64` | Compact stem width aligned with small-data capacity guardrails. |
+| `masked_room.hidden_dim` | `48` | Preserves expressivity on `16x11` tokens (`84,764` denoiser params) without memorizing `43` unique `12x7` interiors. |
+| `masked_room.condition_hidden_dim` | `192` | Shared Block III width enabling controlled `GPS+RRWP` (`RQ1`) and `LogicNet` (`RQ3`) ablations. |
+| `masked_room.condition_gnn_type` | `gps` | Canonical `GraphGPS + RRWP` encoder (`gcn` retained as `No-GPS` ablation). |
+| `masked_room.topology_conditioning_mode` | `additive` | Lightweight injection combined with exact $t=0$ boundary clamping. |
+| `masked_room.min_mask_ratio` | `0.0` | Full masking schedule span during cosine training (`MaskGIT`/`MDLM`). |
+| `masked_room.max_mask_ratio` | `1.0` | Supports fully masked generation conditioned purely on graph/boundary tokens. |
+| `masked_room.logic_net_enabled` | `true` | Enables direct `16x11` Soft Bellman-Ford `LogicNet` loss (`alpha_logic=0.1`; `configs/zelda_hmolqd_masked_small.yaml` sets `false`/`0.0` for `G`). |
+| `masked_room.epochs` | `100` | Matches continuous comparator horizon (`scheduler_t0=100`). |
 
 ## 7. Integration And Exclusion Mechanisms
 
@@ -709,27 +715,30 @@ information and exclude harmful or redundant information?`
 
 ## 8.1 Measured current parameter counts
 
-Measured from the live canonical config on 2026-04-06:
+Measured directly from resolved [`configs/zelda_hmolqd.yaml`](../configs/zelda_hmolqd.yaml) trainer instantiations (`MaskedRoomTrainer` & `DiffusionTrainer`):
 
-| Component | Trainable parameters |
+| Component / Comparator Configuration | Trainable / Total Parameters |
 |---|---:|
-| VQ-VAE | `17,623,948` |
-| Diffusion denoiser | `66,599,302` |
-| Diffusion condition encoder | `3,206,961` |
-| LogicNet | `274,957` |
-| Teacher total | `70,081,220` |
-| Masked-room model | `10,502,534` |
-| Masked-room condition encoder | `1,946,289` |
-| Masked-room total | `12,448,823` |
+| **Primary `G-LMDM` (`masked_room`, `gps`, `logic=True`, `alpha_logic=0.1`)** | **`3,584,905` (`3.58M` train / `3,357,261` `3.36M` infer)** |
+| ↳ Masked denoiser (`MaskedTokenTransformerBackbone`, `hidden=48, model_channels=64`) | `84,764` (`0.085M`) |
+| ↳ `DualStreamConditionEncoder` (`gps`, `hidden=192`, `reference_room_maps=true`) | `3,272,497` (`3.27M`) |
+| ↳ Frozen `LogicNet` (`tile_logits` direct Soft Bellman-Ford) | `227,644` (`0.23M`) |
+| **`MaskedRoom` without `LogicNet` (`G` via `configs/zelda_hmolqd_masked_small.yaml`)** | **`3,357,261` (`3.36M`)** |
+| **`MaskedRoom` `No-GPS` (`gcn`, `logic=False` / `logic=True`)** | `2,096,589` (`2.10M`) / `2,324,233` (`2.32M`) |
+| VQ-VAE (`SemanticVQVAE`, `hidden=96, K=256`, continuous comparator Block II) | `17,365,900` (`17.37M`) |
+| VQ-VAE-2 (`SemanticVQVAE2`, FSQ `hidden=96`, optional) | `17,556,500` (`17.56M`) |
+| Continuous Comparator `UNet[1,2]` denoiser + conditioner + LogicNet (`26,332,390 + 3,200,113 + 227,644`) | `29,760,147` (`47,126,047` = **`47.13M`** end-to-end w/ frozen VQ-VAE) |
+| Continuous Comparator `DiT+Flow` denoiser (`width=96, depth=4`, `1,642,694` + `3.20M` + `0.23M` + `17.37M`) | **`22,436,351` (`22.44M`** end-to-end w/ frozen VQ-VAE) |
 
 ## 8.2 Old vs new complexity
 
-From earlier architecture audits:
+From earlier 2026-04-06 (`[1, 2, 4]` U-Net) and pre-simplification audits:
 
-| Component | Older audit value | Current canonical value | Change |
+| Component | Earlier audit value | Current canonical / comparator value | Change |
 |---|---:|---:|---:|
-| VQ-VAE | `31.10M` | `17.62M` | lower |
-| Masked-room total | `65.78M` | `12.45M` | much lower |
+| VQ-VAE (continuous comparator) | `31.10M` -> `17.62M` | `17.37M` (`17,365,900`) | lower |
+| Diffusion denoiser (`UNet`) | `66.60M` (`[1, 2, 4]`) | `26.33M` (`[1, 2]`, `47.13M` w/ VQ-VAE) | reduced by ~60% |
+| Primary **`G-LMDM`** (`masked_room`) | `65.78M` -> `12.45M` | **`3.58M`** train / **`3.36M`** infer (`84.8K` denoiser) | **13.15x smaller than `UNet[1,2]` stack** |
 
 ### Why the new model is cheaper in those branches
 
@@ -1102,19 +1111,19 @@ python main.py topology-audit-fixed-graph `
   --no-fast-sampler-teacher-fallback-enabled
 ```
 
-## 10. What To Say Clearly In The Report
+## 10. What To State Clearly In The Research Manuscript
 
-For the report/thesis, the following points should be stated explicitly.
+For the manuscript and peer-review audits, the following points must be stated explicitly.
 
 ### 10.1 What the model is
 
-The model is a `hybrid neural-symbolic, graph-conditioned room generator` with:
+`G-LMDM` is a `graph-conditioned, logic-regularized discrete masked neuro-symbolic dungeon generator` featuring:
 
-- explicit topology generation
-- latent diffusion as the main room generator
-- a fast distilled student
-- a discrete masked-room alternative
-- symbolic repair and marker placement
+- explicit mission-graph generation (`Block I`)
+- causal `GraphGPS + RRWP` + directional neighbor/boundary conditioning (`Block III`)
+- absorbing-state discrete masked token synthesis directly on $16\times 11$ tiles (`3.58M` train / `3.36M` infer), benchmarked against continuous `VQ-VAE + UNet[1,2]` (`47.13M`) and `DiT+Flow` (`22.44M`) comparators
+- direct $16\times 11$ differentiable Soft Bellman-Ford `LogicNet` training supervision (`Block V`)
+- attributed 4-stage symbolic repair (`raw -> constrained -> repaired -> compiled`, `Block VI`) and strict `StateSpaceAStar` vs. `P-CBS` verification (`Block VII`)
 
 ### 10.2 What the model is not
 
@@ -1173,29 +1182,10 @@ generation system` than as a single model block.
 
 Its quality comes from:
 
-- using the graph to control progression
-- using VQ-VAE to make diffusion affordable
-- using a dual-stream conditioner to fuse global and local information
-- using diffusion as the main high-fidelity room generator
-- using masked-room as a cheaper discrete complement
-- using symbolic repair and graph-owned semantics to guarantee correctness where
-  the data is too limited to trust a pure neural solution
-
-The current complexity profile is better than older oversized versions where it
-matters most for small-data stability:
-
-- VQ-VAE is smaller than the older wide baseline
-- masked-room is dramatically smaller than the earlier oversized branch
-
-The main remaining cost is still the teacher diffusion path, and that is a
-deliberate tradeoff for quality.
-
-In short:
-
-- the new model is more disciplined
-- the new model is more reproducible
-- the new model uses topology information more explicitly
-- the new model makes its tradeoffs more honest
+- using the graph (`GraphGPS + RRWP`) to control global mission progression and directional boundaries (`RG1`/`RQ1`)
+- operating directly in discrete $16\times 11$ token space via **`G-LMDM`** (`3.58M` / `3.36M`) to avoid `VQ-VAE` rarity erasure on `43` unique $12\times 7$ training interiors, while benchmarking honestly against `47.13M` `UNet[1,2]` and `22.44M` `DiT+Flow` comparators (`RG2`/`RQ2`)
+- applying differentiable Soft Bellman-Ford `LogicNet` supervision directly to $16\times 11$ logits (`alpha_logic=0.1`) and attributing every stage cleanly across `raw -> constrained -> repaired -> compiled` (`RG3`/`RQ3`)
+- separating formal `StateSpaceAStar` solvability proofs from bounded `P-CBS` proxies on held-out `Dungeon-9` against external symbolic baselines (`RG4`/`RQ4`)
 
 ## References
 
@@ -1203,13 +1193,16 @@ In short:
 2. Liu et al. *An Intriguing Failing of Convolutional Neural Networks and the CoordConv Solution*. NeurIPS 2018. https://arxiv.org/abs/1807.03247
 3. Ho, Jain, Abbeel. *Denoising Diffusion Probabilistic Models*. NeurIPS 2020. https://arxiv.org/abs/2006.11239
 4. Song, Meng, Ermon. *Denoising Diffusion Implicit Models*. ICLR 2021. https://arxiv.org/abs/2010.02502
-5. Rombach et al. *High-Resolution Image Synthesis with Latent Diffusion Models*. CVPR 2022. https://arxiv.org/abs/2112.10752
-6. Ho, Salimans. *Classifier-Free Diffusion Guidance*. 2022. https://arxiv.org/abs/2207.12598
-7. Hang et al. *Efficient Diffusion Training via Min-SNR Weighting Strategy*. ICCV 2023. https://arxiv.org/abs/2303.09556
-8. Luo et al. *Latent Consistency Models: Synthesizing High-Resolution Images with Few-Step Inference*. 2023. https://arxiv.org/abs/2310.04378
-9. Chang et al. *MaskGIT: Masked Generative Image Transformer*. CVPR 2022. https://arxiv.org/abs/2202.04200
-10. Hu et al. *Graph2Plan: Learning Floorplan Generation from Layout Graphs*. CVPR 2020. https://arxiv.org/abs/2004.13204
-11. Shabani et al. *HouseDiffusion: Vector Floorplan Generation via a Diffusion Model and Discrete Representations*. CVPR 2023. https://arxiv.org/abs/2211.13287
-12. Rampasek et al. *Recipe for a General, Powerful, Scalable Graph Transformer*. 2022. https://arxiv.org/abs/2205.12454
-13. Park et al. *Semantic Image Synthesis with Spatially-Adaptive Normalization*. CVPR 2019. https://arxiv.org/abs/1903.07291
-14. Rodriguez Torrado et al. *Bootstrapping Conditional GANs for Video Game Level Generation*. IEEE CoG 2019. https://arxiv.org/abs/1910.01603
+5. Austin et al. *Structured Denoising Diffusion Models in Discrete State-Spaces (D3PM)*. NeurIPS 2021. https://arxiv.org/abs/2107.03006
+6. Rombach et al. *High-Resolution Image Synthesis with Latent Diffusion Models*. CVPR 2022. https://arxiv.org/abs/2112.10752
+7. Chang et al. *MaskGIT: Masked Generative Image Transformer*. CVPR 2022. https://arxiv.org/abs/2202.04200
+8. Inoue et al. *LayoutDM: Discrete Diffusion Model for Controllable Layout Generation*. CVPR 2023. https://arxiv.org/abs/2303.08137
+9. Ma et al. *Graph Inductive Biases in Transformers without Message Passing (GRIT / RRWP)*. ICML 2023. https://arxiv.org/abs/2305.17589
+10. Sahoo et al. *Simple and Effective Masked Diffusion Language Models (MDLM)*. NeurIPS 2024. https://arxiv.org/abs/2406.07524
+11. Tamar et al. *Value Iteration Networks*. NeurIPS 2016. https://arxiv.org/abs/1602.02867
+12. Xu et al. *A Semantic Loss Function for Deep Learning with Symbolic Knowledge*. ICML 2018. https://arxiv.org/abs/1711.11157
+13. Gutierrez & Schrum. *Generative Adversarial Network Rooms in Generative Graph Grammar Dungeons for The Legend of Zelda*. IEEE CEC 2020. https://arxiv.org/abs/2001.05065
+14. Zhang et al. *Video Game Level Repair via Mixed Integer Linear Programming*. AIIDE 2020. https://arxiv.org/abs/2010.06627
+15. Schrum et al. *Text-to-Level Diffusion Models With Various Text Encoders for Super Mario Bros and The Legend of Zelda*. AIIDE 2025. https://arxiv.org/abs/2507.00184
+16. Withington, Cook, & Tokarchuk. *On the Evaluation of Procedural Level Generation Systems*. FDG 2024. https://arxiv.org/abs/2404.18657
+17. Khalifa et al. *The Procedural Content Generation Benchmark*. FDG 2025. https://arxiv.org/abs/2503.21474

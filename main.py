@@ -3,7 +3,8 @@ Top-level entry point for validation and training.
 
 Usage:
     python main.py validate --dungeon 1 --variant 1
-    python main.py train --config configs/zelda_hmolqd.yaml --stage diffusion
+    python main.py train --config configs/zelda_hmolqd.yaml --stage masked_room  # Primary G-LMDM
+    python main.py train --config configs/zelda_hmolqd.yaml --stage diffusion    # Continuous comparator
     python main.py topology-visualize --seed 20260406
     python main.py topology-compare-manual --run-dir outputs/zelda_hmolqd_semantic_anchor_retrain_v1 --output-dir outputs/manual_compare
     python main.py topology-audit-fixed-graph --run-dir outputs/zelda_hmolqd_semantic_anchor_retrain_v1 --output-dir outputs/fixed_graph_audit

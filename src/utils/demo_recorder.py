@@ -1,4 +1,4 @@
-﻿"""
+"""
 Feature 5: Demo Recording System
 =================================
 Automated GIF/video generation for thesis presentations and publications.

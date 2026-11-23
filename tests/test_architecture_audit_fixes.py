@@ -478,6 +478,23 @@ def test_generate_room_no_puzzle_structure_cleanup_strips_block_clutter():
     assert result.metrics["final_no_puzzle_block_tiles_removed"] > 0
 
 
+def test_unpositioned_directed_edge_preserves_flow_direction_in_room_semantics():
+    pipeline = NeuralSymbolicDungeonPipeline.create_symbolic_repair_pipeline(
+        device="cpu",
+        enable_logging=False,
+    )
+    graph = nx.DiGraph()
+    graph.add_edge("source", "target", edge_type="key_locked")
+
+    source = pipeline._extract_room_topology_semantics(graph, "source")
+    target = pipeline._extract_room_topology_semantics(graph, "target")
+
+    assert source["incoming_dirs"] == set()
+    assert source["outgoing_dirs"] == {"N"}
+    assert target["incoming_dirs"] == {"N"}
+    assert target["outgoing_dirs"] == set()
+
+
 def test_generate_room_puzzle_scaffold_preserves_planned_route_cells():
     pipeline = NeuralSymbolicDungeonPipeline(
         device="cpu",

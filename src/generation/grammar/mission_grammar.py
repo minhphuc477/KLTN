@@ -1145,6 +1145,35 @@ class MissionGrammar:
             )
         return False
 
+    @staticmethod
+    def _collect_reachable_switch_ids(
+        switch_nodes: List[MissionNode],
+        reachable: Set[int],
+    ) -> Set[int]:
+        """Collect all switch identifiers unlocked by reachable SWITCH nodes."""
+        ids: Set[int] = set()
+        for sw in switch_nodes:
+            if sw.id in reachable:
+                ids.add(int(sw.id))
+                if sw.switch_id is not None:
+                    ids.add(int(sw.switch_id))
+        return ids
+
+    @classmethod
+    def _has_reachable_switch_for_gate(
+        cls,
+        edge: MissionEdge,
+        switch_nodes: List[MissionNode],
+        reachable: Set[int],
+    ) -> bool:
+        """Check whether an ON_OFF_GATE edge has a reachable matching switch."""
+        reachable_sw_ids = cls._collect_reachable_switch_ids(switch_nodes, reachable)
+        if edge.switch_id is not None:
+            return int(edge.switch_id) in reachable_sw_ids
+        if edge.switches_required:
+            return all(int(sid) in reachable_sw_ids for sid in edge.switches_required)
+        return any(sw.id in reachable for sw in switch_nodes)
+
     def validate_progression_constraints(self, graph: MissionGraph, *, log_failures: bool = True) -> bool:
         """
         Validate edge-level progression constraints (beyond lock-node ordering).
@@ -1176,11 +1205,11 @@ class MissionGrammar:
             n.id for n in graph.nodes.values()
             if n.node_type == NodeType.KEY
         ]
+        switch_nodes = [n for n in graph.nodes.values() if n.node_type == NodeType.SWITCH]
 
         for edge in graph.edges:
             excluded_edge = {(edge.source, edge.target)}
             progression_reachable: Optional[Set[int]] = None
-            structural_reachable: Optional[Set[int]] = None
 
             def _progression_pre_gate() -> Set[int]:
                 nonlocal progression_reachable
@@ -1192,15 +1221,6 @@ class MissionGrammar:
                         exclude_edges=excluded_edge,
                     )
                 return progression_reachable
-
-            def _structural_pre_gate() -> Set[int]:
-                nonlocal structural_reachable
-                if structural_reachable is None:
-                    structural_reachable = graph.get_reachable_nodes(
-                        start.id,
-                        excluded_edges=excluded_edge,
-                    )
-                return structural_reachable
 
             if edge.edge_type in {EdgeType.LOCKED, EdgeType.BOSS_LOCKED}:
                 # Fungible small-key locks intentionally use requires_key_count
@@ -1231,7 +1251,7 @@ class MissionGrammar:
                         return False
 
             if edge.requires_key_count > 0:
-                reachable = _structural_pre_gate()
+                reachable = _progression_pre_gate()
                 reachable_keys = sum(1 for key_node in key_nodes if key_node in reachable)
                 if reachable_keys < edge.requires_key_count:
                     if log_failures:
@@ -1281,7 +1301,7 @@ class MissionGrammar:
                     return False
 
             if edge.edge_type == EdgeType.MULTI_LOCK and edge.token_count > 0:
-                reachable = _structural_pre_gate()
+                reachable = _progression_pre_gate()
                 reachable_tokens = sum(1 for token_node in token_nodes if token_node in reachable)
                 if reachable_tokens < edge.token_count:
                     if log_failures:
@@ -1292,13 +1312,26 @@ class MissionGrammar:
                     return False
 
             if edge.edge_type == EdgeType.STATE_BLOCK and edge.switches_required:
-                reachable = _structural_pre_gate()
-                missing_switches = [sid for sid in edge.switches_required if sid not in reachable]
+                reachable_sw_ids = self._collect_reachable_switch_ids(
+                    switch_nodes,
+                    _progression_pre_gate(),
+                )
+                missing_switches = [sid for sid in edge.switches_required if int(sid) not in reachable_sw_ids]
                 if missing_switches:
                     if log_failures:
                         logger.warning(
                             f"STATE_BLOCK {edge.source}->{edge.target} has unreachable switches before gate: "
                             f"{missing_switches}"
+                        )
+                    return False
+
+            if edge.edge_type == EdgeType.ON_OFF_GATE:
+                reachable = _progression_pre_gate()
+                if not self._has_reachable_switch_for_gate(edge, switch_nodes, reachable):
+                    if log_failures:
+                        logger.warning(
+                            f"ON_OFF_GATE {edge.source}->{edge.target} has no reachable matching switch pre-gate "
+                            f"(switch_id={edge.switch_id})"
                         )
                     return False
 
@@ -1556,7 +1589,7 @@ class MissionGrammar:
 
         item_providers: Dict[str, List[int]] = defaultdict(list)
         for node in graph.nodes.values():
-            if node.node_type == NodeType.ITEM and node.item_type:
+            if node.node_type in {NodeType.ITEM, NodeType.PROTECTION_ITEM} and node.item_type:
                 item_providers[str(node.item_type)].append(node.id)
 
         token_nodes = [n.id for n in graph.nodes.values() if n.node_type == NodeType.TOKEN]
@@ -1564,6 +1597,7 @@ class MissionGrammar:
             n.id for n in graph.nodes.values()
             if n.node_type == NodeType.KEY
         ]
+        switch_nodes = [n for n in graph.nodes.values() if n.node_type == NodeType.SWITCH]
 
         relaxed_edges = 0
 
@@ -1597,7 +1631,12 @@ class MissionGrammar:
 
             # Fungible locks.
             if edge.requires_key_count > 0:
-                reachable = graph.get_reachable_nodes(start.id, excluded_edges=excluded_edge)
+                reachable = self._progression_reachable_nodes(
+                    graph,
+                    start.id,
+                    exclude_nodes=set(),
+                    exclude_edges=excluded_edge,
+                )
                 reachable_keys = sum(1 for key_node in key_nodes if key_node in reachable)
                 if reachable_keys <= 0:
                     edge.edge_type = EdgeType.PATH
@@ -1620,9 +1659,28 @@ class MissionGrammar:
                     edge.item_required = None
                     relaxed_edges += 1
 
+            # Hazard gates.
+            if edge.edge_type == EdgeType.HAZARD:
+                required_item = str(edge.protection_item_id or "").strip()
+                providers = item_providers.get(required_item, []) if required_item else []
+                reachable = bool(providers) and any(
+                    self._is_reachable_without_edges(graph, start.id, provider, excluded_edge)
+                    for provider in providers
+                )
+                if not required_item or not providers or not reachable:
+                    edge.edge_type = EdgeType.PATH
+                    edge.protection_item_id = None
+                    edge.hazard_damage = 0
+                    relaxed_edges += 1
+
             # Token locks.
             if edge.edge_type == EdgeType.MULTI_LOCK and edge.token_count > 0:
-                reachable = graph.get_reachable_nodes(start.id, excluded_edges=excluded_edge)
+                reachable = self._progression_reachable_nodes(
+                    graph,
+                    start.id,
+                    exclude_nodes=set(),
+                    exclude_edges=excluded_edge,
+                )
                 reachable_tokens = sum(1 for token_node in token_nodes if token_node in reachable)
                 if reachable_tokens <= 0:
                     edge.edge_type = EdgeType.PATH
@@ -1634,8 +1692,14 @@ class MissionGrammar:
 
             # Switch gates / batteries.
             if edge.edge_type == EdgeType.STATE_BLOCK and edge.switches_required:
-                reachable = graph.get_reachable_nodes(start.id, excluded_edges=excluded_edge)
-                kept_switches = [sid for sid in edge.switches_required if sid in reachable]
+                reachable = self._progression_reachable_nodes(
+                    graph,
+                    start.id,
+                    exclude_nodes=set(),
+                    exclude_edges=excluded_edge,
+                )
+                reachable_sw_ids = self._collect_reachable_switch_ids(switch_nodes, reachable)
+                kept_switches = [sid for sid in edge.switches_required if int(sid) in reachable_sw_ids]
                 if not kept_switches:
                     edge.edge_type = EdgeType.PATH
                     edge.switches_required = []
@@ -1643,6 +1707,20 @@ class MissionGrammar:
                     relaxed_edges += 1
                 elif len(kept_switches) != len(edge.switches_required):
                     edge.switches_required = kept_switches
+                    relaxed_edges += 1
+
+            # On/off switch gates.
+            if edge.edge_type == EdgeType.ON_OFF_GATE:
+                reachable = self._progression_reachable_nodes(
+                    graph,
+                    start.id,
+                    exclude_nodes=set(),
+                    exclude_edges=excluded_edge,
+                )
+                if not self._has_reachable_switch_for_gate(edge, switch_nodes, reachable):
+                    edge.edge_type = EdgeType.PATH
+                    edge.switch_id = None
+                    edge.switches_required = []
                     relaxed_edges += 1
 
         require_goal_gauntlet = bool(graph.generation_stats.get("require_goal_gauntlet", False))

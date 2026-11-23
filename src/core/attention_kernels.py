@@ -1,4 +1,10 @@
-"""Shared attention kernels for token and graph-grid conditioning."""
+"""[STATUS: DEPRECATED / ABLATION-ONLY COMPARATOR — INACTIVE IN CANONICAL G-LMDM]
+Excluded from the primary 5-block G-LMDM stack under the small-data minimalist
+budget rules (AGENTS.md, L=176 tokens on 16x11 rooms where exact SDPA attention
+is faster and exact). Retained strictly for linear-attention ablation compatibility.
+
+Shared attention kernels for token and graph-grid conditioning.
+"""
 
 from __future__ import annotations
 
@@ -29,7 +35,8 @@ class HedgehogFeatureMap(nn.Module):
 
     def forward(self, x: Tensor) -> Tensor:
         """Map [B, heads, seq, head_dim] -> [B, heads, seq, 2 * feature_dim]."""
-        projected = torch.einsum("hdf,bhld->bhlf", self.weights, x)
+        weights = self.weights.to(device=x.device, dtype=x.dtype)
+        projected = torch.einsum("hdf,bhld->bhlf", weights, x)
         projected_fp32 = projected.float()
         mapped = torch.cat(
             [

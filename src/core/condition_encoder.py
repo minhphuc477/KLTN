@@ -55,10 +55,11 @@ class ConditioningSchemaError(Exception):
 
 # Try to import torch_geometric for GNN
 try:
-    from torch_geometric.nn import GATv2Conv, GCNConv, SAGEConv
+    from torch_geometric.nn import GATv2Conv, GCNConv, GINConv, SAGEConv
     from torch_geometric.utils import to_dense_batch
     HAS_TORCH_GEOMETRIC = True
 except ImportError:
+    GATv2Conv = GCNConv = GINConv = SAGEConv = None
     to_dense_batch = None
     HAS_TORCH_GEOMETRIC = False
     logger.warning("torch_geometric not available. Using fallback GNN implementation.")
@@ -297,7 +298,7 @@ class LocalStreamEncoder(nn.Module):
         boundary_feat = self.boundary_encoder(boundary_constraints)
 
         # Encode position
-        position_feat = self.position_encoder(position.float())
+        position_feat = self.position_encoder(position)
 
         # Concatenate all features
         all_features = torch.cat(
@@ -387,7 +388,7 @@ class ReferenceRoomMapEncoder(nn.Module):
                 room_map = room_map * float(self.num_tile_types - 1)
             room_map = room_map.round()
 
-        room_map = room_map.long().clamp_(0, self.num_tile_types - 1)
+        room_map = room_map.long().clamp(0, self.num_tile_types - 1)
         return room_map
 
     def forward(
@@ -638,6 +639,13 @@ class GlobalStreamEncoder(nn.Module):
                 )
             elif gnn_type == 'sage':
                 layer = SAGEConv(hidden_dim, hidden_dim)
+            elif gnn_type == 'gin':
+                gin_mlp = nn.Sequential(
+                    nn.Linear(hidden_dim, hidden_dim),
+                    nn.ReLU(),
+                    nn.Linear(hidden_dim, hidden_dim),
+                )
+                layer = GINConv(gin_mlp, train_eps=True)
             else:  # gcn
                 layer = GCNConv(hidden_dim, hidden_dim)
 
@@ -1037,6 +1045,12 @@ class GlobalStreamEncoder(nn.Module):
         """
         node_features = self._prepare_node_features(node_features)
         edge_features = self._prepare_edge_features(edge_features, edge_index)
+        target_param = next(self.parameters(), None)
+        if target_param is not None:
+            node_features = node_features.to(device=target_param.device, dtype=target_param.dtype)
+            if edge_features is not None:
+                edge_features = edge_features.to(device=target_param.device, dtype=target_param.dtype)
+        edge_index = edge_index.to(device=node_features.device, dtype=torch.long)
         edge_rrwp = self._prepare_edge_rrwp(
             edge_rrwp,
             edge_index,
@@ -1230,6 +1244,9 @@ class GPSLayer(nn.Module):
         self.local_self = nn.Linear(self.hidden_dim, self.hidden_dim)
         self.local_neighbor = nn.Linear(self.hidden_dim, self.hidden_dim)
         self.local_edge = nn.Linear(self.hidden_dim, self.hidden_dim)
+        if self.local_gnn is not None:
+            for fallback_linear in (self.local_self, self.local_neighbor, self.local_edge):
+                fallback_linear.requires_grad_(False)
         self.global_attn = nn.MultiheadAttention(
             embed_dim=self.hidden_dim,
             num_heads=self.num_heads,
@@ -1506,6 +1523,10 @@ class CrossAttentionFusion(nn.Module):
             Fused conditioning [B, output_dim]
         """
         B = c_local.shape[0]
+        target_device = self.query_proj.weight.device
+        target_dtype = self.query_proj.weight.dtype
+        c_local = c_local.to(device=target_device, dtype=target_dtype)
+        c_global = c_global.to(device=target_device, dtype=target_dtype)
 
         # Ensure c_global has batch dimension
         if c_global.dim() == 2:
@@ -1792,7 +1813,6 @@ class DualStreamConditionEncoder(nn.Module):
         if position.dim() == 1:
             position = position.unsqueeze(0)
         batch_size = boundary_constraints.shape[0]
-        device = boundary_constraints.device
 
         # Stream A: Local context
         c_local = self.local_encoder(
@@ -1800,6 +1820,7 @@ class DualStreamConditionEncoder(nn.Module):
             boundary_constraints,
             position,
         )
+        device = c_local.device
 
         # Stream B: Global context. When callers need both the current-room
         # summary token and the full graph-token sequence, run the global
@@ -1932,7 +1953,14 @@ class DualStreamConditionEncoder(nn.Module):
 
         # Final projection: fuse graph-aware room context with the global style token
         # and any discrete reference-room exemplar features.
-        c_combined = torch.cat([c_fused, style_feat, reference_feat], dim=-1)
+        c_combined = torch.cat(
+            [
+                c_fused,
+                style_feat.to(device=c_fused.device, dtype=c_fused.dtype),
+                reference_feat.to(device=c_fused.device, dtype=c_fused.dtype),
+            ],
+            dim=-1,
+        )
         c = self.output_proj(c_combined)
 
         if return_global_tokens:

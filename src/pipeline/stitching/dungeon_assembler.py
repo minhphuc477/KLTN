@@ -108,6 +108,77 @@ def _generation_telemetry_summary(graph: Any) -> Dict[str, Any]:
     }
 
 
+def compile_stitched_graph(dungeon_grid, physical_graph, stitched_layout, *, seed=None):
+    """Apply one shared graph compiler to neural and independent room sources."""
+    tile_config = {
+        "wall": int(SEMANTIC_PALETTE["WALL"]),
+        "floor": int(SEMANTIC_PALETTE["FLOOR"]),
+        "door": int(SEMANTIC_PALETTE["DOOR_OPEN"]),
+        "door_locked": int(SEMANTIC_PALETTE["DOOR_LOCKED"]),
+        "door_bomb": int(SEMANTIC_PALETTE["DOOR_BOMB"]),
+        "door_puzzle": int(SEMANTIC_PALETTE["DOOR_PUZZLE"]),
+        "door_boss": int(SEMANTIC_PALETTE["DOOR_BOSS"]),
+        "door_soft": int(SEMANTIC_PALETTE["DOOR_SOFT"]),
+        "hazard": int(SEMANTIC_PALETTE["ELEMENT"]),
+        "start": int(SEMANTIC_PALETTE["START"]),
+        "goal": int(SEMANTIC_PALETTE["TRIFORCE"]),
+    }
+    mission_graph_dict = {
+        "nodes": dict(physical_graph.nodes(data=True)),
+        "edges": list(physical_graph.edges(data=True)),
+        "connection_realizations": stitched_layout.connection_realizations,
+    }
+    graph_compilation_applied = _has_compilable_graph_semantics(physical_graph)
+    entities = []
+    if graph_compilation_applied:
+        dungeon_grid = enforce_all_rooms(
+            visual_grid=dungeon_grid,
+            mission_graph=mission_graph_dict,
+            layout_map=stitched_layout.layout_map,
+            tile_config=tile_config,
+        )
+        entities = spawn_all_entities(
+            dungeon_grid=dungeon_grid,
+            mission_graph=mission_graph_dict,
+            layout_map=stitched_layout.layout_map,
+            seed=seed,
+        )
+        dungeon_grid = materialize_entities_on_grid(dungeon_grid, entities)
+        from src.simulation.graph_progression import switch_provider_ids
+        passage_cells = {
+            tuple(cell)
+            for record in stitched_layout.connection_realizations.values()
+            for cell in record.get("cells", ())
+        }
+        for node, attrs in physical_graph.nodes(data=True):
+            if not switch_provider_ids(node, attrs) or node not in stitched_layout.layout_map:
+                continue
+            left, top, right, bottom = stitched_layout.layout_map[node]
+            interior = dungeon_grid[top + 1:bottom, left + 1:right]
+            if np.any(interior == SEMANTIC_PALETTE['PUZZLE']):
+                continue
+            candidates = [
+                (row + top + 1, col + left + 1)
+                for row, col in np.argwhere(interior == SEMANTIC_PALETTE['FLOOR'])
+                if (row + top + 1, col + left + 1) not in passage_cells
+            ]
+            if not candidates:
+                raise RuntimeError(f"No interior floor for mission switch provider {node!r}")
+            center = ((top + bottom) / 2, (left + right) / 2)
+            anchor = min(candidates, key=lambda pos: (abs(pos[0] - center[0]) + abs(pos[1] - center[1]), pos))
+            dungeon_grid[anchor] = SEMANTIC_PALETTE['PUZZLE']
+    final_edge_integrity = validate_connection_realizations(
+        dungeon_grid,
+        stitched_layout.connection_realizations,
+    )
+    if int(final_edge_integrity["final_spatial_edge_records_broken"]) > 0:
+        raise RuntimeError(
+            "Graph compilation sealed recorded stitched connections: "
+            f"{final_edge_integrity['final_spatial_edge_integrity_failures']}"
+        )
+    return dungeon_grid, entities, graph_compilation_applied, final_edge_integrity
+
+
 def _has_compilable_graph_semantics(graph: nx.Graph) -> bool:
     """Whether a caller supplied roles or gates that require tile compilation.
 
@@ -374,6 +445,7 @@ def prepare_dungeon_generation(
     mission_graph: Optional[nx.Graph] = None,
     *,
     use_topological_positional_encoding: bool = True,
+    prepare_neural_context: bool = True,
     generate_topology: bool = False,
     target_curve: Optional[List[float]] = None,
     num_rooms: Optional[int] = None,
@@ -537,8 +609,9 @@ def prepare_dungeon_generation(
     logger.debug("Applying VGLC compliance: filtering virtual nodes from mission graph")
     mission_graph_physical = filter_virtual_nodes(graph)
     physical_start = get_physical_start_node(graph)
-    if physical_start is not None:
-        logger.debug("Physical start node: %s", physical_start)
+    if physical_start is not None and physical_start in mission_graph_physical.nodes:
+        mission_graph_physical.nodes[physical_start]["is_start"] = True
+        logger.debug("Physical start node marked: %s", physical_start)
 
     logger.info(
         "Generating dungeon with %d rooms (filtered %d virtual nodes)",
@@ -549,7 +622,7 @@ def prepare_dungeon_generation(
     graph_data = pipeline._prepare_graph_context(
         mission_graph_physical,
         use_tpe=use_topological_positional_encoding,
-    )
+    ) if prepare_neural_context else {}
     graph_data["graph_oracle_validation"] = graph_validation
     return PreparedDungeonGeneration(
         mission_graph=graph,
@@ -609,7 +682,7 @@ def generate_rooms_for_graph(
     room_latents: Dict[Any, torch.Tensor] = {}
     batch_runtime_diagnostics: List[Dict[str, Any]] = []
 
-    if batch_independent_rooms and mission_graph_physical.is_directed():
+    if batch_independent_rooms:
         layers = pipeline._topological_generation_layers(mission_graph_physical)
         offset = 0
         for layer_idx, layer in enumerate(layers):
@@ -639,7 +712,10 @@ def generate_rooms_for_graph(
                         )
                         reference_room_maps = (
                             pipeline._get_neighbor_reference_room_maps(room_id, mission_graph_physical, rooms)
-                            if bool(getattr(pipeline.condition_encoder, "use_reference_room_maps", False))
+                            if (
+                                bool(getattr(pipeline.condition_encoder, "use_reference_room_maps", False))
+                                or str(getattr(pipeline, "room_generator_mode", "")).strip().lower() == "discrete_masked"
+                            )
                             else None
                         )
                         start_goal = pipeline._extract_room_start_goal(mission_graph_physical, room_id)
@@ -679,7 +755,8 @@ def generate_rooms_for_graph(
                             seed=room_seed,
                         )
                         rooms[room_id] = room_result
-                        room_latents[room_id] = pipeline._encode_room_grid_to_latent(room_result.room_grid)
+                        if getattr(pipeline, "vqvae", None) is not None:
+                            room_latents[room_id] = pipeline._encode_room_grid_to_latent(room_result.room_grid)
                         offset += 1
                     continue
 
@@ -787,7 +864,10 @@ def generate_rooms_for_graph(
                             )
                             reference_room_maps = (
                                 pipeline._get_neighbor_reference_room_maps(room_id, mission_graph_physical, rooms)
-                                if bool(getattr(pipeline.condition_encoder, "use_reference_room_maps", False))
+                                if (
+                                    bool(getattr(pipeline.condition_encoder, "use_reference_room_maps", False))
+                                    or str(getattr(pipeline, "room_generator_mode", "")).strip().lower() == "discrete_masked"
+                                )
                                 else None
                             )
                             start_goal = pipeline._extract_room_start_goal(mission_graph_physical, room_id)
@@ -829,7 +909,8 @@ def generate_rooms_for_graph(
                     for room_id in batch_room_ids:
                         room_result = batch_results[room_id]
                         rooms[room_id] = room_result
-                        room_latents[room_id] = pipeline._encode_room_grid_to_latent(room_result.room_grid)
+                        if getattr(pipeline, "vqvae", None) is not None:
+                            room_latents[room_id] = pipeline._encode_room_grid_to_latent(room_result.room_grid)
                     offset += len(batch_room_ids)
     else:
         generation_order = sorted(
@@ -843,7 +924,10 @@ def generate_rooms_for_graph(
             )
             reference_room_maps = (
                 pipeline._get_neighbor_reference_room_maps(room_id, mission_graph_physical, rooms)
-                if bool(getattr(pipeline.condition_encoder, "use_reference_room_maps", False))
+                if (
+                    bool(getattr(pipeline.condition_encoder, "use_reference_room_maps", False))
+                    or str(getattr(pipeline, "room_generator_mode", "")).strip().lower() == "discrete_masked"
+                )
                 else None
             )
             start_goal = pipeline._extract_room_start_goal(mission_graph_physical, room_id)
@@ -885,7 +969,8 @@ def generate_rooms_for_graph(
             )
 
             rooms[room_id] = room_result
-            room_latents[room_id] = pipeline._encode_room_grid_to_latent(room_result.room_grid)
+            if getattr(pipeline, "vqvae", None) is not None:
+                room_latents[room_id] = pipeline._encode_room_grid_to_latent(room_result.room_grid)
 
     return GeneratedRoomSet(
         rooms=rooms,
@@ -1093,49 +1178,9 @@ def generate_dungeon(
     # validated the raw neural stitch here, which allowed the canonical path to
     # bypass the graph compiler used by the advanced pipeline.
     stage_started_at = time.perf_counter()
-    tile_config = {
-        "wall": int(SEMANTIC_PALETTE["WALL"]),
-        "floor": int(SEMANTIC_PALETTE["FLOOR"]),
-        "door": int(SEMANTIC_PALETTE["DOOR_OPEN"]),
-        "door_locked": int(SEMANTIC_PALETTE["DOOR_LOCKED"]),
-        "door_bomb": int(SEMANTIC_PALETTE["DOOR_BOMB"]),
-        "door_puzzle": int(SEMANTIC_PALETTE["DOOR_PUZZLE"]),
-        "door_boss": int(SEMANTIC_PALETTE["DOOR_BOSS"]),
-        "door_soft": int(SEMANTIC_PALETTE["DOOR_SOFT"]),
-        "hazard": int(SEMANTIC_PALETTE["ELEMENT"]),
-        "start": int(SEMANTIC_PALETTE["START"]),
-        "goal": int(SEMANTIC_PALETTE["TRIFORCE"]),
-    }
-    physical_graph = prepared.mission_graph_physical
-    mission_graph_dict = {
-        "nodes": dict(physical_graph.nodes(data=True)),
-        "edges": list(physical_graph.edges(data=True)),
-    }
-    graph_compilation_applied = _has_compilable_graph_semantics(physical_graph)
-    entities = []
-    if graph_compilation_applied:
-        dungeon_grid = enforce_all_rooms(
-            visual_grid=dungeon_grid,
-            mission_graph=mission_graph_dict,
-            layout_map=stitched_layout.layout_map,
-            tile_config=tile_config,
-        )
-        entities = spawn_all_entities(
-            dungeon_grid=dungeon_grid,
-            mission_graph=mission_graph_dict,
-            layout_map=stitched_layout.layout_map,
-            seed=seed,
-        )
-        dungeon_grid = materialize_entities_on_grid(dungeon_grid, entities)
-    final_edge_integrity = validate_connection_realizations(
-        dungeon_grid,
-        stitched_layout.connection_realizations,
+    dungeon_grid, entities, graph_compilation_applied, final_edge_integrity = compile_stitched_graph(
+        dungeon_grid, prepared.mission_graph_physical, stitched_layout, seed=seed,
     )
-    if int(final_edge_integrity["final_spatial_edge_records_broken"]) > 0:
-        raise RuntimeError(
-            "Graph compilation sealed recorded stitched connections: "
-            f"{final_edge_integrity['final_spatial_edge_integrity_failures']}"
-        )
     _record_stage_time(stage_times, "compile_graph_semantics_time_sec", stage_started_at)
 
     stage_started_at = time.perf_counter()
@@ -1333,6 +1378,7 @@ def generate_dungeon(
         generation_time=generation_time,
         stitched_layout=stitched_layout,
         puzzle_metadata=puzzle_metadata,
+        compiled_tile_validation=dict(hard_validation),
     )
 
 

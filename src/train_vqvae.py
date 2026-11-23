@@ -32,6 +32,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.core.vqvae import VectorQuantizer, create_vqvae, VQVAETrainer
+from src.utils.training_rng import capture_training_rng, restore_training_rng
 from src.config_system import merge_config, seed_everything
 from src.utils.data_loading import dataloader_runtime_kwargs
 from src.utils.model_capacity import count_parameters, log_capacity_guardrails
@@ -78,6 +79,7 @@ def vqvae_training_kwargs_from_resolved_config(config: Dict[str, Any]) -> Dict[s
         "lr": stage["learning_rate"],
         "weight_decay": stage["weight_decay"],
         "grad_clip_norm": stage["grad_clip_norm"],
+        "nonfinite_policy": stage.get("nonfinite_policy", "skip"),
         "scheduler_eta_min": stage["scheduler_eta_min"],
         "latent_dim": stage["latent_dim"],
         "hidden_dim": stage["hidden_dim"],
@@ -139,6 +141,7 @@ def _default_vqvae_training_kwargs() -> Dict[str, Any]:
         "lr": 3e-4,
         "weight_decay": 1e-5,
         "grad_clip_norm": 1.0,
+        "nonfinite_policy": "skip",
         "scheduler_eta_min": 1e-6,
         "latent_dim": 64,
         "hidden_dim": 96,
@@ -447,6 +450,7 @@ def evaluate_vqvae_loader(
         "perplexity": 0.0,
     }
     batches = 0
+    samples = 0
     skipped_batches = 0
     was_training = bool(model.training)
     try:
@@ -461,8 +465,10 @@ def evaluate_vqvae_loader(
                 if float(info.get("skipped_nonfinite_batch", 0.0)) >= 0.5:
                     skipped_batches += 1
                     continue
+                batch_size = int(batch.shape[0])
                 for key in totals:
-                    totals[key] += float(info.get(key, 0.0))
+                    totals[key] += float(info.get(key, 0.0)) * batch_size
+                samples += batch_size
                 batches += 1
                 if max_batches is not None and batches >= int(max_batches):
                     break
@@ -475,8 +481,9 @@ def evaluate_vqvae_loader(
             f"({skipped_batches} non-finite batch(es))."
         )
     for key in totals:
-        totals[key] /= batches
+        totals[key] /= samples
     totals["batches"] = float(batches)
+    totals["samples"] = float(samples)
     totals["skipped_nonfinite_batches"] = float(skipped_batches)
     return totals
 
@@ -570,6 +577,7 @@ def train_vqvae(args):
         **dataloader_runtime_kwargs(
             num_workers=int(getattr(args, "num_workers", 0)),
             pin_memory=bool(getattr(args, "pin_memory", torch.cuda.is_available())),
+            persistent_workers=False,
         ),
     )
     eval_source = val_dataset if val_dataset is not None else train_dataset
@@ -582,6 +590,7 @@ def train_vqvae(args):
         **dataloader_runtime_kwargs(
             num_workers=int(getattr(args, "num_workers", 0)),
             pin_memory=bool(getattr(args, "pin_memory", torch.cuda.is_available())),
+            persistent_workers=False,
         ),
     )
     logger.info(f"Effective samples/epoch: {effective_size}, "
@@ -637,6 +646,7 @@ def train_vqvae(args):
         lr=args.lr,
         weight_decay=float(getattr(args, "weight_decay", 1e-5)),
         grad_clip_norm=float(getattr(args, "grad_clip_norm", 1.0)),
+        nonfinite_policy=str(getattr(args, "nonfinite_policy", "skip")),
     )
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         trainer.optimizer,
@@ -656,6 +666,9 @@ def train_vqvae(args):
     )
     if resume_path is not None:
         ckpt = safe_torch_load(str(resume_path), map_location=device)
+        required = {"model_state_dict", "optimizer_state_dict", "scheduler_state_dict", "epoch", "training_rng_state"}
+        if not required.issubset(ckpt):
+            raise ValueError(f"VQ-VAE resume checkpoint is incomplete: missing {sorted(required.difference(ckpt))}.")
         model.load_state_dict(ckpt["model_state_dict"])
         if "optimizer_state_dict" in ckpt:
             trainer.optimizer.load_state_dict(ckpt["optimizer_state_dict"])
@@ -675,6 +688,7 @@ def train_vqvae(args):
             )
         )
         logger.info(f"Resumed from {resume_path} (epoch {start_epoch})")
+        restore_training_rng(ckpt["training_rng_state"], sampler=sampler)
     else:
         best_metric_name = "val_loss" if float(getattr(args, "validation_fraction", 0.0)) > 0.0 else "train_loss"
         best_metric_value = float("inf")
@@ -893,6 +907,7 @@ def train_vqvae(args):
 
         # Periodic checkpoint
         resume_payload = {
+            "training_rng_state": capture_training_rng(sampler=sampler),
             "epoch": epoch,
             "model_state_dict": model.state_dict(),
             "optimizer_state_dict": trainer.optimizer.state_dict(),

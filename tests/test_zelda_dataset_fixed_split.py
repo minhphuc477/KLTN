@@ -17,8 +17,9 @@ def test_room_dataset_supports_dungeon_level_holdout_split():
         variants=[1, 2],
     )
 
-    assert len(train) == 356
-    assert len(test) == 103
+    # Wall/void-only framed slots are layout placeholders, not rooms.
+    assert len(train) == 349
+    assert len(test) == 101
 
     train_ids = {item["dungeon_id"] for item in train.sample_metadata}
     test_ids = {item["dungeon_id"] for item in test.sample_metadata}
@@ -39,5 +40,5 @@ def test_create_dataloader_forwards_dungeon_split_to_dataset():
         variants=[1, 2],
     )
 
-    assert len(loader.dataset) == 103
+    assert len(loader.dataset) == 101
     assert {m["dungeon_num"] for m in loader.dataset.sample_metadata} == {9}

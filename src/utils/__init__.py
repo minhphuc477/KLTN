@@ -43,6 +43,10 @@ from .playtest_telemetry import (
     PlaytestSession,
     PlaytestTelemetryCollector,
 )
+from .loss_utils import (
+    spatial_classification_accuracy,
+    spatial_cross_entropy,
+)
 
 __all__ = [
     # Checkpointing/training
@@ -65,7 +69,6 @@ __all__ = [
     'resolve_device',
     # Graph utilities
     'filter_virtual_nodes',
-    'get_physical_start_node',
     'get_node_types',
     'has_node_type',
     'find_nodes_by_type',
@@ -76,4 +79,7 @@ __all__ = [
     'PlaytestEvent',
     'PlaytestSession',
     'PlaytestTelemetryCollector',
+    # Loss utilities
+    'spatial_classification_accuracy',
+    'spatial_cross_entropy',
 ]

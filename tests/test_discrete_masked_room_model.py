@@ -1372,3 +1372,333 @@ def test_masked_room_auto_resume_skips_incompatible_latest_checkpoint(
 
     assert trainer.epoch == -1
     assert "Skipping auto-resume masked-room checkpoint" in caplog.text
+
+
+def test_discrete_masked_model_training_loss_reports_rare_tile_recall(monkeypatch):
+    model = create_discrete_masked_model(
+        num_classes=44,
+        hidden_dim=32,
+        context_dim=8,
+        num_steps=3,
+        unet_channel_mult=(1,),
+        unet_num_res_blocks=1,
+        unet_num_heads=1,
+    )
+    context = torch.zeros(1, 1, 8)
+    target_tokens = torch.full(
+        (1, ROOM_HEIGHT, ROOM_WIDTH),
+        fill_value=int(SEMANTIC_PALETTE["FLOOR"]),
+        dtype=torch.long,
+    )
+    key_id = int(SEMANTIC_PALETTE["KEY_SMALL"])
+    triforce_id = int(SEMANTIC_PALETTE["TRIFORCE"])
+    assert key_id in model.RARE_TILES
+    assert triforce_id in model.RARE_TILES
+    target_tokens[:, 3, 3] = key_id
+    target_tokens[:, 5, 5] = triforce_id
+
+    def _floor_only_logits(tokens, step, context, *, graph_data=None, return_hidden=False):
+        _ = (tokens, step, context, graph_data)
+        logits = torch.full((1, 44, ROOM_HEIGHT, ROOM_WIDTH), fill_value=-6.0, dtype=torch.float32)
+        logits[:, int(SEMANTIC_PALETTE["FLOOR"]), :, :] = 6.0
+        hidden = torch.zeros(1, model.hidden_dim, ROOM_HEIGHT, ROOM_WIDTH, dtype=torch.float32)
+        return (logits, hidden) if return_hidden else logits
+
+    monkeypatch.setattr(model, "forward", _floor_only_logits)
+    _loss_miss, metrics_miss = model.training_loss(
+        target_tokens,
+        context,
+        min_mask_ratio=1.0,
+        max_mask_ratio=1.0,
+    )
+    assert metrics_miss["rare_tile_masked_count"] >= 2.0
+    assert metrics_miss["rare_tile_recall"] == pytest.approx(0.0)
+    assert 0.0 < metrics_miss["masked_token_accuracy"] < 1.0
+
+    def _exact_target_logits(tokens, step, context, *, graph_data=None, return_hidden=False):
+        _ = (tokens, step, context, graph_data)
+        logits = torch.full((1, 44, ROOM_HEIGHT, ROOM_WIDTH), fill_value=-6.0, dtype=torch.float32)
+        logits[:, int(SEMANTIC_PALETTE["FLOOR"]), :, :] = 6.0
+        logits[:, key_id, 3, 3] = 10.0
+        logits[:, triforce_id, 5, 5] = 10.0
+        hidden = torch.zeros(1, model.hidden_dim, ROOM_HEIGHT, ROOM_WIDTH, dtype=torch.float32)
+        return (logits, hidden) if return_hidden else logits
+
+    monkeypatch.setattr(model, "forward", _exact_target_logits)
+    _loss_hit, metrics_hit = model.training_loss(
+        target_tokens,
+        context,
+        min_mask_ratio=1.0,
+        max_mask_ratio=1.0,
+    )
+    assert metrics_hit["rare_tile_recall"] == pytest.approx(1.0)
+    assert metrics_hit["masked_token_accuracy"] == pytest.approx(1.0)
+
+
+def test_discrete_masked_model_corrector_pins_critical_rare_tiles(monkeypatch):
+    model = create_discrete_masked_model(
+        num_classes=44,
+        hidden_dim=32,
+        context_dim=8,
+        num_steps=1,
+        unet_channel_mult=(1,),
+        unet_num_res_blocks=1,
+        unet_num_heads=1,
+    )
+    context = torch.zeros(1, 1, 8)
+    floor_id = int(SEMANTIC_PALETTE["FLOOR"])
+    wall_id = int(SEMANTIC_PALETTE["WALL"])
+    key_id = int(SEMANTIC_PALETTE["KEY_SMALL"])
+    triforce_id = int(SEMANTIC_PALETTE["TRIFORCE"])
+    assert key_id in model.PINNED_CRITICAL_TILES
+    assert triforce_id in model.PINNED_CRITICAL_TILES
+    assert wall_id not in model.PINNED_CRITICAL_TILES
+
+    calls = {"n": 0}
+
+    def _scripted_forward(tokens, step, context, *, graph_data=None, return_hidden=False):
+        _ = (tokens, step, context, graph_data)
+        logits = torch.full((1, 44, ROOM_HEIGHT, ROOM_WIDTH), fill_value=-8.0, dtype=torch.float32)
+        logits[:, floor_id, :, :] = 6.0
+        if calls["n"] == 0:
+            # Draft pass places critical rare tiles + one non-critical WALL tile.
+            logits[:, wall_id, 2, 2] = 12.0
+            logits[:, key_id, 3, 3] = 12.0
+            logits[:, triforce_id, 5, 5] = 12.0
+        calls["n"] += 1
+        hidden = torch.zeros(1, model.hidden_dim, ROOM_HEIGHT, ROOM_WIDTH, dtype=torch.float32)
+        return (logits, hidden) if return_hidden else logits
+
+    monkeypatch.setattr(model, "forward", _scripted_forward)
+
+    pinned_tokens, _, _, pinned_metrics = model.sample(
+        context=context,
+        num_steps=1,
+        stochastic=False,
+        corrector_steps=1,
+        corrector_mask_ratio=1.0,
+        seed=5,
+        return_sampling_metrics=True,
+        pin_rare_tiles_in_corrector=True,
+    )
+    assert int(pinned_tokens[0, 3, 3]) == key_id
+    assert int(pinned_tokens[0, 5, 5]) == triforce_id
+    assert int(pinned_tokens[0, 2, 2]) == floor_id
+    assert pinned_metrics["masked_pinned_rare_tokens"] >= 2.0
+
+    calls["n"] = 0
+    unpinned_tokens, _, _, unpinned_metrics = model.sample(
+        context=context,
+        num_steps=1,
+        stochastic=False,
+        corrector_steps=1,
+        corrector_mask_ratio=1.0,
+        seed=5,
+        return_sampling_metrics=True,
+        pin_rare_tiles_in_corrector=False,
+    )
+    assert int(unpinned_tokens[0, 3, 3]) == floor_id
+    assert int(unpinned_tokens[0, 5, 5]) == floor_id
+    assert unpinned_metrics["masked_pinned_rare_tokens"] == pytest.approx(0.0)
+
+
+def test_discrete_masked_model_rare_tile_and_focal_loss_configuration():
+    from src.core.discrete_masked_model import DiscreteMaskedRoomModel, create_discrete_masked_model
+
+    # Validation: rare_tile_weight < 1.0 raises ValueError
+    with pytest.raises(ValueError, match="rare_tile_weight"):
+        create_discrete_masked_model(
+            num_classes=44,
+            rare_tile_weight=0.5,
+        )
+
+    # Validation: focal_gamma < 0.0 raises ValueError
+    with pytest.raises(ValueError, match="focal_gamma"):
+        create_discrete_masked_model(
+            num_classes=44,
+            focal_gamma=-0.1,
+        )
+
+    model = create_discrete_masked_model(
+        num_classes=44,
+        rare_tile_weight=2.5,
+        focal_gamma=1.5,
+    )
+    assert model.rare_tile_weight == 2.5
+    assert model.focal_gamma == 1.5
+
+
+def test_discrete_masked_model_loss_equivalence_when_unweighted():
+    from src.core.discrete_masked_model import create_discrete_masked_model
+
+    torch.manual_seed(42)
+    model = create_discrete_masked_model(
+        num_classes=44,
+        context_dim=64,
+        rare_tile_weight=1.0,
+        focal_gamma=0.0,
+    )
+
+    batch_size = 2
+    x_0 = torch.randint(0, 44, (batch_size, ROOM_HEIGHT, ROOM_WIDTH))
+    context = torch.zeros(batch_size, 64)
+
+    # Run forward pass through training_loss
+    loss_baseline, metrics = model.training_loss(x_0, context)
+    assert torch.isfinite(loss_baseline)
+    assert "rare_tile_ce_loss" in metrics
+
+    # Verify non-persistent buffer: rare_tile_lut must not appear in state_dict
+    state = model.state_dict()
+    assert "rare_tile_lut" not in state
+
+    # Strict state_dict loading
+    model_copy = create_discrete_masked_model(
+        num_classes=44,
+        context_dim=64,
+    )
+    model_copy.load_state_dict(state, strict=True)
+
+
+def test_discrete_masked_model_rare_tile_weighting_loss_shift():
+    from src.core.discrete_masked_model import create_discrete_masked_model
+
+    torch.manual_seed(42)
+    model_unweighted = create_discrete_masked_model(
+        num_classes=44,
+        context_dim=64,
+        unet_dropout=0.0,
+        rare_tile_weight=1.0,
+        focal_gamma=0.0,
+    )
+    model_weighted = create_discrete_masked_model(
+        num_classes=44,
+        context_dim=64,
+        unet_dropout=0.0,
+        rare_tile_weight=5.0,
+        focal_gamma=0.0,
+    )
+    # Bias classifier towards FLOOR so FLOOR has lower CE than rare_id; mixed grid
+    # ensures rare_tile_weight shifts normalized weighted mean loss upward deterministically.
+    with torch.no_grad():
+        model_unweighted.classifier.bias[int(SEMANTIC_PALETTE["FLOOR"])] = 3.0
+    model_weighted.load_state_dict(model_unweighted.state_dict(), strict=False)
+    model_unweighted.eval()
+    model_weighted.eval()
+
+    rare_id = int(model_weighted.RARE_TILES[0])
+    batch_size = 2
+    x_0 = torch.full((batch_size, ROOM_HEIGHT, ROOM_WIDTH), int(SEMANTIC_PALETTE["FLOOR"]), dtype=torch.long)
+    x_0[:, 4:8, 4:8] = rare_id
+    context = torch.zeros(batch_size, 64)
+
+    torch.manual_seed(7)
+    loss_unw, _ = model_unweighted.training_loss(x_0, context, min_mask_ratio=1.0, max_mask_ratio=1.0)
+    torch.manual_seed(7)
+    loss_w, m_w = model_weighted.training_loss(x_0, context, min_mask_ratio=1.0, max_mask_ratio=1.0)
+
+    assert loss_w.item() > loss_unw.item()
+    assert m_w["rare_tile_ce_loss"] > 0.0
+
+
+def test_discrete_masked_sample_returns_committed_logits_aligned_with_tokens():
+    model = create_discrete_masked_model(
+        num_classes=44,
+        hidden_dim=16,
+        context_dim=16,
+        num_steps=4,
+        unet_channel_mult=(1,),
+        unet_num_res_blocks=1,
+        unet_num_heads=4,
+        unet_dropout=0.0,
+    )
+    model.eval()
+    context = torch.randn(1, 16)
+    fixed_tokens = torch.zeros(1, ROOM_HEIGHT, ROOM_WIDTH, dtype=torch.long)
+    fixed_mask = torch.zeros(1, ROOM_HEIGHT, ROOM_WIDTH, dtype=torch.bool)
+    fixed_tokens[0, 0, :] = 2
+    fixed_mask[0, 0, :] = True
+
+    tokens, logits, _ = model.sample(
+        context=context,
+        fixed_tokens=fixed_tokens,
+        fixed_mask=fixed_mask,
+        num_steps=4,
+        stochastic=False,
+        corrector_steps=1,
+        corrector_mask_ratio=0.1,
+        seed=42,
+    )
+
+    assert torch.equal(logits.argmax(dim=1), tokens)
+
+
+def test_door_aware_start_goal_and_sealed_perimeter_fixed_tokens():
+    pipeline = NeuralSymbolicDungeonPipeline(
+        device="cpu",
+        enable_logging=False,
+        room_generator_mode="discrete_masked",
+    )
+    graph = nx.DiGraph()
+    graph.add_node(0, pos=(0, 0), is_start=True)
+    graph.add_node(1, pos=(1, 0))
+    graph.add_node(2, pos=(2, 0), is_goal=True)
+    graph.add_edge(0, 1)
+    graph.add_edge(1, 2)
+
+    # Room 1 connects N (from room 0) and S (to room 2) -> anchors on N/S interior aprons
+    start, goal = pipeline._extract_room_start_goal(graph, 1)
+    assert start == (2, ROOM_WIDTH // 2)
+    assert goal == (ROOM_HEIGHT - 3, ROOM_WIDTH // 2)
+
+    fixed_tokens, fixed_mask = pipeline._build_masked_room_fixed_tokens(graph, 1)
+    wall_id = int(SEMANTIC_PALETTE["WALL"])
+    door_id = int(SEMANTIC_PALETTE["DOOR_OPEN"])
+    # Sealed W/E boundaries and corners are frozen to WALL
+    assert bool(fixed_mask[0, ROOM_HEIGHT // 2, 0])
+    assert int(fixed_tokens[0, ROOM_HEIGHT // 2, 0]) == wall_id
+    assert bool(fixed_mask[0, ROOM_HEIGHT // 2, ROOM_WIDTH - 1])
+    assert int(fixed_tokens[0, ROOM_HEIGHT // 2, ROOM_WIDTH - 1]) == wall_id
+    # Active N/S doorway sockets are frozen to DOOR_OPEN
+    assert int(fixed_tokens[0, 0, 5]) == door_id
+    assert int(fixed_tokens[0, ROOM_HEIGHT - 1, 5]) == door_id
+
+
+def test_block_in_rare_tiles_and_mask_ratio_aux_and_stochastic_sample():
+    from src.core.definitions import TileID
+
+    assert int(TileID.BLOCK) in DiscreteMaskedRoomModel.RARE_TILES
+    model = DiscreteMaskedRoomModel(
+        num_classes=44,
+        hidden_dim=32,
+        context_dim=32,
+        num_steps=4,
+        unet_channel_mult=(1, 2),
+        unet_num_res_blocks=1,
+        unet_num_heads=2,
+    )
+    tokens = torch.ones(2, ROOM_HEIGHT, ROOM_WIDTH, dtype=torch.long)
+    tokens[:, 4:7, 4:7] = int(TileID.BLOCK)
+    context = torch.randn(2, 32)
+    loss, _metrics, aux = model.training_loss(
+        tokens,
+        context,
+        min_mask_ratio=0.15,
+        max_mask_ratio=0.85,
+        return_aux=True,
+    )
+    assert torch.isfinite(loss)
+    assert "mask_ratio_per_sample" in aux
+    assert tuple(aux["mask_ratio_per_sample"].shape) == (2,)
+
+    sampled, logits, _hidden, smetrics = model.sample(
+        context=context,
+        num_steps=4,
+        temperature=1.0,
+        stochastic=True,
+        seed=123,
+        return_sampling_metrics=True,
+    )
+    assert tuple(sampled.shape) == (2, ROOM_HEIGHT, ROOM_WIDTH)
+    assert torch.isfinite(logits).all()
+    assert smetrics["masked_final_unresolved_tokens"] == 0.0

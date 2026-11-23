@@ -25,6 +25,7 @@ class DFSGameStateSolver:
             max_depth=int(self.config.max_depth),
             allow_diagonals=bool(self.config.allow_diagonals),
             use_iddfs=bool(self.config.use_iddfs),
+            rules_profile=self.config.rules_profile,
         )
         success, path, diagnostics = solver.solve_with_diagnostics()
         states = int(getattr(diagnostics, "states_explored", 0) or 0)

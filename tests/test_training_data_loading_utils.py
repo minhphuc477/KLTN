@@ -72,9 +72,26 @@ def test_create_dataloader_rejects_graph_augmentation_without_metadata_transform
             shuffle=False,
             drop_last=False,
             use_vglc=True,
-            room_level=True,
+            room_level=False,
             load_graphs=True,
             dungeon_ids=[9],
             variants=[1],
             augment=True,
         )
+
+
+def test_create_dataloader_allows_room_level_graph_augmentation():
+    loader = create_dataloader(
+        "Data/The Legend of Zelda",
+        batch_size=2,
+        shuffle=False,
+        drop_last=False,
+        use_vglc=True,
+        room_level=True,
+        load_graphs=True,
+        dungeon_ids=[9],
+        variants=[1],
+        augment=True,
+    )
+    assert loader.dataset.augment is True
+    assert loader.dataset.load_graphs is True

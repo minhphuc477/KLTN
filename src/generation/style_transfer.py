@@ -1,4 +1,4 @@
-﻿"""
+"""
 Feature 3: Style Transfer Support
 ==================================
 Enable multiple visual themes while preserving gameplay mechanics.

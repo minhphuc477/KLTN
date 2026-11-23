@@ -1,4 +1,8 @@
 """
+[STATUS: OPTIONAL / COMPARATOR-ONLY TRAINING ENTRYPOINT — NOT PART OF CANONICAL G-LMDM]
+Excluded from the primary 5-block G-LMDM stack (AGENTS.md small-data budget rules).
+Retained strictly for continuous Gaussian VAE ablation compatibility.
+
 H-MOLQD Block II: Gaussian VAE pre-training.
 
 Standalone training entrypoint for the continuous latent baseline. The file is

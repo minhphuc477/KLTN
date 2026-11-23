@@ -72,7 +72,8 @@ EDGE_TYPE_MAP = {
     "item_locked": "item_locked",
     "l": "soft_locked",
     "soft_locked": "soft_locked",
-    "s": "stair",
+    "s": "impassable",
+    "impassable": "impassable",
     "stair": "stair",
     "open": "open",
     "": "open",
@@ -150,6 +151,8 @@ class GameState:
     completed_puzzle_stages: Set[Tuple[str, int]] = field(default_factory=set)
     current_floor: int = 0
     opened_graph_edges: Set[Tuple[Any, Any]] = field(default_factory=set)
+    switches_activated: Set[Any] = field(default_factory=set)
+    active_graph_edge: Tuple[Any, Any] | None = None
 
     @property
     def has_bomb(self) -> bool:
@@ -185,6 +188,8 @@ class GameState:
             completed_puzzle_stages=set(self.completed_puzzle_stages),
             current_floor=self.current_floor,
             opened_graph_edges=set(self.opened_graph_edges),
+            switches_activated=set(self.switches_activated),
+            active_graph_edge=self.active_graph_edge,
         )
 
 
@@ -206,6 +211,8 @@ def game_state_key(state: GameState) -> Tuple[Any, ...]:
         frozenset(state.completed_puzzle_stages),
         state.current_floor,
         frozenset(state.opened_graph_edges),
+        frozenset(state.switches_activated),
+        state.active_graph_edge,
     )
 
 
@@ -242,6 +249,10 @@ def is_push_destination_available(state: GameState, pos: Tuple[int, int], static
 def dominates(state_a: GameState, state_b: GameState) -> bool:
     """Return whether state A can safely replace state B in a Pareto frontier."""
     if state_a.position != state_b.position:
+        return False
+    if state_a.active_graph_edge != state_b.active_graph_edge:
+        return False
+    if not state_a.switches_activated.issuperset(state_b.switches_activated):
         return False
     if state_a.keys < state_b.keys or state_a.bomb_count < state_b.bomb_count:
         return False

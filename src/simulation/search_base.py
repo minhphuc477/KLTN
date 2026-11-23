@@ -9,6 +9,20 @@ from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 
 
+def apply_rules_profile(env: Any, value: str) -> str:
+    """Synchronize all environment rule flags, including transitions to extended."""
+    aliases = {"strict_original": "strict_original", "original": "strict_original", "nes": "strict_original",
+               "vglc_strict": "vglc_strict", "vglc": "vglc_strict", "dataset": "vglc_strict", "extended": "extended"}
+    raw = str(value).strip().lower()
+    if raw not in aliases:
+        raise ValueError(f"Unknown search rules profile: {value!r}")
+    profile = aliases[raw]
+    env.rules_profile = profile
+    env.strict_original_mode = profile == "strict_original"
+    env.vglc_strict_mode = profile == "vglc_strict"
+    return profile
+
+
 class SearchRepresentation(str, Enum):
     """Search space representation mode."""
 
@@ -18,6 +32,8 @@ class SearchRepresentation(str, Enum):
 
     @classmethod
     def parse(cls, value: Any) -> "SearchRepresentation":
+        if isinstance(value, cls):
+            return value
         raw = str(value or cls.HYBRID.value).strip().lower()
         if raw in (cls.TILE.value, cls.GRAPH.value, cls.HYBRID.value):
             return cls(raw)
@@ -60,7 +76,7 @@ class GameStateSearchConfig:
             "allow_diagonals": self.allow_diagonals,
             "rules_profile": str(self.rules_profile or "vglc_strict"),
             # Representation is consumed by StateSpaceAStar.
-            "representation": self.representation.value,
+            "representation": SearchRepresentation.parse(self.representation).value,
             "max_depth": int(self.max_depth),
             "use_iddfs": bool(self.use_iddfs),
         }

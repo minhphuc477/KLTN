@@ -16,6 +16,54 @@ import numpy as np
 from src.core.definitions import SEMANTIC_PALETTE
 
 
+def graph_tile_projection_issues(graph, *, physical_bridge: bool = False) -> list[str]:
+    """Identify known graph mechanics with no matching tile-state bridge.
+
+    Separate graph and tile witnesses do not prove a shared progression route.
+    Named switches, room-clear gates and composite resource gates require the
+    recorded physical-passage bridge. Bare tile grids cannot certify them.
+    Token counters and attached global contracts remain unsupported.
+    """
+    if graph is None:
+        return []
+    from src.simulation.edge_logic import edge_constraints_from_data
+    from src.simulation.graph_progression import key_provider_ids
+    unsupported = {"switch", "switch_locked", "state_block", "on_off_gate", "shutter",
+                   "multi_lock", "one_way", "soft_locked", "item_locked"}
+    if physical_bridge:
+        unsupported -= {"switch", "switch_locked", "one_way", "soft_locked", "item_locked"}
+        # A physical passage is not an implicit teleport. Explicit transport
+        # needs its own endpoint representation before it can be certified.
+        if graph.graph.get('spatial_transition_policy') != 'recorded':
+            unsupported.add("stair")
+    gates = {"key_locked", "boss_locked", "bombable", "item_locked", "hazard"}
+    small_key_providers: set[Any] = set()
+    boss_key_providers: set[Any] = set()
+    for node, ndata in graph.nodes(data=True):
+        small_key_providers.update(key_provider_ids(node, ndata, boss=False))
+        boss_key_providers.update(key_provider_ids(node, ndata, boss=True))
+    issues = []
+    if graph.is_multigraph():
+        issues.append("parallel passages need explicit edge identity")
+    if graph.graph.get("global_state_contract"):
+        issues.append("attached global-state contract has no shared tile-state execution")
+    for source, target, data in graph.edges(data=True):
+        constraints = set(edge_constraints_from_data(data))
+        missing = sorted(constraints & unsupported)
+        if missing:
+            issues.append(f"edge {source!r}->{target!r}: unsupported tile-state bridge {missing}")
+        if len(constraints & gates) > 1 and not physical_bridge:
+            issues.append(f"edge {source!r}->{target!r}: compound gates cannot be represented by one passage tile")
+        if int(data.get("requires_key_count", 0) or 0) > 1 and not physical_bridge:
+            issues.append(f"edge {source!r}->{target!r}: counted gate is not a single-key door")
+        if data.get('key_required') is not None:
+            is_boss_gate = "boss_locked" in constraints and "key_locked" not in constraints
+            provider_pool = boss_key_providers if is_boss_gate else (small_key_providers | boss_key_providers)
+            if (not physical_bridge) or (data.get("key_required") not in provider_pool):
+                issues.append(f"edge {source!r}->{target!r}: named key identity has no matching tile pickup")
+    return sorted(issues)
+
+
 @dataclass(frozen=True)
 class ValidationStageEvidence:
     """One independently interpretable stage in the validation contract."""
@@ -221,16 +269,19 @@ def build_end_to_end_validation_report(
 
     tile = dict(tile_validation or {})
     graph_tile_context_known = "graph_tile_context_applied" in tile
+    projection_issues = list(tile.get("graph_tile_projection_issues", []) or [])
     graph_tile_applicable = bool(graph_applicable and graph_tile_context_known)
     graph_tile_passed: Optional[bool]
-    if not graph_tile_applicable:
+    if not graph_tile_applicable or projection_issues:
         graph_tile_passed = None
     else:
         graph_tile_passed = bool(tile.get("graph_tile_context_applied", False))
 
     tile_status = str(tile.get("termination_status", "not_run"))
     tile_exact = bool(tile.get("is_exact", False))
-    if not tile_exact or tile_status in {"unknown", "budget_exhausted", "validator_error", "not_run"}:
+    if not tile_exact or tile_status not in {
+        "solved", "goal_reached", "exhausted", "frontier_exhausted", "invalid",
+    }:
         tile_passed: Optional[bool] = None
     else:
         tile_passed = bool(tile.get("solvable", False))
@@ -285,17 +336,19 @@ def build_end_to_end_validation_report(
             name="graph_tile_semantics",
             passed=graph_tile_passed,
             status=(
-                "enforced"
+                "unsupported_projection" if projection_issues else "enforced"
                 if graph_tile_passed is True
                 else "missing_graph_room_mapping"
                 if graph_tile_passed is False
                 else "not_reported"
             ),
             applicable=graph_tile_applicable,
+            exact=not bool(projection_issues),
             details={
                 "graph_tile_context_applied": tile.get(
                     "graph_tile_context_applied"
                 ),
+                "projection_issues": projection_issues,
             },
         ),
         tile_solvability=ValidationStageEvidence(

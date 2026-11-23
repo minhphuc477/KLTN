@@ -1,4 +1,8 @@
-"""Core Perturb-and-MAP pathfinding surrogate for LogicNet ablations."""
+"""[STATUS: DEPRECATED / ABLATION-ONLY COMPARATOR — INACTIVE IN CANONICAL G-LMDM]
+Excluded from the primary 5-block G-LMDM stack under the small-data minimalist
+budget rules (AGENTS.md, N=349 VGLC rooms). Retained strictly as a Perturb-and-MAP
+pathfinding surrogate for LogicNet ablation compatibility.
+"""
 
 from __future__ import annotations
 

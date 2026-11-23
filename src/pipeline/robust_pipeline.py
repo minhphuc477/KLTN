@@ -1,4 +1,4 @@
-﻿"""
+"""
 Robust Pipeline with Retry Logic
 Provides explicit retry, timeout, validation, and failure reporting for pipeline blocks.
 """

@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 Build Paired Dataset (Graph + Image) for Dual-Stream Training
 ==============================================================

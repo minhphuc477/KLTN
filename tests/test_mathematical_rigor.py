@@ -1,4 +1,4 @@
-﻿"""
+"""
 Master Integration Test for Mathematical Rigor Improvements
 ============================================================
 

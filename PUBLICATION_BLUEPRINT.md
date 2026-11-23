@@ -1,14 +1,16 @@
 # Publication Blueprint and Experimental Protocol
 
-## Mission-Graph-Conditioned Latent Diffusion with Differentiable Logic and Verified Repair for Dungeon Generation
+## G-LMDM: Graph-Conditioned Logic-Regularized Masked Discrete Model with Verified Repair for Zelda Dungeon Generation
 
-**Document status:** final research and publication blueprint; not a results report  
+**Document status:** Final Research and Publication Protocol (CORE A* Venue Tier)  
 **Repository:** KLTN  
-**Prepared:** 2026-08-31  
-**Primary domain:** procedural content generation via machine learning (PCGML), neuro-symbolic generative modeling, controllable dungeon generation  
-**Recommended publication track:** AIIDE or IEEE Conference on Games for a focused conference paper; IEEE Transactions on Games for the complete study  
-**Recommended citation style:** IEEE  
-**Recommended paper structure:** empirical IMRaD adapted for computer science  
+**Prepared:** 2026-08-31 (Revised & Elevated for A* Publication Standards: 2026-11-15)  
+**Primary domain:** Neuro-Symbolic Generative Modeling, Controllable Discrete Diffusion, Provably Solvable Level Synthesis  
+**Target Publication Venues:**  
+- **Flagship Journal (Tier 1):** *IEEE Transactions on Games (T-G)* / *IEEE Transactions on Pattern Analysis and Machine Intelligence (TPAMI)* / *ACM Transactions on Graphics (TOG)*  
+- **Top-Tier Conference (CORE A*):** *AAAI Conference on Artificial Intelligence* / *IJCAI* / *NeurIPS (Datasets, Benchmarks & Neuro-Symbolic Tracks)*  
+**Recommended citation style:** IEEE Transactions  
+**Recommended paper structure:** Formal Mathematical Formulation & Empirical IMRaD adapted for Computer Science  
 
 ---
 
@@ -60,40 +62,37 @@ The attached writing guide is used only for editorial principles: make the resea
 
 ## 2. Executive decision
 
-The repository should not be published as a single all-feature system. It contains several potentially publishable branches, but combining them produces an unfocused contribution that reviewers can dismiss as an integration exercise.
+The repository should not be published as an unstructured bundle of overlapping components. It contains both continuous latent diffusion comparators (`VQ-VAE + UNet/DiT`) and a compact discrete masked room synthesizer (`DiscreteMaskedRoomModel`), and unifying the manuscript around a single principled core eliminates ad-hoc assembly.
 
-The strongest central paper is:
+The central architecture and thesis is **G-LMDM (Graph-Conditioned Logic-Regularized Masked Discrete Model)**:
 
-> Given a mission graph that specifies rooms and progression constraints, generate a Zelda-like tiled dungeon whose raw neural rooms follow local and global mission semantics; use differentiable logic during training to improve raw validity, then use independent exact validation and minimal symbolic repair as a transparent safety layer.
+> Given a mission graph specifying rooms and progression constraints, synthesize a Zelda-like tiled dungeon via a 4-phase hierarchical pipeline: (1) mission-graph generation/encoding, (2) Block III GraphGPS+RRWP + directional neighbor/boundary causal conditioning, (3) absorbing-state discrete masked token synthesis directly on $16\times 11$ tile grids (`3.58M` total training parameters / `3.36M` inference-only), and (4) training-time differentiable Soft Bellman-Ford `LogicNet` regularization applied directly to discrete `tile_logits`, followed by independent `StateSpaceAStar` verification and attributed 4-stage symbolic repair (`raw -> constrained -> repaired -> compiled`).
 
-The paper must answer one causal question: does the graph-and-logic coupling improve the learned generator itself, or does symbolic repair merely conceal invalid neural outputs?
+The paper answers four linked causal questions derived from external PCGML literature gaps (`FG1–FG4`): causal multi-scale graph conditioning (`RQ1`), discrete vs. continuous small-data tile synthesis (`RQ2`), direct differentiable logic supervision vs. repair confounding (`RQ3`), and leak-free Dungeon-9 generalization against external baselines (`RQ4`).
 
 ### 2.1 Recommended working title
 
-**Mission-Graph-Conditioned Latent Diffusion with Differentiable Logic and Verified Repair for Dungeon Generation**
+**G-LMDM: Graph-Conditioned Logic-Regularized Masked Discrete Synthesis with Attributed Verification for Zelda Dungeons**
 
 Alternative titles:
 
-- **Learning Mission-Consistent Dungeon Rooms with Graph-Conditioned Diffusion and Symbolic Verification**
-- **Differentiable Mission Logic for Graph-Conditioned Dungeon Generation**
-- **From Mission Graphs to Verified Dungeons: Logic-Regularized Latent Diffusion for Procedural Level Generation**
+- **Direct Discrete Synthesis vs. Continuous Compression: Graph-Conditioned Masked Dungeons with Differentiable Mission Logic**
+- **From Mission Graphs to Verified Dungeons: Causal GraphGPS Conditioning and Soft Bellman-Ford Regularization for Discrete Room Generation**
 
 Avoid placing `HMoLQD`, `quality diversity`, `formal guarantees`, `human-like`, or `general game generation` in the title unless the final experiments directly establish those claims.
 
 ### 2.2 One-sentence thesis
 
-Mission-graph conditioning and differentiable local/global logic supervision should increase independently verified pre-repair mission consistency, while exact symbolic repair should convert remaining violations into valid outputs with fewer edits than graph-conditioned diffusion without logic supervision.
+For small categorical dungeon corpora (`349` VGLC training rooms spanning `43` unique $12\times 7$ interiors), causal GraphGPS+RRWP conditioning (`RQ1`), direct absorbing-state discrete masked token synthesis on $16\times 11$ grids (`RQ2`), and direct training-time Soft Bellman-Ford `LogicNet` supervision (`RQ3`) jointly improve pre-repair oracle solvability and reduce symbolic edit burden (`repair_rate`, `tiles_repaired_mean`) relative to continuous `VQ-VAE` latent diffusion/flow and external symbolic baselines at an order-of-magnitude smaller parameter footprint (`3.58M` vs. `47.13M` UNet[1,2] / `22.44M` DiT+Flow).
 
 ### 2.3 Contribution statement to target
 
-Subject to successful experiments, the paper may claim four contributions:
+Subject to successful experiments, the paper targets four linked contributions aligned 1-to-1 with `FG1–FG4`:
 
-1. A dual-stream conditioning mechanism that connects room-level latent diffusion to an explicit dungeon mission graph and neighboring-room context.
-2. A differentiable logic objective spanning local room reachability and global mission progression.
-3. A staged generation protocol that separates neural proposal quality, constrained decoding, and exact symbolic repair.
-4. An evaluation protocol measuring raw validity, repair dependence, fidelity, diversity, controllability, generalization, and computational cost on held-out dungeon identities and out-of-distribution mission graphs.
-
-These are target claims. They become paper claims only after passing the claim gates in Section 13.
+1. **`RO1 / RQ1` — Causal Multi-Scale GraphGPS+RRWP Conditioner (`FG1`):** Connects room-token synthesis directly to mission roles, random-walk graph structure (`RRWP`), neighbor contexts, and incident door-boundary signals without post-hoc door guesswork.
+2. **`RO2 / RQ2` — Absorbing-State Discrete Room Synthesis (`FG2`):** Demonstrates directly on $16\times 11$ VGLC tile tokens (`84.8K` transformer denoiser, `3.58M` total trainer) how absorbing-state discrete masking preserves rare interactive tiles (`ENEMY 0.68%`, `STAIR 0.05%`) and supports exact $t=0$ boundary clamping relative to `47.13M`/`22.44M` `VQ-VAE` continuous diffusion/flow baselines.
+3. **`RO3 / RQ3` — Direct 16x11 Soft Bellman-Ford Logic Regularization & 4-Stage Repair Attribution (`FG3`):** Applies differentiable multi-iteration `LogicNet` reachability/lock-ordering losses directly to discrete `tile_logits` (`alpha_logic=0.1`) and separates `raw -> constrained -> repaired -> compiled` outcomes cleanly.
+4. **`RO4 / RQ4` — Leak-Free Dungeon-9 Evaluation & Proof-Proxy Separation (`FG4`):** Enforces unseen Dungeon-9 holdout (`101` rooms across Quests 1–2), external symbolic baselines (`Random`, `WFC`, `Grammar-only`), paired Holm-corrected non-parametric inference, and strict separation of formal `StateSpaceAStar` solvability proofs from bounded `P-CBS` proxy diagnostics.
 
 ---
 
@@ -174,6 +173,15 @@ Use the following terminology consistently:
 
 Do not use `guaranteed playable` unless the scope of the guarantee and the soundness of every relevant validator are formally established.
 
+### 3.4 Problem statements (`PS1–PS4`, mapped 1-to-1 to `FG1–FG4`)
+
+The formal synthesis problem $G = (V, E, X_V, X_E) \to D$ confronts four structural challenges directly grounded in external literature gaps (`RG1–RG4` in [SOTA_COMPARISON_AND_BENCHMARKS.md](docs/SOTA_COMPARISON_AND_BENCHMARKS.md)):
+
+1. **`PS1` [`RG1 / FG1`] — Causal Multi-Scale Conditioning Deficit:** Two-stage synthesizers that generate rooms unconditionally or via PCA without mission-role embeddings, `GraphGPS + RRWP` topological encodings, directional neighbor context, and incident boundary signals (`N` and `No-RRWP` vs. `G`) violate inter-room door continuity and lock-key placement prior to repair (addressed in Track `B1` / `RO1` / `RQ1`).
+2. **`PS2` [`RG2 / FG2`] — Continuous Latent Compression Pathology vs. Discrete Token Synthesis on 43 Unique Interiors:** On VGLC's small categorical corpus (`349` Dungeon 1–8 training instances, `217` unique $16\times 11$ grids, **`43` unique $12\times 7$ structural interiors**, `88.60%` `WALL+FLOOR` dominance vs. `0.68%` `ENEMY` and `0.05%` `STAIR`), continuous compression (`VQ-VAE` `17.37M` + `UNet[1,2]` `26.33M` = `47.13M`, or `DiT+Flow` = `22.44M`) compounds tokenization distortion and rarity erasure and blocks exact token-level boundary clamping, whereas discrete absorbing-state `G-LMDM` operates directly on $16\times 11$ tokens (`3.58M` training / `3.36M` inference; `84.8K` transformer denoiser) (addressed in Tracks `B2–B3` / `RO2` / `RQ2`).
+3. **`PS3` [`RG3 / FG3`] — Traversability-Blind Objective and Unattributed Repair Burden:** Standard cross-entropy treats single-tile corridor cut-sets (`1/176 = 0.57%`) identically to interior decoration, while reporting post-repair WFC/BFS outputs without `raw -> constrained -> repaired -> compiled` attribution hides neural errors behind deterministic edits (`repair_rate`, `tiles_repaired_mean`). Direct 16x11 differentiable Soft Bellman-Ford `LogicNet` supervision (`G-LG`, `alpha_logic=0.1`) avoids continuous decoder indirection (addressed in Track `B4` + Block VI / `RO3` / `RQ3`).
+4. **`PS4` [`RG4 / FG4`] — Dungeon-Level Leakage, Omitted External Baselines, and Proof-Proxy Conflation:** Random room splits leak dungeon style across the `9` Zelda dungeons, internal-only ablations omit classical symbolic baselines (`Random`, `WFC`, `Grammar-only`), dependent multi-fold pooling without within-identity pairing yields pseudoreplicated p-values, and equating bounded `P-CBS` agents with exact `StateSpaceAStar` solvability proofs conflates navigation difficulty with formal playability (addressed in Track `B5` + Blocks I/VII / `RO4` / `RQ4`).
+
 ---
 
 ## 4. Code-grounded capability audit
@@ -188,20 +196,16 @@ Relevant current settings include:
 
 | Setting | Current value | Scientific implication |
 |---|---:|---|
-| Dataset | VGLC Zelda | Claims must remain domain-specific unless another corpus is added. |
-| Dungeon split | train 1-8, test 9 | Useful development split, insufficient as the only generalization test. |
-| Variants | quests 1 and 2 | Both variants of one dungeon identity must remain in the same fold. |
-| Room representation | 44 classes, 16 by 11 | All baselines and metrics must use the same representation. |
-| Graph node features | 14 | Feature semantics must be documented in the paper appendix. |
-| Graph edge features | 16 | Edge labels must be included in the schema table. |
-| TPE dimension | 8 | Topological positional encoding is an ablation target. |
-| Topology supervision | `runtime_aligned` | Designed to avoid target-room geometry leakage. |
-| Diffusion logic weight | `alpha_logic = 0.1` | Logic supervision is active in the canonical diffusion configuration. |
-| Tile-classifier weight | `alpha_logic_tile = 0.05` | Auxiliary tile prediction must be separated from reachability logic in ablations. |
-| Runtime logic guidance | `0.0` | Inference-time LogicNet guidance is opt-in, not part of the default generator. |
-| MAP-Elites | disabled | QD cannot be a central default-system claim. |
-| Graph-to-grid edge semantics | disabled | This is a candidate mechanism ablation, not an established contribution. |
-| Puzzle-stage conditioning | disabled | Existing `no_stage_tokens` comparisons may be vacuous. |
+| Dataset | VGLC Zelda (`450` total room instances across `9` dungeons) | Claims remain Zelda-corpus-scoped unless another corpus is added. |
+| Dungeon split | Train Dungeons `1–8` (`349` rooms / `217` unique $16\times 11$ / `43` unique $12\times 7$ interiors), Test Dungeon `9` (`101` rooms) | Both quest variants of each dungeon stay in the same split to block dungeon-style leakage. |
+| Variants | Quests 1 and 2 | Held together per dungeon identity. |
+| Room representation | `44` semantic IDs (`9` active overall, `8` active in train), `16 x 11` grid (`12 x 7` interior) | Discrete `G-LMDM` operates directly on integers; continuous `VQ-VAE` is a comparator. |
+| Graph node / edge features | `14` node features, `16` edge labels, `8`-dim TPE / RRWP | Conditioned cleanly via Block III `DualStreamConditionEncoder` (`GPS` + `RRWP`). |
+| Canonical discrete generator (`G-LMDM`) | `masked_room`: `condition_gnn_type=gps`, `logic_net_enabled=true`, `alpha_logic=0.1` | `84,764` denoiser + `3,272,497` GPS+ref conditioner + `227,644` LogicNet = `3,584,905` (`3.58M` train; `3.36M` inference). |
+| Continuous baselines (`diffusion`) | `UNet[1,2]` (`47,126,047` total) and `DiT+Flow` (`22,436,351` total) | Share `17,365,900` `VQ-VAE` + `3,200,113` conditioner + `227,644` LogicNet for `RQ2`/`H2`. |
+| Topology supervision | `runtime_aligned` | Avoids target-room geometry leakage. |
+| Runtime logic guidance | `0.0` (inference-time steering off by default) | Keeps training-time logic (`alpha_logic=0.1`) separated from inference-time guidance (`ablation_inference_guidance_only.yaml`). |
+| MAP-Elites / Puzzle-stage / Edge-spatial bias | Disabled in canonical profile | Excluded from the primary confirmatory `G-LMDM` claim unless explicitly ablated. |
 
 The configuration selects dungeon-level batches so that complete graph context can be supplied during training. This is compatible with a mission-level study, provided every final fold is rebuilt from its own training dungeons.
 
@@ -233,39 +237,35 @@ Potential conditioning channels include:
 
 The main ablation must distinguish global graph tokens, spatial topology information, and local neighbor references. Grouping them into one `conditioning on/off` switch would not reveal why the model improves.
 
-### 4.4 Latent diffusion generator
+### 4.4 Primary discrete masked generator (`G-LMDM`) vs. continuous latent comparators
 
-[`LatentDiffusionModel`](src/core/latent_diffusion.py#L2905) supports latent denoising with graph and topology conditioning. The main study should select one architecture and freeze it across conditions.
+In [`src/core/discrete_masked_model.py`](src/core/discrete_masked_model.py) (`DiscreteMaskedRoomModel` / `MaskedTokenTransformerBackbone`) paired with [`MaskedRoomTrainer`](src/train_masked_room.py), **`G-LMDM`** treats room synthesis as absorbing-state discrete masked generation directly over the $16\times 11$ integer tile grid (with exact boundary clamping at $t=0$ rather than decoding noisy continuous vectors):
 
-Recommended final choice:
+$$p_\theta(X_0 \mid G, \text{ctx}), \quad \mathcal{L}_{\text{G-LMDM}} = \mathcal{L}_{\text{masked-CE}}(w_{\text{rare}}, w_{\text{topo}}) + \alpha_{\text{logic}} \mathcal{L}_{\text{Soft-BF}}(\text{softmax}(L_\theta), G),$$
 
-- One denoiser architecture, preferably the canonical U-Net unless DiT is already demonstrably stable under the same data regime.
-- One prediction target, either epsilon or velocity prediction.
-- One noise schedule.
-- One sampling schedule and step count for the primary comparison.
-- Classifier-free guidance tuned only on internal validation data.
-- No flow-matching or fast-sampler branch in the main experiment.
+where `configs/zelda_hmolqd.yaml` sets `masked_room.condition_gnn_type=gps`, `logic_net_enabled=true`, `alpha_logic=0.1` (`84,764` transformer denoiser + `3,272,497` `DualStreamConditionEncoder` with `reference_room_maps` + `227,644` frozen `LogicNet` = `3,584,905` training parameters / `3,357,261` inference-only). Its un-regularized ablation preset [`configs/zelda_hmolqd_masked_small.yaml`](configs/zelda_hmolqd_masked_small.yaml) (`G`, `logic_net_enabled=false`, `alpha_logic=0.0`) holds the exact same `3,357,261` denoiser+conditioner footprint fixed.
 
-Alternative denoisers and fast samplers can be reported only as secondary efficiency experiments after the central mechanism is established.
+[`LatentDiffusionModel`](src/core/latent_diffusion.py#L2905) (`UNet[1,2]` with `47,126,047` total parameters and `DiT + Flow Matching` with `22,436,351` total parameters across `17.37M` `VQ-VAE` + `3.20M` conditioner + `0.23M` `LogicNet`) serves as the primary continuous comparative baseline family under `RQ2`/`H2`, testing whether direct discrete synthesis outperforms continuous latent compression on rare interactive tiles and small-data raw solvability.
 
 ### 4.5 Differentiable logic
 
-[`LogicNet`](src/core/logic_net.py#L1447) provides differentiable objectives related to room traversal and graph progression. Its forward path begins near [`src/core/logic_net.py`](src/core/logic_net.py#L2910).
+[`LogicNet`](src/core/logic_net.py#L1447) provides differentiable objectives related to room traversal (Soft Bellman-Ford over traversable probabilities) and global graph progression. In **G-LMDM** ([`src/train_masked_room.py`](src/train_masked_room.py)), `LogicNet` operates directly on the predicted $16\times 11$ categorical `tile_logits` (`skip_latent_decode=True`, no intermediate continuous VQ-VAE decoder needed); in continuous baselines ([`src/train_diffusion.py`](src/train_diffusion.py)), it evaluates decoded probabilities from predicted clean latents.
 
-The training code combines diffusion and logic-related terms in [`src/train_diffusion.py`](src/train_diffusion.py#L2589) and [`src/train_diffusion.py`](src/train_diffusion.py#L2641).
-
-The final method section must explicitly define each enabled term:
+The canonical **G-LMDM** objective logs unweighted, weighted, and gradient-norm shares for active terms ([`src/train_masked_room.py`](src/train_masked_room.py), [`src/core/logic_net.py`](src/core/logic_net.py)):
 
 \[
-\mathcal{L}_{total}
-= \mathcal{L}_{diff}
-+ \lambda_{local}\mathcal{L}_{local}
-+ \lambda_{global}\mathcal{L}_{global}
-+ \lambda_{tile}\mathcal{L}_{tile}
-+ \lambda_{aux}\mathcal{L}_{aux}.
+\mathcal{L}_{\text{G-LMDM}}
+= \mathcal{L}_{\text{masked-CE}}
++ \alpha_{\text{logic}}\,\mathcal{L}_{\text{logic}},
+\qquad
+\mathcal{L}_{\text{logic}}
+= w_{\text{reach}}\mathcal{L}_{\text{grid-BF}}
++ w_{\text{trace}}\mathcal{L}_{\text{trace}}
++ w_{\text{anchor}}\mathcal{L}_{\text{anchor}}
++ \mathcal{L}_{\text{graph-lift}}.
 \]
 
-Only active terms should appear in the equation. The implementation must log every term before weighting, after weighting, and as a fraction of total gradient magnitude.
+Here $\mathcal{L}_{\text{grid-BF}}$ is the $16\times 11$ differentiable Soft Bellman-Ford reachability loss over categorical tile logits (`alpha_logic = 0.1`), and $\mathcal{L}_{\text{graph-lift}}$ lifts only the current denoised room's scalar passability $p_{\text{room}}(v)$ into node $v$ of the fixed mission graph $G$ (active in `g_lg_full_logic` and zeroed in `g_l_local_logic`), avoiding multi-room chained generative gradients across the `8` training dungeons (`AGENTS.md` §2).
 
 Required gradient checks:
 
@@ -278,7 +278,7 @@ Required gradient checks:
 
 ### 4.6 Generation, constraint enforcement, and repair
 
-The publication path must use [`NeuralSymbolicDungeonPipeline.generate_dungeon`](src/pipeline/dungeon_pipeline.py), which delegates to [`src.pipeline.stitching.dungeon_assembler.generate_dungeon`](src/pipeline/stitching/dungeon_assembler.py). The older [`AdvancedNeuralSymbolicPipeline`](src/pipeline/advanced_pipeline.py) is a compatibility/alternative path and is not an admissible source of confirmatory records because its return type does not retain the same per-room intervention history.
+The publication path must use [`NeuralSymbolicDungeonPipeline.generate_dungeon`](src/pipeline/dungeon_pipeline.py), which delegates room puzzle scaffolding/metadata compilation to [`PuzzleGenerator`](src/generation/puzzle_generator.py) and final room assembly to [`src.pipeline.stitching.dungeon_assembler.generate_dungeon`](src/pipeline/stitching/dungeon_assembler.py). The older [`AdvancedNeuralSymbolicPipeline`](src/pipeline/advanced_pipeline.py) is a compatibility/alternative path and is not an admissible source of confirmatory records because its return type does not retain the same per-room intervention history.
 
 Paper-facing evaluation must decompose the canonical path into observable stages rather than present it as one black box. Raw, constrained, and repaired room grids must be assembled with identical fixed slots, boundary sealing, and physical-edge carving. Otherwise the comparison confounds model/repair changes with dungeon assembly.
 
@@ -304,34 +304,32 @@ The repository contains several relevant evaluators:
 
 The main hard-validity result must use full-state A* plus applicable mission validators. P-CBS may be a secondary behavioral/readability analysis, but it must not replace the hard oracle.
 
-### 4.8 Optional branches excluded from the central claim
+### 4.8 Active comparative comparators vs. optional branches excluded from the central claim
+
+In accordance with `FG2`/`RG2` and [`RO2`](docs/PUBLICATION_GUIDANCE_AND_CARDS.md#12-research-objectives-ro1ro4), continuous latent synthesis (`VQ-VAE + UNet[1,2]` `47.13M` and `DiT + Flow Matching` `22.44M`) is benchmarked head-to-head against discrete **`G-LMDM`** (`3.58M` total training / `3.36M` inference) under matched `Dungeon-9` / `4 GB` GPU budgets. The following branches remain outside the central confirmatory causal claim (`N -> G -> G-L -> G-LG`):
 
 | Branch | Location | Main-paper treatment |
 |---|---|---|
-| Discrete masked-room generation | [`src/core/discrete_masked_model.py`](src/core/discrete_masked_model.py#L266) | Optional model-family appendix after matched training. |
 | Consistency/fast sampling | training and generation utilities | Separate efficiency extension. |
 | MAP-Elites/CVT | topology and QD utilities | Separate topology/QD study. |
 | Puzzle-stage semantics | optional configuration and heads | Exclude unless freshly retrained and independently evaluated. |
 | RL personas/P-CBS calibration | simulation/evaluation utilities | Secondary study; human claims require human data. |
-| Flow matching | optional diffusion path | Exclude from the core comparison. |
+| Flow matching | optional diffusion path | Benchmarked against `UNet[1,2]` and discrete `G-LMDM` in Track `B3` (`RO2`/`RQ2`), then fixed before `B4`. |
 | Preference/DPO utilities | scripts and training helpers | Exclude from the current paper. |
 
 ---
 
 ## 5. Research gap and novelty boundary
 
-### 5.1 Established work
+### 5.1 Established work and concrete research gaps (`RG1–RG4`)
 
-The publication must acknowledge the following established facts:
+The publication must acknowledge the following foundational Zelda PCG and modern neuro-symbolic findings (detailed bibliography and gap matrix in [SOTA_COMPARISON_AND_BENCHMARKS.md](docs/SOTA_COMPARISON_AND_BENCHMARKS.md)):
 
-- Gameplay-level control is a central dungeon-PCG problem [1].
-- Graph grammars have already been combined with learned Zelda room generation [2].
-- PCGML is an established field with known data, controllability, and evaluation problems [3].
-- Diffusion models already generate tile-based levels [4], including conditional text-to-level generation [5].
-- Automated validation has already been used to improve conditional level generation [6].
-- Quality-diversity methods have already been applied to dungeon design [7] and learned level latent spaces [8].
-- Current benchmarking expects multidimensional evaluation of quality, diversity, and controllability [9].
-- Neuro-symbolic generation with a learned proposal and hard symbolic construction is an active cross-domain research direction [10].
+- **Mission-space graph grammars:** Dormans (2010) decoupled progression mission graphs from spatial rooms via generative graph grammars; Lavender & Thompson (2016) specialized generative grammars directly to *The Legend of Zelda*; Summerville et al. (2015) paired learned topological priors with PCA room synthesis.
+- **Two-stage graph-grammar + neural rooms (`RG1`):** *Graph-GAN* (Gutierrez & Schrum 2020, IEEE CEC, `arXiv:2001.05065`) generated mission graphs via grammars and room grids via unconditional WGAN-GP with post-hoc door carving, showing user enjoyment parity with original dungeons while leaving neural rooms unconditioned on directional boundaries and global graph topology (where GRIT/RRWP, Ma et al. 2023, `arXiv:2305.17589`, addresses relational graph structure).
+- **Constrained graph synthesis & post-hoc repair (`RG3`):** Cooper (2022/2023 *Sturgeon* / *Sturgeon-GRAPH*) established declarative constrained synthesis for grids and abstract Zelda graphs; Zhang et al. (AIIDE 2020, `arXiv:2010.06627`) showed un-repaired GAN levels reach only 24.3% validity before MILP repair; Tamar et al. (2016) and Xu et al. (ICML 2018, `arXiv:1711.11157`) introduced differentiable planning/semantic constraint losses whose impact on repair burden (`repair_rate`, `tiles_repaired_mean`) remains unattributed without multi-stage separation.
+- **Continuous vs. discrete generation under small-data skew (`RG2 / FG2`):** Schrum et al. (AIIDE 2025, `arXiv:2507.00184`) documented low raw playability (`12–27%`) and singleton-tile rarity erasure in continuous diffusion, motivating direct absorbing-state discrete masked synthesis (D3PM `arXiv:2107.03006`; MaskGIT `arXiv:2202.04200`; LayoutDM `arXiv:2303.08137`; MDLM `arXiv:2406.07524`) benchmarked head-to-head against calibrated `VQ-VAE` (`arXiv:1711.00937`) + `UNet[1,2]`/`DiT+Flow` on `349` training rooms (`43` unique $12\times 7$ interiors).
+- **Evaluation rigor (`RG4`):** Withington et al. (FDG 2024, `arXiv:2404.18657`) and *PCG Benchmark* (Khalifa et al., FDG 2025, `arXiv:2503.21474`) establish multidimensional quality/diversity/controllability evaluation, classical non-neural baselines (`Random`, `WFC`, `Grammar-only`), leak-free split discipline, and separation of formal playability checks from proxy agents.
 
 ### 5.2 What is not novel enough
 
@@ -374,39 +372,40 @@ The complete related-work phase should extend this table to at least 20 directly
 
 ---
 
-## 6. Research questions, hypotheses, and scope
+## 6. Research objectives, questions, hypotheses, and scope
+
+### 6.0 Research objectives (`RO1–RO4`, mapped 1-to-1 to `PS1–PS4`)
+
+1. **`RO1` (Causal Conditioning — maps to `FG1`/`PS1`, Track `B1`):** Isolate `G-LMDM`'s causal Block III `GraphGPS + RRWP` + directional neighbor/boundary conditioner (`G`) against unconditioned/neighbor-only (`N`) and non-`RRWP` graph encoders (`No-RRWP`).
+2. **`RO2` (Discrete vs. Continuous Synthesis — maps to `FG2`/`PS2`, Tracks `B2–B3`):** Benchmark absorbing-state discrete `G-LMDM` (`MaskedRoom`, `3.58M` total training / `3.36M` inference) head-to-head against calibrated continuous `VQ-VAE` (`17.37M`) + `UNet[1,2]` (`47.13M` total) and `DiT + Flow` (`22.44M` total) on `349` training rooms (`43` unique $12\times 7$ interiors) under `4 GB` VRAM budgets.
+3. **`RO3` (Direct Logic Regularization & 4-Stage Attribution — maps to `FG3`/`PS3`, Track `B4` & Block VI):** Couple direct $16\times 11$ Soft Bellman-Ford `LogicNet` supervision (`G-L`/`G-LG`, `alpha_logic=0.1`) against `G` and inference-only guidance, and attribute `raw -> constrained -> repaired -> compiled` outcomes (`repair_rate`, `tiles_repaired_mean`) under neutral assembly.
+4. **`RO4` (Confirmatory Statistical Generalization & Oracle Separation — maps to `FG4`/`PS4`, Track `B5`, Blocks I/VII):** Enforce unseen `Dungeon-9` holdout, external symbolic baselines (`Random`, `WFC`, `Grammar-only`), paired Holm-corrected non-parametric inference, descriptive LODO sensitivity checks, Block I OOD bounds, and strict separation of formal `StateSpaceAStar` proofs from bounded `P-CBS` proxy diagnostics.
 
 ### 6.1 Primary research question
 
-> For unseen mission graphs, does joint mission-graph conditioning and differentiable local/global logic supervision increase pre-repair mission-consistent playability relative to neural-only and symbolic-only generation at comparable fidelity, diversity, and computational cost?
+> On held-out Dungeon-9 mission graphs, do causal Block III `GraphGPS+RRWP` conditioning, absorbing-state discrete masked synthesis on $16\times 11$ tile tokens, and direct $16\times 11$ Soft Bellman-Ford `LogicNet` supervision (`G-LMDM`) jointly increase pre-repair oracle solvability and reduce symbolic repair burden (`repair_rate`, `tiles_repaired_mean`) relative to unconditioned, continuous `VQ-VAE` latent diffusion/flow, and external symbolic baselines at matched diversity and lower parameter cost?
 
-### 6.2 Subquestions
+### 6.2 Subquestions (`RQ1–RQ4`, mapped 1-to-1 to `RO1–RO4`)
 
-**RQ1: Conditioning.** Which mission-graph conditioning channels improve local connection alignment and global progression compliance?
+**RQ1 (`RO1` — Causal GraphGPS+RRWP Conditioning):** Relative to unconditioned/neighbor-only (`N`) and non-`RRWP` graph encoders (`No-RRWP`), does causal Block III `GraphGPS+RRWP` conditioning (`G`) improve pre-repair door alignment, boundary consistency, and mission-role adherence on held-out Dungeon-9 graphs?
 
-**RQ2: Logic supervision.** Does training-time differentiable logic improve independently verified raw validity and reduce repair burden?
+**RQ2 (`RO2` — Discrete Token Synthesis vs. Continuous Latent Compression):** On the small-data VGLC $16\times 11$ corpus (`349` training rooms, `43` unique $12\times 7$ interiors, `88.60%` `WALL+FLOOR` vs. `0.68%` `ENEMY` and `0.05%` `STAIR`), does discrete absorbing-state `G-LMDM` preserve rare interactive tiles and achieve higher pre-repair validity at lower parameter/latency cost (`3.58M` vs. `47.13M`/`22.44M`) than continuous `VQ-VAE + UNet[1,2]` and `DiT+Flow` baselines?
 
-**RQ3: Inference guidance.** Does inference-time LogicNet guidance add value after logic-supervised training, and what computational cost does it introduce?
+**RQ3 (`RO3` — Direct 16x11 Soft Bellman-Ford Supervision & Stage Attribution):** Holding `GraphGPS+RRWP` conditioning (`G`) fixed, does direct $16\times 11$ training-time Soft Bellman-Ford `LogicNet` supervision (`G-LG`, `alpha_logic=0.1`) increase pre-repair oracle solvability and reduce `repair_rate` and `tiles_repaired_mean` across `raw -> constrained -> repaired -> compiled` stages relative to `G` and inference-only gradient guidance without diversity collapse?
 
-**RQ4: Symbolic intervention.** How much validity comes from constrained decoding and repair, and how much content do those interventions change?
+**RQ4 (`RO4` — Held-Out Dungeon-9 Generalization, External Baselines & Proof-Proxy Separation):** Under held-out `Dungeon-9` evaluation, external symbolic baselines (`Random`, `WFC`, `Grammar-only`), paired Holm-corrected non-parametric tests, descriptive LODO splits, and Block I topology bounds, do `G-LMDM` gains generalize to unseen dungeon topologies while keeping formal `StateSpaceAStar` solvability proofs strictly separated from bounded `P-CBS` proxy diagnostics?
 
-**RQ5: Generalization and control.** Do improvements persist for held-out dungeon identities and out-of-distribution graph structures?
+### 6.3 Confirmatory hypotheses & null-outcome rules (`H1–H4`, mapped 1-to-1 to `RQ1–RQ4`)
 
-### 6.3 Confirmatory hypotheses
+**H1 (`RQ1`):** Causal Block III `GraphGPS + RRWP` conditioning (`G`) significantly improves pre-repair door alignment, boundary match accuracy, and mission-role consistency over `N` and `No-RRWP` on unseen `Dungeon-9` graphs.
 
-**H1.** Graph-conditioned diffusion has higher raw mission-constraint satisfaction than local-only diffusion.
+**H2 (`RQ2`):** Absorbing-state discrete `G-LMDM` preserves higher rare-tile recall and pre-repair room validity with an order-of-magnitude smaller footprint (`3.58M` train / `3.36M` inference vs. `47.13M` `UNet[1,2]` and `22.44M` `DiT+Flow`) and lower latency on `4 GB` GPUs, or establishes an explicit discrete–continuous speed–coherence Pareto trade-off under `Dungeon-9`.
 
-**H2.** Adding local logic supervision increases raw room reachability and required-door alignment relative to graph conditioning alone.
+**H3 (`RQ3`):** Direct $16\times 11$ training-time Soft Bellman-Ford `LogicNet` supervision (`G-LG`) increases raw oracle solvability and reduces downstream symbolic `repair_rate` and `tiles_repaired_mean` across `raw -> constrained -> repaired -> compiled` stages relative to `G` and inference-only steering at matched diversity.
 
-**H3.** Adding global mission logic increases raw full-dungeon progression validity relative to local logic alone.
+**H4 (`RQ4`):** Within-identity `Dungeon-9` paired Holm-corrected tests, external symbolic baselines (`Random`, `WFC`, `Grammar-only`), descriptive LODO sensitivity checks, and Block I bounds preserve `G-LMDM` pre-repair gains while maintaining empirical distinction between formal `StateSpaceAStar` solvability proofs and bounded `P-CBS` behavioral diagnostics.
 
-**H4.** The full logic-supervised model requires fewer repairs and a smaller changed-tile fraction than graph-conditioned diffusion without logic.
-
-**H5.** The proposed model is non-inferior in fidelity and conditional diversity to graph-conditioned diffusion without logic.
-
-**H6.** The direction of the primary effect persists across most held-out dungeon identities and on satisfiable OOD mission graphs.
-
-**H7.** Inference-time logic guidance produces a smaller marginal gain than training-time logic supervision and increases sampling latency.
+> **Mandatory Null-Outcome Policy:** Claims pass into main-paper results only after clearing Section 13 gates. If `G-LG` fails to beat `G` on raw pre-repair endpoints after Holm correction, or if continuous `VQ-VAE + UNet[1,2]` / `DiT+Flow` outperforms discrete `G-LMDM`, report the negative or trade-off outcome verbatim and scope claims strictly to the supported repair-aware neuro-symbolic boundary.
 
 ### 6.4 Exploratory questions
 
@@ -554,22 +553,22 @@ Do not describe inference guidance as logic-supervised training. Training and in
 
 ### 8.3 External and symbolic baselines
 
-#### Required baselines
+#### Required and comparative baselines
 
 1. **Symbolic-only WFC/constraint generator.** Uses only training-fold statistics and mission constraints.
 2. **Generate-and-filter.** Uses the same graph-conditioned neural generator, rejects invalid samples, and receives the same wall-clock or attempt budget as repair-based generation.
 3. **Graph grammar plus learned rooms.** A faithful graph-grammar-plus-GAN or equivalent learned-room baseline modeled after the closest Zelda work [2].
 4. **Unconditional/local diffusion.** Same VQ-VAE and denoiser capacity without mission-graph context.
-5. **Graph-conditioned diffusion without logic.** The most important internal baseline.
+5. **Graph-conditioned discrete synthesis without logic (`G` / `configs/zelda_hmolqd_masked_small.yaml`).** Holds the exact `3.36M` `G-LMDM` conditioner+denoiser fixed without `LogicNet` (`RQ3`/`H3`).
+6. **Continuous latent diffusion/flow comparators (`VQ-VAE + UNet[1,2]` `47.13M` & `DiT+Flow` `22.44M`, `RQ2`/`H2`).** Benchmarked head-to-head against discrete `G-LMDM` (`3.58M` total train / `3.36M` inference) under matched `Dungeon-9` / `4 GB` VRAM budgets.
 
-#### Optional baselines
+#### Optional exploratory baselines
 
-- Discrete masked-room generator under matched folds and compute.
 - Search in the VQ-VAE latent space.
 - A lightweight autoregressive categorical model.
 - QD/MAP-Elites as a separate diversity study.
 
-Optional baselines should not delay the required causal ablations.
+Optional exploratory baselines should not delay the required causal ablations.
 
 ### 8.4 Fairness requirements
 
@@ -623,7 +622,7 @@ Secondary outcomes:
 - Conditional diversity.
 - Sampling time.
 
-This experiment tests H1-H3.
+This experiment tests H3–H5 (Causal Confirmatory Track: N, G, G-L, G-LG; see Section 6.3).
 
 ### E2. Conditioning mechanism ablation
 
@@ -664,7 +663,7 @@ For the same attempted samples, record metrics at:
 
 Report validity transitions and content modifications. Compare against generate-and-filter under matched attempt and wall-clock budgets.
 
-This experiment tests H4 and exposes whether postprocessing dominates the system.
+This experiment tests H6 and exposes whether postprocessing dominates the system.
 
 ### E5. Controllability and counterfactual response
 
@@ -856,9 +855,9 @@ Also report:
 - Descriptor-space coverage.
 - Conditional diversity at fixed mission graph.
 - Cross-graph structural diversity.
-- Novelty relative to the nearest training dungeon.
+- Novelty relative to the nearest training dungeon and $D_4$-invariant nearest-neighbor Hamming distance ($d_{\text{NN}}(\hat{\mathbf{X}}) = \min_{\mathbf{X} \in \mathcal{D}_{\text{train}}} \min_{g \in D_4} \frac{1}{HW}\sum_{r,c}\mathbf{1}[\hat{\mathbf{X}}(r,c) \neq g(\mathbf{X})(r,c)]$, reporting exact-copy fraction $d_{\text{NN}} = 0$).
 
-Separate diversity from novelty: samples may differ from each other while all remain close to training examples.
+Separate diversity from novelty: samples may differ from each other while all remain close to training examples (or rotated/reflected $D_4$ variants of the `43` unique $12\times 7$ VGLC interiors).
 
 ### 10.7 Controllability
 
@@ -1532,37 +1531,22 @@ The study survives this objection only if G-LG improves raw exact validity over 
 
 ---
 
-## 21. Venue strategy
+## 21. Venue strategy (Target: CORE A* / Flagship Journals)
 
-### 21.1 AIIDE
+### 21.1 Flagship Journal Target: IEEE Transactions on Games (T-G) / IEEE TPAMI
+- **Focus:** Definitive, comprehensive neuro-symbolic framework study.
+- **Mandatory Scientific Standards:**
+  1. Complete held-out dungeon validation (Dungeon-9 zero-shot generalization + Leave-One-Dungeon-Out LODO).
+  2. Full mathematical formulation: Markov transition matrix $Q_t$ for absorbing-state discrete masked diffusion on discrete grids, Soft Bellman-Ford value iteration loss derivation, and Pareto dominance theorem proofs for non-monotonic state search.
+  3. Attribution transparency: Schema 2.0 four-stage decomposition (`raw` $\to$ `constrained` $\to$ `repaired` $\to$ `compiled`), reporting raw neural validity alongside exact repair burden (`repair_rate`, `tiles_repaired_mean`).
+  4. Tri-criteria evaluation against all standard external baselines (WFC, PCGRL, Grammar-only, Random) at matched capacity and matched $16 \times 11$ corpus.
+  5. Dual-track validation: Mathematical solvability proofs via `StateSpaceAStar` vs. Human-centered bounded rationality diagnostics via `P-CBS`.
 
-Best fit when the final story is concise and centered on a clear game-AI contribution. The paper should emphasize mission-level controllability, algorithmic evaluation, failure cases, and practical implications for procedural dungeon design.
+### 21.2 Top-Tier Conference Alternative: AAAI / IJCAI / NeurIPS (CORE A*)
+- **Focus:** High-density, mathematically rigorous 8-page paper highlighting the discrete masked diffusion formulation vs. continuous VQ-VAE failure modes, GraphGPS topological conditioning, and exact state-space solvability guarantees.
+- **Key Positioning:** Foundational breakthrough in "Provably Solvable Discrete Generative Modeling under Complex Combinatorial Constraints".
 
-Minimum package:
-
-- Fresh grouped evaluation.
-- Strong internal ablations.
-- One credible external baseline.
-- Raw-versus-repaired decomposition.
-- Reproducible code and examples.
-
-### 21.2 IEEE Conference on Games
-
-Best fit when the work emphasizes benchmarking, controllability, search/generation comparisons, or a broader systems evaluation.
-
-### 21.3 IEEE Transactions on Games
-
-Best fit for the complete version with:
-
-- All held-out identities.
-- Full OOD suite.
-- Detailed statistical modeling.
-- Complete failure taxonomy.
-- Efficiency analysis.
-- Extended related work.
-- Optional human/designer study.
-
-### 21.4 Submission rule
+### 21.3 Submission rule
 
 Choose one venue before final formatting. Verify its current page limit, anonymity rule, supplemental-material policy, code policy, and AI-use disclosure requirements from the official venue site immediately before submission.
 
@@ -1924,8 +1908,7 @@ This is the current source-of-truth checklist for the publication path. It disti
 locked corpus + manifest
     -> leave-one-dungeon-identity-out outer fold
     -> grouped internal validation using training identities only
-    -> one fresh fold/seed-specific VQ-VAE
-    -> four fresh causal diffusion variants (N, G, G-L, G-LG)
+    -> primary discrete G-LMDM family (N, G, G-L, G-LG) vs. continuous VQ-VAE + UNet[1,2] / DiT+Flow comparators (where fold/seed-specific VQ-VAE is trained for continuous comparators)
     -> primary unguided sampling for all four models on fixed graphs/seeds
     -> secondary paired guidance study only for LogicNet-capable models
     -> canonical room-wise dungeon generation
@@ -2053,8 +2036,163 @@ The confirmatory comparison is now explicitly asymmetric where the architecture 
 
 Every primary arm must share the outer training identities, internal grouped validation identities, fresh fold/seed tokenizer, training batches and order, epoch count, optimizer defaults, common checkpoint metric, failure policy, sampling graphs/seeds, diffusion steps, classifier-free guidance, symbolic repair configuration, exact validator, timeout budget, and all-attempt denominator. Resolved-config parity is checked automatically. Architecture-dependent parameter counts and optimizer groups are expected differences and must be reported per arm rather than falsely described as equal compute.
 
-Teacher-forced neighbor latents remain enabled during training. Canonical batched generation proceeds in topological layers and feeds already generated predecessor latents into later rooms, so the inference path does use neighbor context. The remaining train-inference difference is exposure bias from real versus generated neighbor rooms. It affects all four arms under the same protocol and should be acknowledged as a limitation; disabling it would redefine the local baseline rather than merely remove a hidden confound.
+Teacher-forced neighbor latents remain enabled during training, but their availability is now causal. DAGs use dependency-safe topological layers; cyclic directed and undirected graphs use singleton layers in canonical node order. Training retains only mission-graph neighbors from earlier layers and uses the same directional/fallback assignment as generation. On the locked corpus this reduces the local-context observations from 1,224 unfiltered spatial adjacencies to 435 causally available graph neighbors. The remaining intended train-inference difference is exposure bias from real versus generated earlier rooms. It affects all four arms under the same protocol and must be reported; disabling it would redefine the local baseline rather than merely remove a hidden confound.
 
 The current WFC, DCGAN, and flattened-token language-model scripts are room-level diagnostics only. They do not yet implement the grouped outer folds, mission-graph conditioning, complete-dungeon attempt records, neutral stage assembly, or matched exact validation required for a primary external-baseline claim. Their README now states this boundary, and WFC collapse failures remain in the attempted denominator as invalid fallbacks rather than being excluded.
 
-Verification after this continuation: the combined publication/configuration/diffusion focused run passed **143 tests**, followed by a publication-only four-arm materialization rerun of **21 tests** after the parity, inference-factor, and synchronized non-finite changes. A final focused rerun including RNG isolation is required after the current long repository-wide run; counts will be updated only from completed commands. These runs overlap and must not be added. They verify code contracts, not model quality. One uninterrupted repository-wide test run, a sealed sampling manifest with a training-only-selected guidance scale, evaluator-integrity fixtures, the batch attempt ledger, and fresh model execution remain required.
+Verification after this continuation is intentionally reported as completed commands rather than one misleading sum. The diffusion-conditioning file passed **67 tests** after the joint-graph fail-closed checks. A separate publication/configuration/LogicNet-gradient/Zelda-loader group passed **123 tests**; the publication file then passed **22 tests** after sealing the endpoint and Holm correction; and the final virtual-parent extraction/batching/gradient subset passed **4 tests** after explicit-parent precedence was added. These groups overlap. Earlier, a segmented non-GUI remainder run passed **965 tests**, and a separate discrete-model plus advanced-rules run passed **79 tests**; neither is claimed as one uninterrupted full suite. Ruff, compilation, and `git diff --check` passed for the final touched files. Graphify was refreshed to 34,571 nodes, 63,390 edges, and 903 communities. These checks verify software contracts, not model quality. One uninterrupted locked-environment suite, a sealed sampling manifest with a training-only-selected guidance scale, evaluator-integrity fixtures, the batch attempt ledger, and fresh model execution remain required.
+
+20. The real room corpus does not have a one-to-one room/node relation. Across 459 room samples and 18 dungeon-variant groups, mission graphs contain semantic or virtual nodes without separate rendered room grids; the difference ranges from 0 to 19 nodes per group. The old dungeon stacker accepted only `room_count == node_count`, so affected groups silently fell back to independent per-room LogicNet proxies whose unobserved node passabilities were fixed to one. Graph extraction now resolves every non-room node to the nearest room-backed node through authoritative graph topology, shares its spatial position, and records `node_passability_parent_idx`. LogicNet lifts predicted room passabilities through this mapping without detaching them. All 18 real groups now form one joint `graph_scope=dungeon` batch, and a gradient regression proves that a virtual-node path updates its physical parent room score.
+21. Distributed room-level sampling fragments dungeon variants, which cannot realize the joint global-logic estimand. Config validation now rejects `alpha_logic > 0` with `dungeon_batch_mode=false` or with the current distributed sampler. Training and validation also require one dungeon-scope graph and exactly one executed global graph loss; `global_graph_skipped` is fatal rather than a diagnostic that can be overlooked.
+22. The original predicted-latent LogicNet gradient test left visual diffusion loss enabled, so its nonzero denoiser gradient did not identify the source. The test now sets visual loss to zero and therefore isolates the claimed LogicNet-to-decoder-to-denoiser path.
+23. The confirmatory endpoint and multiplicity family were not machine-sealed. The manifest now fixes raw-stage exact validity over all requested attempts as the primary endpoint, fixes the three adjacent causal contrasts, uses outer dungeon identity as the independent unit, requires a two-sided exact random-sign test, applies Holm correction at familywise alpha 0.05, and treats constrained/repaired/compiled stages as exploratory unless separately sealed. A tested Holm implementation is part of the analysis module.
+24. The local stream had a train-inference leakage bug. Every room-level training sample exposed all spatially adjacent ground-truth rooms, including future rooms and 636 adjacencies with no mission-graph edge. All 18 real mission graphs are cyclic directed graphs. The cyclic generation fallback claimed to use sorted order but returned every room in one batch, so no generated neighbor latent existed at conditioning time. A shared causal-layer policy now keeps parallel topological layers only for DAGs and uses deterministic singleton layers for cyclic/undirected graphs. Dataset neighbor maps are restricted to earlier, room-backed mission-graph neighbors and use the same cardinal/fallback slot policy as runtime. The real corpus now contains 435 usable causal graph-neighbor observations and no future-room targets.
+25. Weighted loss magnitudes could not distinguish a live objective from a zero-gradient objective or reveal destructive gradient conflict. The existing gradient-probe module now provides a side-effect-free publication preflight that reports each weighted objective's gradient norm, active-parameter fraction, and pairwise cosine. Zero-gradient pairs return an explicit undefined cosine instead of a misleading zero. This instrumentation is not enabled in the ordinary training loop and therefore does not change optimization.
+26. Local boundary and topology conditioning used two incompatible graphs. Training marked layout-adjacent rooms and copied rendered door flags, while inference derived doors from incident mission edges; 636 corpus adjacencies are not mission edges. Training now derives boundary presence, required doors, incoming/outgoing masks, and edge-type channels from the same incident mission edges used at runtime. Self-loops no longer fabricate room doors. Runtime now groups the incoming and outgoing records of the same neighbor, preserves direction for unresolved directed edges, and deterministically merges degree overflow instead of silently dropping its semantics. Regression fixtures cover non-edge layout adjacency, self-loops, cyclic causal order, and unresolved directed flow.
+
+---
+
+## 29. Exhaustive experiment-validity and block-liveness audit
+
+This section is the mandatory go/no-go checklist requested for the next experiment run. A unit test that a tensor has the right shape is not sufficient evidence that a block performs its intended function. Every claimed block must satisfy four different questions:
+
+1. **Contract:** did it receive the intended data with the intended identity, shape, dtype, device, mask, and semantics?
+2. **Connectivity:** can its output and gradient reach the next claimed block without an unintended detach, frozen parameter, zero gate, or silent fallback?
+3. **Causal liveness:** under fixed weights and randomness, does perturbing only this input change the intended downstream quantity, while the corresponding ablated arm remains invariant?
+4. **Outcome relevance:** does the final independent metric measure the claimed behavior rather than a learned proxy, postprocessor effect, or success-filtered subset?
+
+Status vocabulary in this section is strict:
+
+- **Code-verified:** the implementation and regression tests enforce the contract.
+- **Data-verified:** the locked real corpus was inspected, not just a synthetic fixture.
+- **Preflight required:** must be measured on fresh training-only batches before expensive training.
+- **Experiment required:** cannot be established without the fresh sealed runs.
+- **Blocked:** running confirmatory experiments would currently be invalid.
+
+### 29.1 End-to-end information-flow matrix
+
+| Edge or block | Required invariant and falsification test | Current status |
+|---|---|---|
+| Corpus file -> dungeon identity | File digest, dungeon number, quest variant, and room coordinate are stable; both variants stay in the same outer identity | **Code/data-verified.** The 93-file manifest and nine grouped identities are sealed. Near-duplicate content analysis remains **preflight required**. |
+| Dungeon graph -> graph tensors | Canonical node order, directed edges, edge semantics, resource pairs, node roles, target/start indices, TPE/RWSE/RRWP, and node positions agree with the authoritative graph | **Code/data-verified** for schema, key resource contracts, and incident-edge census. Boundary/topology semantics now ignore layout-only adjacency and self-loops. A broader adversarial semantic fixture bank remains **preflight required**. |
+| Semantic/virtual graph node -> rendered room score | Every graph node has an explicit room-backed passability parent; no node receives an undocumented constant-one value | **Code/data-verified.** All 18 real groups now form a joint graph batch. |
+| Room sample -> dungeon batch | Each batch contains exactly one dungeon variant, unique current-node indices, identical node mapping, identical virtual-parent mapping, and all room-backed parents | **Code/data-verified.** Mixed, incomplete, duplicate, and mapping-drift cases fail. |
+| Room grid -> frozen VQ latent | Tile normalization is invertible, semantic IDs remain in range, VQ-VAE is fold/seed specific and frozen for diffusion variants | **Code-verified.** Reconstruction quality, rare-tile recall, code usage, and train-only checkpoint choice are **experiment required**. |
+| Neighbor rooms -> local encoder | Only already-available mission-graph neighbors are teacher-forced; cardinal/fallback assignment, boundary flags, room position, and explicit nulls match generation | **Code/data-verified.** The old future/non-edge leakage is removed; the corpus has 435 causal graph-neighbor observations. A fixed-input end-to-end perturbation changes the denoiser and receives gradient. Frequency/sensitivity across 16 diverse training-only batches remains **preflight required**. |
+| Mission graph -> global encoder | Node/edge widths are strict, masks isolate graph instances, current-node distance uses the selected room, and RRWP/TPE cannot be silently dropped | **Code-verified** with feature-sensitivity and mask tests. Whole-encoder shuffled-graph/selected-node sensitivity is **preflight required**. |
+| Local/global streams -> fusion | Current node anchors the query without collapsing attention to one token; masked nodes cannot be selected; style/reference factors are separated | **Code-verified.** A real DualStreamConditionEncoder-to-U-Net regression proves independent local/global perturbation sensitivity and gradient reachability. Attention entropy across data must still be recorded in **preflight**. |
+| Condition sequence -> context cross-attention | Anchor offset, node mask, edge offset, padded length, batch size, and topology refinement are consistent | **Code-verified.** A fixed-noise output-difference test between true and permuted topology is **preflight required**. |
+| Graph tokens/topology map -> spatial denoiser | Graph-to-grid and topology branches receive gradients from step one; sigmoid gates are nonzero and shape checks fail closed | **Code-verified**, including an end-to-end graph-input-to-denoiser-output/gradient test. Gate saturation and attention collapse across real batches remain **preflight required**. |
+| Denoiser -> predicted clean latent | Prediction type, timestep/noise stream, CFG dropout, Min-SNR weighting, latent scaling, AMP, and EMA semantics match training and inference | **Code-verified** for contracts and RNG isolation. Numeric parity on one sealed CPU/GPU mini-batch is **preflight required**. |
+| Predicted latent -> decoded tile logits | Frozen VQ decoder remains differentiable with respect to the predicted latent; semantic class order matches LogicNet | **Code-verified.** The isolated LogicNet gradient test now disables visual loss. |
+| Tile logits -> local LogicNet | Walkability, source/target masks, trace/anchor targets, and soft pathfinding generate finite nonzero gradients | **Code-verified.** Calibration and tile-classifier accuracy required for inference guidance are **experiment required**. |
+| Room scores -> global LogicNet | All room predictions are lifted jointly to physical and virtual nodes; directionality and resource ordering are preserved; exactly one graph loss executes | **Code/data-verified.** Any skip is fatal. Per-objective gradient magnitude and conflict with visual loss remain **preflight required**. |
+| Logic loss -> optimizer | Weighted loss is finite, intended trainable parameters occur once in optimizer groups, frozen parameters remain excluded, and joint clipping sees all groups | **Code-verified.** A tested side-effect-free utility computes weighted per-objective gradient norms, active fractions, and cosines. Running it on the sealed training-only batch bank and saving the report remains **preflight required**. |
+| LogicNet -> inference guidance | Only LogicNet-capable models are eligible; the sign lowers loss, scale/window are sealed on training identities, and identical initial noise is paired | Sign, schedule, and eligibility are **code-verified**. Scale calibration and actual loss reduction without latent explosion are **experiment required**. |
+| Raw proposal -> constrained stage | Raw is snapshotted before constraint mutation; neutral assembly, slots, boundary sealing, and edge carving are identical across stages | **Code-verified.** |
+| Constrained -> repaired | Same symbolic repair operator, budget, seed, and information access are used for every arm; no held-out ground truth or exact-validator feedback is visible | Neural repair is disabled and symbolic parity is **code-verified**. Repair efficacy and edit size are **experiment required**. |
+| Repaired -> compiled | Graph/entity materialization is a separate stage and cannot be attributed to neural generation or room repair | **Code-verified.** |
+| Stage grid -> exact validator | Success requires route replay; no-path requires complete frontier exhaustion; cutoff/error remains indeterminate; P-CBS is not an oracle | **Code-verified** with search regressions. Final evaluator-integrity bank is **preflight required**. |
+| Attempt -> immutable record | Raw is mandatory; every retained grid has shape/hash; failed generation has an error type; failures remain in the denominator | Record/bridge are **code-verified**. The batch executor and atomic run ledger remain **blocked**. |
+| Records -> fold statistics | Pair keys must match exactly; failures score zero; repeats aggregate within fold; inference uses held-out dungeon identities | **Code-verified.** Holm correction and primary family are sealed. Fresh records are **experiment required**. |
+
+### 29.2 Mandatory architecture preflight before any full training matrix
+
+Run the following on training identities only and save the machine-readable report beside the sealed protocol. A failure stops all confirmatory training.
+
+1. **Schema census:** enumerate every tensor field, shape, dtype, finite range, missingness rate, and per-group cardinality. Reject mixed feature widths, invalid indices, all-zero required channels, missing resource pairs, or topology-map absence in only part of a batch.
+2. **Identity census:** for every dungeon variant, verify unique room coordinates and current-node indices, identical `node_to_idx`, complete passability-parent coverage, one start, one declared target when applicable, and no train/test identity overlap.
+3. **Signal variance:** measure per-feature variance for node roles, edge types, TPE, RRWP, current-node distance, boundary channels, topology channels, local neighbor latents, and puzzle/resource labels. A feature that is constant on all training identities cannot support a causal claim and must be removed from that claim.
+4. **Deterministic forward replay:** with evaluation mode and fixed tensors, two forwards must be bitwise identical on CPU where supported and numerically identical within a sealed tolerance on the publication accelerator.
+5. **Local perturbation:** change one cardinal neighbor while holding graph, room, timestep, and noise fixed. The local condition and denoiser output must change; the no-neighbor/null case must remain finite.
+6. **Global perturbation:** permute graph edges, select a different current node, shuffle node roles, and zero RRWP one factor at a time. The global arm must respond; the N arm must remain invariant to all graph-only changes.
+7. **Spatial perturbation:** move one node position or one topology-map channel under fixed context. Graph-to-grid attention or topology modulation and denoiser output must change at the intended spatial locations.
+8. **Gradient reachability:** with visual loss isolated, verify gradient to denoiser and intended condition modules. With logic loss isolated, verify gradient through decoded logits to denoiser, local LogicNet, and—on a complete dungeon batch—every room score influencing the selected graph route.
+9. **Ablation invariance:** frozen/dormant modules in N and G must have zero gradients and unchanged parameter hashes after an optimizer step. G must receive no LogicNet update; G-L must exclude the global term; G-LG must report exactly one joint global graph term.
+10. **Optimizer census:** every trainable parameter appears exactly once; no frozen parameter appears; common modules have matching initial hashes for matched seeds; intended arm-specific parameter counts and optimizer groups are reported.
+11. **Objective balance:** over at least 16 diverse training-only dungeon batches, record weighted objective magnitudes, per-objective gradient norms, gradient cosine similarities, clipping frequency, and nonfinite counts. This is a diagnostic for dead or dominating blocks, not a license to tune on held-out outcomes.
+12. **Gate/attention liveness:** report sigmoid gate values, attention entropy, masked probability mass, maximum-token dominance, and the fraction of batches with nonzero branch gradient. Seal failure thresholds before inspecting held-out results.
+13. **Train/inference parity:** compare condition construction for one real training room and the same room through canonical generation. Assert identical neighbor availability and directional assignment under the shared causal layer policy. Document the sole intended local-content difference: real teacher-forced values versus generated values for those same earlier neighbors.
+14. **Guidance sanity:** on training identities, one small guidance step must reduce the stated LogicNet loss on average, remain finite, respect norm caps, and leave the unguided latent unchanged when scale is zero.
+15. **Validator integrity:** known-valid fixtures must return a replayed witness; known-invalid finite fixtures must exhaust the frontier; budget cutoffs must remain indeterminate; malformed maps must be invalid; key/item/switch/bomb/directed/virtual-edge mechanics must match route replay.
+16. **Attempt failure injection:** deliberately raise generation, timeout, validator, and record-write failures. Every requested key must appear exactly once in the ledger, and missing or duplicate pairs must block analysis.
+
+### 29.3 Training-run audit
+
+For every fold, training seed, and arm, automatically verify and retain:
+
+- git commit, dirty-tree patch or source archive, config and protocol hashes, corpus hash, Python/PyTorch/CUDA/cuDNN/driver versions, GPU model, deterministic flags, and command line;
+- fold membership, grouped internal-validation membership, tokenizer job ID/hash, variant ID, initialization seed, data-order seed, and number of requested/actual optimizer updates;
+- initial and final parameter hashes by module, trainable/frozen parameter counts, optimizer membership, LR/weight-decay groups, scheduler steps, AMP scaler state, EMA state, and gradient-accumulation tail handling;
+- raw and weighted losses, objective fractions, gradient norms, clipping rate, nonfinite count, LogicNet global execution count, lifted semantic-node count, gate values, tile accuracy, codebook use, and validation metric stream;
+- common checkpoint selection by `val_diffusion_loss`, earliest exact-tie rule, no logic tie-break, and no post-hoc checkpoint substitution;
+- complete failure semantics: publication runs abort on nonfinite values, schema drift, graph fallback, missing resource pairs, skipped global loss, incomplete validation grouping, or checkpoint corruption.
+
+The following patterns invalidate a run rather than becoming a caveat: unequal update counts across paired arms, held-out data in tokenizer or hyperparameter selection, different common-module initialization under a matched seed, missing validation pairs, success-only seed replacement, manual checkpoint choice, or any arm-specific postprocessor not declared as the causal factor.
+
+### 29.4 Sampling and evaluation audit
+
+The sampling manifest must seal model/checkpoint hashes, mission-graph bank, sampling seeds, inference condition, CFG scale, sampler, step count, logic-guidance scale/window, room order, repair settings, validator budget, and hardware timing procedure. Each paired comparison reuses the same mission graph and seed. Python, NumPy, PyTorch, and CUDA RNGs reset at the attempt boundary.
+
+For every requested attempt, retain all stage statuses and grids even when invalid. Report raw, constrained, repaired, and compiled validity separately. Report transition probabilities and edit sizes rather than presenting repaired validity as neural validity. Timeouts, validator errors, generation errors, missing stages, and indeterminate searches contribute zero to the all-attempt endpoint. An evaluable-only rate is diagnostic and must never replace it.
+
+External baselines are eligible for a primary table only if they use the same outer folds, training identities, mission-graph inputs, attempt keys, timeout/compute accounting, stage definitions, and exact validator. Current WFC/DCGAN/flattened-token scripts do not meet that contract and remain diagnostics.
+
+### 29.5 Statistical-significance guardrails
+
+The confirmatory primary endpoint is now sealed as **raw-stage exact validity over all requested attempts**. The three primary adjacent contrasts are N vs G, G vs G-L, and G-L vs G-LG under unguided inference. The independent sample size is nine held-out dungeon identities, not 459 rooms, 18 quest variants, training seeds, generated attempts, or solver states.
+
+The analysis sequence is fixed:
+
+1. require identical matched attempt keys in both arms;
+2. score exact valid as one and every other outcome as zero;
+3. average repeats inside each held-out dungeon identity;
+4. compute nine paired fold differences;
+5. report the mean difference, every fold difference, outer-fold bootstrap interval, and paired effect size;
+6. compute the two-sided exact random-sign p-value;
+7. apply Holm correction across the three primary contrasts at familywise alpha 0.05;
+8. report raw and adjusted p-values whether significant or not;
+9. interpret practical magnitude and interval width separately from the threshold decision.
+
+With nine nonzero fold differences, the smallest possible two-sided random-sign p-value is `2 / 2^9 = 0.00390625`. Significance is mathematically possible, but power remains limited and should be discussed through effect/interval sensitivity rather than guaranteed in advance. No additional rooms or seeds may be counted as independent observations to make a p-value smaller.
+
+The final result audit must explicitly rule out all of these failure modes:
+
+- **p-hacking:** no unsealed endpoint, stage, subset, test, threshold, or guidance scale may replace the primary analysis;
+- **HARKing:** hypotheses and directional interpretations are written before held-out outcomes are opened;
+- **multiple comparisons:** the three primary contrasts use Holm correction; secondary families are separately labeled and corrected;
+- **optional stopping:** fold/seed/attempt counts are fixed before results and are not extended because p is near 0.05;
+- **pseudoreplication:** rooms, variants, seeds, and attempts remain nested inside dungeon identity;
+- **seed cherry-picking:** every sealed seed is reported, including failed training or poor outcomes;
+- **data leakage:** tokenizer, checkpoint choice, thresholds, guidance, repair, and baseline tuning use outer-training identities only;
+- **survivorship bias:** timeouts/errors/invalid outputs remain in the denominator and missing paired records abort inference;
+- **threshold dichotomy:** statistical significance is not equated with architectural usefulness or practical effect;
+- **effect/interval omission:** every p-value is accompanied by fold effects and uncertainty;
+- **dependence/model-selection bias:** repeated stages and model-selection evaluations are not treated as fresh independent tests.
+
+### 29.6 Final go/no-go decision
+
+The codebase is **not yet authorized for confirmatory model execution** until the following remaining blockers are closed:
+
+1. implement the batch attempt executor and atomic ledger, including injected exception/timeout paths;
+2. implement the saved block-liveness preflight report, especially end-to-end perturbation, per-objective gradients/cosines, gate saturation, and train/inference condition parity;
+3. finish the evaluator-integrity fixture bank and independent subset comparator;
+4. freeze the mission-graph/sampling manifest and training-only guidance calibration;
+5. provide publication-eligible baselines or narrow the paper claims accordingly;
+6. run one final locked-environment test campaign and resolve or pin the dependency warnings;
+7. execute only fresh fold/seed runs and generate all tables directly from immutable attempted records.
+
+Passing software tests establishes that the designed paths are connected and fail closed. It does not establish that the learned blocks use those paths strongly enough, improve exact validity, or yield a nonzero population effect. Those are the fresh experiment's questions.
+
+### 29.7 Continuation verification: causal local context and objective interaction
+
+The 2026-09-03 continuation audited Block III with fixed diffusion inputs and then traced the real neighbor-data policy end to end.
+
+- A real `DualStreamConditionEncoder` plus the real graph-to-grid U-Net was run at a fixed latent and timestep. Perturbing only one neighbor latent changed the denoiser output; perturbing only mission-node features also changed it. Backpropagation reached both the neighbor tensor and node-feature tensor. This and the objective-gradient diagnostic test passed as a two-test run in 77.96 seconds.
+- All 18 full-corpus mission graphs are cyclic directed graphs. Before the correction, their fallback placed all rooms in one generation batch, leaving zero generated neighbor latents at condition-construction time even though training exposed 1,224 spatial neighbors. Of those spatial pairs, 636 were not mission-graph neighbors.
+- The shared causal policy now produces singleton canonical layers for cyclic/undirected graphs and topological layers for DAGs. Across all 459 rooms, 435 earlier room-backed mission neighbors can be teacher-forced and later reproduced at inference. The default training subset contains 356 rooms and 338 such neighbor observations; no room has more than three causal neighbor maps in that subset.
+- The incident-edge census contains 1,011 non-self room incidents: 870 point to another rendered room and 141 to semantic/unrendered nodes. One corpus room had a self-loop that previously fabricated a boundary door. One remaining physical room has five non-self incident neighbors; its four-direction room representation now merges overflow semantics deterministically instead of dropping the fifth edge silently. The global graph encoder and global LogicNet still receive the complete graph.
+- The full Zelda-loader plus LogicNet-gradient group passed 46 tests after causal neighbor correction. After boundary/topology alignment, a broader overlapping loader/gradient/discrete/topology group passed 50 tests. Focused non-edge adjacency, self-loop, cyclic-order, and unresolved directed-flow regressions passed separately. These counts overlap and must not be added.
+- Ruff passed on every modified Python file, `compileall` passed for `src`, the YAML configuration parsed successfully, and `git diff --check` passed. Expected dependency warnings remain unchanged. Graphify was refreshed after the final code edits to 34,635 nodes, 63,494 edges, and 905 communities.
+
+These results close the static causal-wiring question and the discovered train-inference availability leak. They do **not** close the empirical liveness gate: the sealed training-only preflight must still save sensitivity distributions, objective norms/cosines over diverse dungeon batches, gate/attention statistics, and one same-room train-versus-generation parity record before the full experiment matrix starts.

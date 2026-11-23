@@ -13,6 +13,7 @@ def _ensure_initialized(font_module: Any) -> None:
     init = getattr(font_module, "init", None)
     if callable(get_init) and not get_init() and callable(init):
         init()
+        clear_font_cache()
 
 
 def get_sys_font(

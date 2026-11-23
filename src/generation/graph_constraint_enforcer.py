@@ -141,7 +141,8 @@ class GraphConstraintEnforcer:
             visual_grid, 
             boundary, 
             valid_neighbors, 
-            layout_map
+            layout_map,
+            connection_realizations=mission_graph.get('connection_realizations'),
         )
 
         visual_grid = self._place_room_anchor(
@@ -216,22 +217,21 @@ class GraphConstraintEnforcer:
                 if len(edge) >= 2:
                     src, dst = edge[0], edge[1]
                     edge_data = dict(edge[2]) if len(edge) >= 3 and isinstance(edge[2], dict) else {}
-                    raw_type = edge_data.get('edge_type', edge_data.get('type', edge_data.get('label', 'open')))
-                    edge_type = str(getattr(raw_type, 'name', raw_type) or 'open').strip().lower()
-                    if edge_type.startswith('edgetype.'):
-                        edge_type = edge_type.split('.', 1)[1]
+                    edge_type = _normalize_edge_type_token(edge_data)
                     # These links are intentionally not represented as normal
                     # doorway tiles. A secret passage needs discovery-state
                     # mechanics and a window is visual-only; creating an open
                     # door or raising midway through enforcement corrupts the
                     # graph-to-grid contract either way.
-                    if edge_type in {'visual_link', 'window', 'hidden', 'secret'}:
+                    if edge_type in _NON_PHYSICAL_DOOR_EDGE_TYPES:
                         continue
                     metadata = edge_data.get('metadata', {})
                     implied_reverse = bool(
                         isinstance(metadata, dict) and metadata.get('implied_reverse', False)
                     )
                     gate_owner = dst if implied_reverse else src
+                    if isinstance(metadata, dict) and metadata.get('shared_physical_door'):
+                        gate_owner = metadata['physical_door_owner']
                     edge_data['_spatial_gate_here'] = bool(node_id == gate_owner)
                     if src == node_id:
                         existing = neighbors.get(dst)
@@ -253,6 +253,10 @@ class GraphConstraintEnforcer:
         if edge_type.startswith('edgetype.'):
             edge_type = edge_type.split('.', 1)[1]
 
+        if edge_type in {'item_locked', 'item_gate'}:
+            # There is no dedicated item-door tile. The recorded passage's
+            # graph state owns the typed item requirement during traversal.
+            return int(self.DOOR_TILE_IDS['puzzle'])
         if edge_type in {'open', 'path', 'shortcut', ''}:
             return int(self.DOOR_TILE_IDS['open'])
         if edge_type in {'hidden', 'secret'}:
@@ -285,12 +289,35 @@ class GraphConstraintEnforcer:
         grid: np.ndarray,
         boundary: RoomBoundary,
         valid_neighbors: Dict[int, Dict[str, Any]],
-        layout_map: Dict[int, Tuple[int, int, int, int]]
+        layout_map: Dict[int, Tuple[int, int, int, int]],
+        *,
+        connection_realizations: Optional[Dict] = None,
     ) -> np.ndarray:
         """Create doors to valid neighbor rooms only."""
         
         for neighbor_id, edge_data in valid_neighbors.items():
             if neighbor_id not in layout_map:
+                continue
+            if connection_realizations is not None:
+                forward = connection_realizations.get((boundary.node_id, neighbor_id), {})
+                reverse = connection_realizations.get((neighbor_id, boundary.node_id), {})
+                if forward.get('mode') == 'graph_transition' or reverse.get('mode') == 'graph_transition':
+                    continue  # Recorded interior stair endpoints own this edge.
+                # The stitcher owns aperture placement and corridor routing.
+                # Recomputing a single midpoint can seal a two-cell doorway
+                # or disconnect a routed edge after it was already verified.
+                cells = set()
+                for edge in ((boundary.node_id, neighbor_id), (neighbor_id, boundary.node_id)):
+                    for row, col in connection_realizations.get(edge, {}).get('cells', []):
+                        if (boundary.x_min <= col <= boundary.x_max
+                                and boundary.y_min <= row <= boundary.y_max
+                                and (col in (boundary.x_min, boundary.x_max)
+                                     or row in (boundary.y_min, boundary.y_max))):
+                            cells.add((row, col))
+                if not cells:
+                    raise ValueError(f"No recorded doorway for edge {boundary.node_id!r}->{neighbor_id!r}.")
+                for row, col in cells:
+                    grid[row, col] = self._door_tile_for_edge(edge_data)
                 continue
             
             neighbor_bounds = layout_map[neighbor_id]
@@ -332,37 +359,34 @@ class GraphConstraintEnforcer:
             or raw_type in {'goal', 'triforce'}
             or bool({'t', 'goal', 'triforce'} & labels)
         )
-        anchor_id = self.GOAL_ID if is_goal else (self.START_ID if is_start else None)
-        if anchor_id is None:
-            return grid
-
         center_x = (boundary.x_min + boundary.x_max) // 2
         center_y = (boundary.y_min + boundary.y_max) // 2
-        candidates: List[Tuple[int, int, int]] = []
-        for y in range(boundary.y_min + 1, boundary.y_max):
-            for x in range(boundary.x_min + 1, boundary.x_max):
-                if int(grid[y, x]) != int(self.FLOOR_ID):
-                    continue
-                distance = abs(x - center_x) + abs(y - center_y)
-                candidates.append((distance, y, x))
-        if not candidates:
-            # A generated all-wall room cannot carry a required START/GOAL
-            # contract. Carve the smallest deterministic interior foothold so
-            # the subsequent validator sees a real anchor instead of an
-            # uncaught enforcement failure. Door carving has already occurred;
-            # this does not replace any topology edge.
-            y = max(boundary.y_min + 1, min(boundary.y_max - 1, center_y))
-            x = max(boundary.x_min + 1, min(boundary.x_max - 1, center_x))
-            if not (boundary.y_min < y < boundary.y_max and boundary.x_min < x < boundary.x_max):
-                raise ValueError(
-                    f"Room {boundary.node_id!r} has no interior cell for its START/GOAL anchor"
-                )
-            grid[y, x] = int(self.FLOOR_ID)
-            candidates.append((0, y, x))
-        _, y, x = min(candidates)
-        grid[y, x] = int(anchor_id)
+        interior = [(y, x) for y in range(boundary.y_min + 1, boundary.y_max)
+                    for x in range(boundary.x_min + 1, boundary.x_max)]
+        # Constrained neural rooms or retrieved rooms may already have anchors.
+        # Keep their positions when valid, remove duplicates and markers that
+        # contradict this room's role, then materialize each requested role once.
+        previous = {tile: [(y, x) for y, x in interior if int(grid[y, x]) == tile]
+                    for tile in (self.START_ID, self.GOAL_ID)}
+        for positions in previous.values():
+            for y, x in positions:
+                grid[y, x] = self.FLOOR_ID
+        placed = set()
+        for anchor_id, enabled in ((self.START_ID, is_start), (self.GOAL_ID, is_goal)):
+            if not enabled or anchor_id is None:
+                continue
+            candidates = [pos for pos in previous[anchor_id] if pos not in placed]
+            if not candidates:
+                candidates = [(y, x) for y, x in interior if int(grid[y, x]) == self.FLOOR_ID]
+            if not candidates:
+                candidates = [pos for pos in interior if pos not in placed]
+            if not candidates:
+                raise ValueError(f"Room {boundary.node_id!r} has no distinct interior cell for its anchors")
+            y, x = min(candidates, key=lambda pos: (abs(pos[1] - center_x) + abs(pos[0] - center_y), pos))
+            grid[y, x] = int(anchor_id)
+            placed.add((y, x))
         return grid
-    
+
     def _find_door_position(
         self,
         room_boundary: RoomBoundary,
@@ -418,6 +442,27 @@ class GraphConstraintEnforcer:
         return None
 
 
+def _canonical_edge_key(u: Any, v: Any) -> Tuple[Any, Any]:
+    """Return an order-invariant undirected edge key supporting mixed node ID types."""
+    try:
+        return (u, v) if u <= v else (v, u)
+    except TypeError:
+        key_u = (type(u).__name__, str(u))
+        key_v = (type(v).__name__, str(v))
+        return (u, v) if key_u <= key_v else (v, u)
+
+
+def _normalize_edge_type_token(edge_data: Dict[str, Any]) -> str:
+    raw = edge_data.get('edge_type', edge_data.get('type', edge_data.get('label', 'open')))
+    token = str(getattr(raw, 'name', raw) or 'open').strip().lower()
+    if token.startswith('edgetype.'):
+        token = token.split('.', 1)[1]
+    return token
+
+
+_NON_PHYSICAL_DOOR_EDGE_TYPES = frozenset({'visual_link', 'window', 'hidden', 'secret'})
+
+
 def enforce_all_rooms(
     visual_grid: np.ndarray,
     mission_graph: Dict,
@@ -440,11 +485,44 @@ def enforce_all_rooms(
     
     logger.info(f"Enforcing graph constraints on {len(layout_map)} rooms...")
     
+    # Build a working copy so promoting an adjacent physical room to start
+    # never mutates the caller's graph and IS visible to enforce_graph_constraints.
+    working_nodes = {
+        nid: (dict(attrs) if isinstance(attrs, dict) else {})
+        for nid, attrs in dict(mission_graph.get('nodes', {})).items()
+    }
+    working_graph = dict(mission_graph)
+    working_graph['nodes'] = working_nodes
+
+    def _node_is_start(nid: Any) -> bool:
+        attrs = working_nodes.get(nid, {})
+        if bool(attrs.get('is_start')):
+            return True
+        tokens = {t.strip().lower() for t in str(attrs.get('label', '')).split(',') if t.strip()}
+        return 's' in tokens
+
+    has_start = any(_node_is_start(nid) for nid in layout_map)
+    if not has_start:
+        # Resolve via virtual start pointer or adjacent edge
+        for edge in working_graph.get('edges', []):
+            if len(edge) >= 2:
+                src, dst = edge[0], edge[1]
+                src_is_start = _node_is_start(src)
+                dst_is_start = _node_is_start(dst)
+                if src_is_start and dst in layout_map:
+                    working_nodes.setdefault(dst, {})['is_start'] = True
+                    has_start = True
+                    break
+                elif dst_is_start and src in layout_map:
+                    working_nodes.setdefault(src, {})['is_start'] = True
+                    has_start = True
+                    break
+
     for node_id in layout_map.keys():
         visual_grid = enforcer.enforce_graph_constraints(
             visual_grid,
             node_id,
-            mission_graph,
+            working_graph,
             layout_map,
             tile_config
         )
@@ -484,50 +562,42 @@ def verify_topology_match(
         int(tile_config.get('hazard', tile_config.get('door', 2))),
     }
     
-    # Count expected connections from graph
+    # Count expected connections from graph (skipping self-loops, virtual-node
+    # pointers, and non-door links that _get_valid_neighbors intentionally omits).
+    nodes_map = dict(mission_graph.get('nodes', {})) if isinstance(mission_graph, dict) else {}
     expected_edges = set()
     if 'edges' in mission_graph:
         for edge in mission_graph['edges']:
             if len(edge) >= 2:
                 src, dst = edge[0], edge[1]
-                # Store as sorted tuple to avoid direction issues
-                expected_edges.add(tuple(sorted([src, dst])))
+                if src == dst:
+                    continue
+                if (
+                    bool(dict(nodes_map.get(src, {})).get('is_virtual'))
+                    or bool(dict(nodes_map.get(dst, {})).get('is_virtual'))
+                ):
+                    continue
+                edge_data = dict(edge[2]) if len(edge) >= 3 and isinstance(edge[2], dict) else {}
+                if _normalize_edge_type_token(edge_data) in _NON_PHYSICAL_DOOR_EDGE_TYPES:
+                    continue
+                expected_edges.add(_canonical_edge_key(src, dst))
     
     # Count actual connections (doors) in spatial layout
     actual_edges = set()
     
     for node_id, bounds in layout_map.items():
         x_min, y_min, x_max, y_max = bounds
-        
-        # Check perimeter for doors
-        # Top edge
-        for x in range(x_min, x_max + 1):
-            if int(visual_grid[y_min, x]) in door_ids:
-                # Find which room this connects to
-                neighbor_id = _find_room_at_position(x, y_min - 1, layout_map)
-                if neighbor_id is not None:
-                    actual_edges.add(tuple(sorted([node_id, neighbor_id])))
-        
-        # Bottom edge
-        for x in range(x_min, x_max + 1):
-            if int(visual_grid[y_max, x]) in door_ids:
-                neighbor_id = _find_room_at_position(x, y_max + 1, layout_map)
-                if neighbor_id is not None:
-                    actual_edges.add(tuple(sorted([node_id, neighbor_id])))
-        
-        # Left edge
-        for y in range(y_min, y_max + 1):
-            if int(visual_grid[y, x_min]) in door_ids:
-                neighbor_id = _find_room_at_position(x_min - 1, y, layout_map)
-                if neighbor_id is not None:
-                    actual_edges.add(tuple(sorted([node_id, neighbor_id])))
-        
-        # Right edge
-        for y in range(y_min, y_max + 1):
-            if int(visual_grid[y, x_max]) in door_ids:
-                neighbor_id = _find_room_at_position(x_max + 1, y, layout_map)
-                if neighbor_id is not None:
-                    actual_edges.add(tuple(sorted([node_id, neighbor_id])))
+        perimeter_probes = (
+            [(x, y_min, x, y_min - 1) for x in range(x_min, x_max + 1)]
+            + [(x, y_max, x, y_max + 1) for x in range(x_min, x_max + 1)]
+            + [(x_min, y, x_min - 1, y) for y in range(y_min, y_max + 1)]
+            + [(x_max, y, x_max + 1, y) for y in range(y_min, y_max + 1)]
+        )
+        for px, py, nx_coord, ny_coord in perimeter_probes:
+            if int(visual_grid[py, px]) in door_ids:
+                neighbor_id = _find_room_at_position(nx_coord, ny_coord, layout_map)
+                if neighbor_id is not None and neighbor_id != node_id:
+                    actual_edges.add(_canonical_edge_key(node_id, neighbor_id))
     
     # Compare sets
     missing_edges = expected_edges - actual_edges

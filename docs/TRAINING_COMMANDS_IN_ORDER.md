@@ -1,7 +1,7 @@
 
 # Training Commands In Execution Order
 
-Last verified against the live CLI parsers: 2026-07-23
+Last verified: 2026-11-12
 
 This is the canonical, strictly sequential PowerShell runbook for training, auditing, and reproducing every experiment in the repository from a clean checkout. All commands should be executed from the repository root.
 
@@ -11,13 +11,13 @@ This is the canonical, strictly sequential PowerShell runbook for training, audi
 * **Step 2** : Run hyperparameter preflight check (`python scripts/check_training_hyperparameters.py`).
 * **Step 3** : Run quick 2-batch smoke test (`python main.py train --stage all --quick`).
 
-#### **Phase 2: Core Four-Stage Model Stack**
+#### **Phase 2: Primary Generator (`G-LMDM`) & Continuous Comparator Stack**
 
-* **Step 4** : Train Stage 1 — VQ-VAE Tokenizer (`python main.py train --stage vqvae`).
-* **Step 5** : Train Stage 2 — Latent Diffusion Teacher & Joint LogicNet (`python main.py train --stage diffusion`).
-* *Step 5a* : Optional reduced-capacity 48-channel U-Net profile.
-* **Step 6** : Train Stage 3 — LCM-LoRA Fast Sampler (`python main.py train --stage fast_sampler`).
-* **Step 7** : Train Stage 4 — Discrete Masked-Room Model (`python main.py train --stage masked_room`).
+* **Step 4** : Train **Primary `G-LMDM`** — Graph-Conditioned Logic-Regularized Discrete Masked Model (`python main.py train --stage masked_room`, `3.58M` train / `3.36M` infer; `gps` + `RRWP` + direct `16x11` `LogicNet` `alpha_logic=0.1`), plus `G`-only ablation (`--config configs\zelda_hmolqd_masked_small.yaml`).
+* **Step 5** : Train Continuous Comparator Stage 1 — VQ-VAE Tokenizer (`python main.py train --stage vqvae`, `17.37M` params; `RQ2`/`H2` comparator).
+* **Step 6** : Train Continuous Comparator Stage 2 — Latent Diffusion `UNet[1,2]` (`47.13M` total) or `DiT+Flow` (`22.44M` total) (`python main.py train --stage diffusion`).
+* *Step 6a* : Optional reduced-capacity 48-channel U-Net profile.
+* **Step 7** : *(Optional efficiency extension)* Train Stage 3 — Consistency Fast Sampler (`python main.py train --stage fast_sampler`).
 * *Step 7a* : Alternative single-command full-stack run (`python main.py train --stage all`).
 
 #### **Phase 3: Post-Training Inspection & Evaluation**
@@ -27,7 +27,7 @@ This is the canonical, strictly sequential PowerShell runbook for training, audi
 * **Step 10** : Run fixed-graph multi-seed audit (`python scripts/run_fixed_graph_multi_seed_audit.py`).
 * **Step 11** : Export manual topology comparison & audit fixed graphs.
 
-#### **Phase 4: Thesis Chapter 4 Publication Reproduction Runs**
+#### **Phase 4: Publication Reproduction & Benchmark Evaluation Runs**
 
 * **Step 12** : Dungeon 9 holdout retraining & zero-leakage novelty audit (Table 4.1 & 4.2).
 * **Step 13** : Multi-solver search comparison on generated dungeons (Table 4.5).
@@ -54,7 +54,7 @@ This is the canonical, strictly sequential PowerShell runbook for training, audi
 Phase 1: Setup & Preflight      (Steps 1 – 3)
 Phase 2: Core Model Stack       (Steps 4 – 7)
 Phase 3: Inspection & Eval      (Steps 8 – 11)
-Phase 4: Chapter 4 Thesis Runs  (Steps 12 – 16)
+Phase 4: Publication Evaluation (Steps 12 – 16)
 Phase 5: Multi-Seed & Ablations (Steps 17 – 24)
 ```
 
@@ -150,7 +150,7 @@ if (!(Test-Path $DiffusionCheckpoint)) {
 
 #### Step 5a (Optional): Reduced-Capacity Small Diffusion Profile
 
-The 96-channel teacher contains ~66M parameters. To run a smaller 12.4M parameter model (48 channels, 1 res block, 192 context dim), run:
+The full `UNet[1,2]` 96-channel continuous comparator contains `26,332,390` denoiser parameters (`47,126,047` total with `17.37M` `VQ-VAE`, `3.20M` `ConditionEncoder`, and `0.23M` `LogicNet`, vs. `3,584,905` total for canonical discrete `G-LMDM`). To run a smaller 48-channel U-Net comparator profile (48 channels, 1 res block, 192 context dim), run:
 
 ```powershell
 $SmallRun = "outputs\diffusion_small_seed_$Seed"
@@ -216,14 +216,27 @@ if (!(Test-Path $FastSamplerCheckpoint)) {
 }
 ```
 
-### Step 7: Stage 4 — Train Discrete Masked-Room Generator
+### Step 7: Primary Discrete Generator — Train `G-LMDM` (`masked_room`)
+
+Canonical discrete training uses [`configs/zelda_hmolqd.yaml`](../configs/zelda_hmolqd.yaml) (`condition_gnn_type=gps`, `logic_net_enabled=true`, `alpha_logic=0.1`, `3,584,905` train / `3,357,261` inference parameters). Pair it with [`configs/zelda_hmolqd_masked_small.yaml`](../configs/zelda_hmolqd_masked_small.yaml) for the `G`-only (no-`LogicNet`) ablation:
 
 ```powershell
+# Canonical G-LMDM (G-LG):
 python main.py train `
   --config $Config `
   --data-dir $Data `
   --stage masked_room `
   --output-dir $Run `
+  --seed $Seed `
+  --no-auto-resume `
+  --verbose
+
+# G-only Masked Ablation (logic_net_enabled=false):
+python main.py train `
+  --config "configs\zelda_hmolqd_masked_small.yaml" `
+  --data-dir $Data `
+  --stage masked_room `
+  --output-dir "outputs\masked_g_only_seed_$Seed" `
   --seed $Seed `
   --no-auto-resume `
   --verbose
@@ -295,7 +308,7 @@ python main.py topology-audit-fixed-graph `
 
 ---
 
-## Phase 4: Thesis Chapter 4 Publication Reproduction Runs
+## Phase 4: Publication Reproduction & Benchmark Evaluation Runs
 
 ### Step 12: Dungeon 9 Holdout Retraining & Zero-Leakage Novelty Audit (Table 4.1 & Table 4.2)
 
@@ -593,65 +606,3 @@ foreach ($Persona in "speedrunner", "explorer", "combatant", "cautious") {
 - **Interrupted Experiment**: Same output directory + `--auto-resume`.
 - **Full State Resume**: `--resume <checkpoint.pth>` (restores model, optimizer, scheduler, epoch, step, AMP scaler).
 - **Diffusion Warm-Start**: `--warm-start <weights.pth|safetensors>` (transfers model weights, resets optimizer & epoch counters).
-
-Viewed TRAINING_COMMANDS_IN_ORDER.md:1-678
-Edited TRAINING_COMMANDS_IN_ORDER.md
-
-I have restructured [docs/TRAINING_COMMANDS_IN_ORDER.md](file:///f:/KLTN/docs/TRAINING_COMMANDS_IN_ORDER.md) into a **strictly ordered, 24-step master execution roadmap** from start to finish.
-
----
-
-### Master Step-by-Step Execution Order Summary
-
-```
-Phase 1: Setup & Preflight      (Steps 1 – 3)
-Phase 2: Core Model Stack       (Steps 4 – 7)
-Phase 3: Inspection & Eval      (Steps 8 – 11)
-Phase 4: Chapter 4 Thesis Runs  (Steps 12 – 16)
-Phase 5: Multi-Seed & Ablations (Steps 17 – 24)
-```
-
-#### **Phase 1: Setup & Preflight**
-
-* **Step 1**: Install dependencies (`pip install -r requirements-hmolqd.txt`) & set PowerShell environment variables.
-* **Step 2**: Run hyperparameter preflight check (`python scripts/check_training_hyperparameters.py`).
-* **Step 3**: Run quick 2-batch smoke test (`python main.py train --stage all --quick`).
-
-#### **Phase 2: Core Four-Stage Model Stack**
-
-* **Step 4**: Train Stage 1 — VQ-VAE Tokenizer (`python main.py train --stage vqvae`).
-* **Step 5**: Train Stage 2 — Latent Diffusion Teacher & Joint LogicNet (`python main.py train --stage diffusion`).
-  * *Step 5a*: Optional reduced-capacity 48-channel U-Net profile.
-* **Step 6**: Train Stage 3 — LCM-LoRA Fast Sampler (`python main.py train --stage fast_sampler`).
-* **Step 7**: Train Stage 4 — Discrete Masked-Room Model (`python main.py train --stage masked_room`).
-  * *Step 7a*: Alternative single-command full-stack run (`python main.py train --stage all`).
-
-#### **Phase 3: Post-Training Inspection & Evaluation**
-
-* **Step 8**: Run fixed-topology visual audit (`python scripts/run_fast_sampler_visual_audit.py`).
-* **Step 9**: Audit original Zelda solvability (`python main.py validate --all --mode full`).
-* **Step 10**: Run fixed-graph multi-seed audit (`python scripts/run_fixed_graph_multi_seed_audit.py`).
-* **Step 11**: Export manual topology comparison & audit fixed graphs.
-
-#### **Phase 4: Thesis Chapter 4 Publication Reproduction Runs**
-
-* **Step 12**: Dungeon 9 holdout retraining & zero-leakage novelty audit (Table 4.1 & 4.2).
-* **Step 13**: Multi-solver search comparison on generated dungeons (Table 4.5).
-* **Step 14**: MAP-Elites / QD archive coverage & materialization (Table 4.15 & Fig 4.10).
-* **Step 15**: OOD dungeon size & complexity scaling probe (Table 4.16 & 4.17).
-* **Step 16**: P-CBS 8-persona cognitive playability benchmark (Table 4.13 & Fig 4.8).
-
-#### **Phase 5: Multi-Seed Retraining & Model Ablations**
-
-* **Step 17**: Retrain baseline across seeds 7, 3407, 0.
-* **Step 18**: Train learned puzzle-stage candidate experiments.
-* **Step 19**: Tokenizer ablation sweeps (VQ-VAE-2, FSQ, Codebook capacity).
-* **Step 20**: Run standalone LogicNet tile classifier calibration.
-* **Step 21**: Generate & execute model-architecture ablation manifest.
-* **Step 22**: Run multi-GPU distributed diffusion (DDP / `gloo`).
-* **Step 23**: Train independent baselines (Gaussian VAE, DCGAN, Autoregressive LLM).
-* **Step 24**: Train optional RL persona playtesters (SB3).
-
----
-
-The document is now 100% linear, sequential, and fully up-to-date!

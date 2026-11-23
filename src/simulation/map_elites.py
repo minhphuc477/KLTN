@@ -26,10 +26,10 @@ import networkx as nx
 # Import from canonical source
 from src.core.definitions import (
     SEMANTIC_PALETTE,
-    parse_edge_type_tokens,
     parse_node_label_tokens,
 )
 from src.simulation.validation_helpers import MetricsEngine
+from src.simulation.edge_logic import edge_constraints_from_data
 from src.evaluation.preference_buffer import QDPreferenceBuffer
 
 try:
@@ -211,10 +211,7 @@ class MAPElitesEvaluator:
             locked_types = set(self._iter_locked_edge_types())
             gated_edges = 0
             for _, _, data in mission_graph.edges(data=True):
-                edge_tokens = parse_edge_type_tokens(
-                    label=str(data.get('label', '') or ''),
-                    edge_type=str(data.get('edge_type', data.get('type', '')) or ''),
-                )
+                edge_tokens = edge_constraints_from_data(data)
                 if any(tok in locked_types for tok in edge_tokens):
                     gated_edges += 1
             gating_density = self._clip01(gated_edges / max(1, n_edges))
@@ -323,10 +320,7 @@ class MAPElitesEvaluator:
             locked_types = set(self._iter_locked_edge_types())
             lock_count = 0
             for _, _, data in mission_graph.edges(data=True):
-                edge_tokens = parse_edge_type_tokens(
-                    label=str(data.get('label', '') or ''),
-                    edge_type=str(data.get('edge_type', data.get('type', '')) or ''),
-                )
+                edge_tokens = edge_constraints_from_data(data)
                 if any(token in locked_types for token in edge_tokens):
                     lock_count += 1
 

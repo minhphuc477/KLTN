@@ -11,6 +11,7 @@ import numpy as np
 from src.pipeline.room_stitching import build_stitched_room_layout_from_slots
 
 from .records import PublicationResultRecord, StageResult, changed_tile_metrics
+from .room_evidence import categorical_room, floor_structure
 
 
 ExactValidator = Callable[[np.ndarray, str], Mapping[str, Any]]
@@ -56,6 +57,7 @@ def extract_publication_stage_grids(generation_result: Any) -> Dict[str, np.ndar
             room_grids,
             physical_graph,
             slot_positions,
+            fixed_graph_transitions=getattr(stitched_layout, 'connection_realizations', None),
         ).dungeon_grid
 
     raw_grid = _stitch(raw_rooms)
@@ -106,7 +108,7 @@ def _validate_stage(
     except Exception as exc:  # noqa: BLE001 - validator failures are recorded evidence
         return StageResult(
             stage=stage,
-            status="validator_error",
+            status="timeout" if isinstance(exc, TimeoutError) else "validator_error",
             grid_path=str(grid_path),
             grid_sha256=grid_sha256,
             shape=tuple(int(value) for value in grid.shape),
@@ -122,6 +124,12 @@ def _validate_stage(
         status = "validator_error"
         exact_valid = None
         validation.setdefault("error_type", "non_exact_validator_result")
+    elif termination not in {"solved", "goal_reached", "exhausted", "frontier_exhausted", "invalid"}:
+        # A boolean failure from an unfinished or broken search is not an
+        # exhaustive proof of invalidity, even if the solver is exact in principle.
+        status = "validator_error"
+        exact_valid = None
+        validation.setdefault("error_type", "unresolved_exact_validator_termination")
     else:
         verdict = validation.get("accepted", validation.get("solvable"))
         if not isinstance(verdict, (bool, np.bool_)):
@@ -163,6 +171,9 @@ def build_publication_result_record(
     """Create one complete record from an already generated canonical result."""
     grids = extract_publication_stage_grids(generation_result)
     root = Path(output_dir)
+    # Reserve a fresh attempt directory before writing any evidence. Reusing it
+    # would overwrite grids referred to by an earlier record and its hashes.
+    (root / "grids").mkdir(parents=True, exist_ok=False)
     stages = {
         stage: _validate_stage(
             stage=stage,
@@ -182,6 +193,30 @@ def build_publication_result_record(
         ),
         "raw_to_compiled": changed_tile_metrics(grids["raw"], grids["compiled"]),
     }
+    # Stitched raw grids already include boundary carving. Retain the true
+    # decoder outputs separately, including edits assembly might erase.
+    room_evidence = []
+    for index, (room_id, room) in enumerate(generation_result.rooms.items()):
+        room_grids = {
+            "raw": categorical_room(room.raw_neural_grid),
+            "constrained": categorical_room(room.neural_grid),
+            "repaired": categorical_room(room.room_grid),
+        }
+        artifacts = {}
+        for stage, grid in room_grids.items():
+            path = root / "rooms" / f"{index:06d}" / f"{stage}.npy"
+            artifacts[stage] = {"path": str(path), "sha256": _write_grid(path, grid)}
+        room_evidence.append({
+            "room_id": str(room_id), "artifacts": artifacts,
+            "raw_structure": floor_structure(room_grids["raw"]),
+            "raw_to_constrained": changed_tile_metrics(room_grids["raw"], room_grids["constrained"]),
+            "constrained_to_repaired": changed_tile_metrics(room_grids["constrained"], room_grids["repaired"]),
+            "training_reference": dict(getattr(room, "metrics", {}).get("training_reference", {})),
+            "control_diagnostics": dict(getattr(room, "metrics", {}).get("control_diagnostics", {})),
+        })
+    repair_metrics["unassembled_rooms"] = room_evidence
+    from .graph_evidence import write_graph_evidence
+    repair_metrics['graph_context'] = write_graph_evidence(generation_result, root)
     metrics = dict(getattr(generation_result, "metrics", {}) or {})
     timing = {
         key: value
@@ -195,8 +230,8 @@ def build_publication_result_record(
         dataset_manifest_sha256=dataset_manifest_sha256,
         protocol_sha256=protocol_sha256,
         outer_fold=outer_fold,
-        train_seed=int(train_seed),
-        sampling_seed=int(sampling_seed),
+        train_seed=train_seed,
+        sampling_seed=sampling_seed,
         mission_graph_id=mission_graph_id,
         model_id=model_id,
         inference_variant=inference_variant,

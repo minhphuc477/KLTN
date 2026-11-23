@@ -358,19 +358,55 @@ def _extract_room_start_goal(
         or pipeline._parse_room_coord(attrs.get('exit'))
     )
 
-    if start is None:
-        has_pred = graph.in_degree(room_id) > 0 if graph.is_directed() else graph.degree(room_id) > 0
-        start = (ROOM_HEIGHT // 2, 0) if has_pred else (ROOM_HEIGHT // 2, ROOM_WIDTH // 4)
+    if start is None or goal is None:
+        semantics = pipeline._extract_room_topology_semantics(graph, room_id)
+        role_flags = pipeline._room_role_flags(dict(attrs))
+        door_aprons = {
+            "N": (2, ROOM_WIDTH // 2),
+            "S": (ROOM_HEIGHT - 3, ROOM_WIDTH // 2),
+            "W": (ROOM_HEIGHT // 2, 2),
+            "E": (ROOM_HEIGHT // 2, ROOM_WIDTH - 3),
+        }
+        center = (ROOM_HEIGHT // 2, ROOM_WIDTH // 2)
+        dir_order = ("N", "S", "W", "E")
+        active_dirs = [
+            d for d in dir_order if bool(semantics["required_doors"].get(d, False))
+        ]
+        incoming_active = [
+            d for d in active_dirs if d in semantics["incoming_dirs"]
+        ]
+        outgoing_active = [
+            d for d in active_dirs if d in semantics["outgoing_dirs"]
+        ]
 
-    if goal is None:
-        has_succ = graph.out_degree(room_id) > 0 if graph.is_directed() else graph.degree(room_id) > 0
-        goal = (ROOM_HEIGHT // 2, ROOM_WIDTH - 1) if has_succ else (ROOM_HEIGHT // 2, (3 * ROOM_WIDTH) // 4)
+        if start is None:
+            if role_flags.get("is_start", False):
+                start = center
+            elif incoming_active:
+                start = door_aprons[incoming_active[0]]
+            elif active_dirs:
+                start = door_aprons[active_dirs[0]]
+            else:
+                start = (ROOM_HEIGHT // 2, max(2, ROOM_WIDTH // 4))
+
+        if goal is None:
+            if role_flags.get("has_goal", False):
+                goal = center
+            elif outgoing_active:
+                diff = [d for d in outgoing_active if door_aprons[d] != start]
+                goal = door_aprons[diff[0] if diff else outgoing_active[0]]
+            elif active_dirs:
+                diff = [d for d in reversed(active_dirs) if door_aprons[d] != start]
+                goal = door_aprons[diff[0]] if diff else center
+            else:
+                goal = (ROOM_HEIGHT // 2, min(ROOM_WIDTH - 3, (3 * ROOM_WIDTH) // 4))
 
     start = pipeline._clamp_room_coord(start)
     goal = pipeline._clamp_room_coord(goal)
 
     if start == goal:
-        goal = pipeline._clamp_room_coord((goal[0], goal[1] + 1))
+        center = pipeline._clamp_room_coord((ROOM_HEIGHT // 2, ROOM_WIDTH // 2))
+        goal = center if start != center else pipeline._clamp_room_coord((start[0], min(ROOM_WIDTH - 3, start[1] + 1)))
 
     return (start, goal)
 
@@ -394,7 +430,7 @@ def _build_room_boundary_constraints(
     else:
         incident.extend(list(graph.neighbors(room_id)))
 
-    incident_unique = sorted(set(incident), key=_stable_node_sort_key)
+    incident_unique = sorted(set(incident) - {room_id}, key=_stable_node_sort_key)
     unresolved: List[Any] = []
     for nid in incident_unique:
         direction = pipeline._infer_direction(graph, source_node=nid, target_node=room_id)
@@ -404,10 +440,13 @@ def _build_room_boundary_constraints(
         has_neighbor[direction] = True
         required_door[direction] = True
 
-    for direction, _nid in zip(["N", "E", "S", "W"], unresolved):
-        if not has_neighbor[direction]:
-            has_neighbor[direction] = True
-            required_door[direction] = True
+    for _nid in unresolved:
+        direction = next(
+            (candidate for candidate in ["N", "E", "S", "W"] if not has_neighbor[candidate]),
+            "N",
+        )
+        has_neighbor[direction] = True
+        required_door[direction] = True
 
     boundary = build_boundary_constraints(has_neighbor=has_neighbor, required_door=required_door)
     return boundary.to(device=pipeline.device, dtype=torch.float32).unsqueeze(0)
@@ -525,41 +564,57 @@ def _extract_room_topology_semantics(
 
     incident: List[Tuple[Any, Dict[str, Any], str]] = []
     if graph.is_directed():
-        incident.extend((nid, dict(graph.get_edge_data(nid, room_id, default={}) or {}), "incoming") for nid in graph.predecessors(room_id))
-        incident.extend((nid, dict(graph.get_edge_data(room_id, nid, default={}) or {}), "outgoing") for nid in graph.successors(room_id))
+        incident.extend((nid, dict(graph.get_edge_data(nid, room_id, default={}) or {}), "incoming") for nid in graph.predecessors(room_id) if nid != room_id)
+        incident.extend((nid, dict(graph.get_edge_data(room_id, nid, default={}) or {}), "outgoing") for nid in graph.successors(room_id) if nid != room_id)
     else:
         incident.extend((nid, dict(graph.get_edge_data(room_id, nid, default={}) or {}), "bidirectional") for nid in graph.neighbors(room_id))
 
-    unresolved: List[Tuple[Any, Dict[str, Any], str]] = []
-    for nid, edge_data, flow in sorted(incident, key=lambda item: _stable_node_sort_key(item[0])):
+    grouped_incident: Dict[Any, List[Tuple[Dict[str, Any], str]]] = {}
+    for nid, edge_data, flow in incident:
+        grouped_incident.setdefault(nid, []).append((edge_data, flow))
+
+    unresolved: List[Tuple[Any, List[Tuple[Dict[str, Any], str]]]] = []
+    for nid in sorted(grouped_incident, key=_stable_node_sort_key):
+        edge_records = grouped_incident[nid]
         direction = pipeline._infer_direction(graph, source_node=nid, target_node=room_id)
         if direction is None:
-            unresolved.append((nid, edge_data, flow))
+            unresolved.append((nid, edge_records))
             continue
         required_doors[direction] = True
-        if flow in {"incoming", "bidirectional"}:
-            incoming_dirs.add(direction)
-        if flow in {"outgoing", "bidirectional"}:
-            outgoing_dirs.add(direction)
-        edge_constraints[direction].update(
-            parse_edge_type_tokens(
-                label=str(edge_data.get("label", "") or ""),
-                edge_type=str(edge_data.get("edge_type", edge_data.get("type", "")) or ""),
+        for edge_data, flow in edge_records:
+            if flow in {"incoming", "bidirectional"}:
+                incoming_dirs.add(direction)
+            if flow in {"outgoing", "bidirectional"}:
+                outgoing_dirs.add(direction)
+            edge_constraints[direction].update(
+                parse_edge_type_tokens(
+                    label=str(edge_data.get("label", "") or ""),
+                    edge_type=str(edge_data.get("edge_type", edge_data.get("type", "")) or ""),
+                )
             )
-        )
 
-    for direction, (_nid, edge_data, _flow) in zip(["N", "E", "S", "W"], unresolved):
-        if required_doors[direction]:
-            continue
-        required_doors[direction] = True
-        incoming_dirs.add(direction)
-        outgoing_dirs.add(direction)
-        edge_constraints[direction].update(
-            parse_edge_type_tokens(
-                label=str(edge_data.get("label", "") or ""),
-                edge_type=str(edge_data.get("edge_type", edge_data.get("type", "")) or ""),
-            )
+    direction_load = {
+        direction: int(required_doors[direction])
+        for direction in ("N", "E", "S", "W")
+    }
+    for _nid, edge_records in unresolved:
+        direction = min(
+            ("N", "E", "S", "W"),
+            key=lambda candidate: direction_load[candidate],
         )
+        direction_load[direction] += 1
+        required_doors[direction] = True
+        for edge_data, flow in edge_records:
+            if flow in {"incoming", "bidirectional"}:
+                incoming_dirs.add(direction)
+            if flow in {"outgoing", "bidirectional"}:
+                outgoing_dirs.add(direction)
+            edge_constraints[direction].update(
+                parse_edge_type_tokens(
+                    label=str(edge_data.get("label", "") or ""),
+                    edge_type=str(edge_data.get("edge_type", edge_data.get("type", "")) or ""),
+                )
+            )
 
     return {
         "required_doors": required_doors,
@@ -807,19 +862,18 @@ def _build_room_graph_context(
     )
 
     def _direction_mask(directions: Set[str]) -> torch.Tensor:
-        channel_indices = [
-            int(ROOM_TOPOLOGY_CHANNELS[channel_name])
-            for direction in sorted(directions)
-            for channel_name in ROOM_TOPOLOGY_DIRECTIONAL_CHANNEL_GROUPS.get(
-                str(direction).upper(),
-                (),
-            )
-            if channel_name in ROOM_TOPOLOGY_CHANNELS
-        ]
-        if not channel_indices:
-            return torch.zeros_like(room_topology_map[:, :1])
-        selected = room_topology_map[:, channel_indices]
-        return selected.amax(dim=1, keepdim=True).clamp(0.0, 1.0)
+        mask = torch.zeros_like(room_topology_map[:, :1])
+        apron_slices = {
+            "N": (slice(2, 3), slice(4, 7)),
+            "S": (slice(ROOM_HEIGHT - 3, ROOM_HEIGHT - 2), slice(4, 7)),
+            "W": (slice(7, 10), slice(2, 3)),
+            "E": (slice(7, 10), slice(ROOM_WIDTH - 3, ROOM_WIDTH - 2)),
+        }
+        for direction in directions:
+            rs, cs = apron_slices.get(str(direction).upper(), (None, None))
+            if rs is not None and cs is not None:
+                mask[:, :, rs, cs] = 1.0
+        return mask
 
     logic_source_mask = _direction_mask(set(semantics["incoming_dirs"]))
     logic_target_mask = _direction_mask(set(semantics["outgoing_dirs"]))
@@ -833,7 +887,8 @@ def _build_room_graph_context(
         'tpe': graph_data.get('tpe'),
         'node_positions': graph_data.get('node_positions'),
         'node_mask': graph_data.get('node_mask'),
-        'has_room_anchor': True,
+        'graph_conditioning_mode': str(getattr(pipeline, "graph_conditioning_mode", None) or ("node_sequence" if getattr(pipeline, "use_graph_node_cross_attention", True) else "pooled")).strip().lower(),
+        'has_room_anchor': str(getattr(pipeline, "graph_conditioning_mode", None) or ("node_sequence" if getattr(pipeline, "use_graph_node_cross_attention", True) else "pooled")).strip().lower() == "node_sequence",
         'mission_graph': mission_graph,
         'current_node_idx': current_node_idx,
         'start_node_id': int(node_to_idx.get(start_node, 0)) if start_node is not None else 0,
@@ -896,6 +951,16 @@ def _build_masked_room_fixed_tokens(
         return fixed_tokens, fixed_mask
 
     semantics = pipeline._extract_room_topology_semantics(graph, room_id)
+    wall_id = int(SEMANTIC_PALETTE["WALL"])
+    fixed_tokens[0, 0, :] = wall_id
+    fixed_tokens[0, ROOM_HEIGHT - 1, :] = wall_id
+    fixed_tokens[0, :, 0] = wall_id
+    fixed_tokens[0, :, ROOM_WIDTH - 1] = wall_id
+    fixed_mask[0, 0, :] = True
+    fixed_mask[0, ROOM_HEIGHT - 1, :] = True
+    fixed_mask[0, :, 0] = True
+    fixed_mask[0, :, ROOM_WIDTH - 1] = True
+
     for direction, enabled in semantics["required_doors"].items():
         if not bool(enabled):
             continue

@@ -95,7 +95,9 @@ class LoRALayer(nn.Module):
         self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return ((self.dropout(x) @ self.lora_A) @ self.lora_B) * self.scaling
+        lora_a = self.lora_A.to(device=x.device, dtype=x.dtype)
+        lora_b = self.lora_B.to(device=x.device, dtype=x.dtype)
+        return ((self.dropout(x) @ lora_a) @ lora_b) * self.scaling
 
 
 class LoRALinear(nn.Module):
@@ -109,6 +111,7 @@ class LoRALinear(nn.Module):
         super().__init__()
         self.base_layer = base_layer
         self.base_layer.requires_grad_(False)
+        self.enabled = True
         self.lora = LoRALayer(
             in_features=base_layer.in_features,
             out_features=base_layer.out_features,
@@ -120,6 +123,8 @@ class LoRALinear(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if not self.enabled:
+            return self.base_layer(x)
         return self.base_layer(x) + self.lora(x)
 
 
@@ -128,9 +133,39 @@ def _iter_target_linear_modules(
     target_modules: Iterable[str],
 ):
     targets = tuple(str(t) for t in target_modules)
+    wrapped_prefixes = tuple(
+        f"{name}." for name, mod in model.named_modules() if isinstance(mod, LoRALinear) and name
+    )
     for name, module in model.named_modules():
+        if name.startswith(wrapped_prefixes) or isinstance(module, LoRALinear):
+            continue
         if isinstance(module, nn.Linear) and any(target in name for target in targets):
             yield name, module
+
+
+def set_lora_enabled(model: nn.Module, enabled: bool) -> int:
+    """Toggle all injected LoRALinear adapters on a module without removing them."""
+    count = 0
+    flag = bool(enabled)
+    for module in model.modules():
+        if isinstance(module, LoRALinear):
+            module.enabled = flag
+            count += 1
+    return count
+
+
+def unwrap_lora_from_model(model: nn.Module) -> int:
+    """Restore base nn.Linear layers replaced by LoRALinear wrappers."""
+    restored = 0
+    for name, module in list(model.named_modules()):
+        if not isinstance(module, LoRALinear):
+            continue
+        parent_name = ".".join(name.split(".")[:-1])
+        child_name = name.split(".")[-1]
+        parent = model.get_submodule(parent_name) if parent_name else model
+        setattr(parent, child_name, module.base_layer)
+        restored += 1
+    return restored
 
 
 def inject_lora_into_model(
@@ -345,6 +380,7 @@ class GraphConditionedFastSampler:
         self.use_fp16 = bool(use_fp16 and torch.cuda.is_available())
         self.compile_model = bool(compile_model)
 
+        unwrap_lora_from_model(self.diffusion_model.denoiser)
         inject_lora_into_model(
             self.diffusion_model.denoiser,
             rank=info.lora_rank,
@@ -356,6 +392,7 @@ class GraphConditionedFastSampler:
             lora_state_dict,
             strict=strict,
         )
+        set_lora_enabled(self.diffusion_model.denoiser, True)
         if missing or unexpected:
             logger.warning(
                 "Fast sampler adapter loaded with LoRA mismatch: missing=%d unexpected=%d",
@@ -384,6 +421,7 @@ class GraphConditionedFastSampler:
         if seed is not None:
             torch.manual_seed(int(seed))
         original_cfg = float(self.diffusion_model.cfg_scale)
+        set_lora_enabled(self.diffusion_model.denoiser, True)
         try:
             if guidance_scale is not None:
                 self.diffusion_model.cfg_scale = float(guidance_scale)
@@ -435,4 +473,6 @@ __all__ = [
     "load_fast_sampler_checkpoint",
     "load_lora_state_dict",
     "save_fast_sampler_checkpoint",
+    "set_lora_enabled",
+    "unwrap_lora_from_model",
 ]

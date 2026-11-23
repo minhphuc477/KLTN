@@ -1,2 +1,5 @@
-# Auto detect text files and perform LF normalization
-* text=auto
+# Normalize repository text line endings explicitly so Windows core.autocrlf=true
+# does not mix CRLF/LF on checkout/commit.
+* text=auto eol=lf
+*.bat text eol=crlf
+*.ps1 text eol=crlf

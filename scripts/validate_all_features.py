@@ -1,4 +1,4 @@
-﻿"""
+"""
 Nine Feature Component Smoke Checks
 ===================================
 Exercises public component APIs with synthetic fixtures.

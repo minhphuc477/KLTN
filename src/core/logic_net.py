@@ -199,8 +199,10 @@ def conservative_soft_min(
     else:
         finite_mask = finite_mask.to(device=values.device, dtype=torch.bool)
     masked = torch.where(finite_mask, values, torch.full_like(values, float("inf")))
+    has_finite = finite_mask.any(dim=dim, keepdim=True)
+    safe_masked = torch.where(has_finite, masked, torch.zeros_like(masked))
     count = finite_mask.sum(dim=dim).clamp_min(1).to(dtype=values.dtype)
-    result = -tau * torch.logsumexp(-masked / tau, dim=dim)
+    result = -tau * torch.logsumexp(-safe_masked / tau, dim=dim)
     result = result + tau * torch.log(count)
     all_inf = (~finite_mask).all(dim=dim)
     result = torch.where(all_inf, torch.zeros_like(result), result)
@@ -806,6 +808,29 @@ class ConvolutionalPathfinder(nn.Module):
         return distances
 
 
+def _derive_room_walkability(
+    room_grid: Tensor,
+    walkability_weights: Tensor,
+    *,
+    num_classes: int,
+    caller_name: str,
+) -> Tensor:
+    """Derive soft [B,1,H,W] walkability from single-channel or class-logit room grids."""
+    if room_grid.dim() != 4:
+        raise ValueError(f"room_grid must be [B,C,H,W], got {tuple(room_grid.shape)}.")
+    if int(room_grid.shape[1]) == 1:
+        return torch.sigmoid(room_grid[:, :1])
+    if int(room_grid.shape[1]) != int(num_classes):
+        raise ValueError(
+            f"{caller_name} expected {int(num_classes)} tile channels, "
+            f"got {int(room_grid.shape[1])}."
+        )
+    probs = F.softmax(room_grid.float(), dim=1).to(dtype=room_grid.dtype)
+    weights = walkability_weights.to(device=probs.device, dtype=probs.dtype)
+    walkability = torch.einsum("bchw,c->bhw", probs, weights)
+    return walkability.unsqueeze(1)
+
+
 class SoftBellmanFordGridPathfinder(nn.Module):
     """
     Explicit soft Bellman-Ford room pathfinder for ablations.
@@ -850,18 +875,12 @@ class SoftBellmanFordGridPathfinder(nn.Module):
         self.register_buffer("walkability_weights", walkability)
 
     def _derive_walkability(self, room_grid: Tensor) -> Tensor:
-        if room_grid.dim() != 4:
-            raise ValueError(f"room_grid must be [B,C,H,W], got {tuple(room_grid.shape)}.")
-        if int(room_grid.shape[1]) == 1:
-            return torch.sigmoid(room_grid[:, :1])
-        if int(room_grid.shape[1]) != self.num_classes:
-            raise ValueError(
-                f"SoftBellmanFordGridPathfinder expected {self.num_classes} tile channels, "
-                f"got {int(room_grid.shape[1])}."
-            )
-        probs = F.softmax(room_grid.float(), dim=1).to(dtype=room_grid.dtype)
-        walkability = torch.einsum("bchw,c->bhw", probs, self.walkability_weights)
-        return walkability.unsqueeze(1)
+        return _derive_room_walkability(
+            room_grid,
+            self.walkability_weights,
+            num_classes=self.num_classes,
+            caller_name="SoftBellmanFordGridPathfinder",
+        )
 
     def forward(
         self,
@@ -949,17 +968,12 @@ class LearnableGridPathfinder(nn.Module):
         self.register_buffer("walkability_weights", walkability)
 
     def _derive_walkability(self, room_grid: Tensor) -> Tensor:
-        if room_grid.dim() != 4:
-            raise ValueError(f"room_grid must be [B,C,H,W], got {tuple(room_grid.shape)}.")
-        if int(room_grid.shape[1]) == 1:
-            return torch.sigmoid(room_grid[:, :1])
-        if int(room_grid.shape[1]) != self.num_classes:
-            raise ValueError(
-                f"LearnableGridPathfinder expected {self.num_classes} tile channels, got {int(room_grid.shape[1])}."
-            )
-        probs = F.softmax(room_grid.float(), dim=1).to(dtype=room_grid.dtype)
-        walkability = torch.einsum("bchw,c->bhw", probs, self.walkability_weights)
-        return walkability.unsqueeze(1)
+        return _derive_room_walkability(
+            room_grid,
+            self.walkability_weights,
+            num_classes=self.num_classes,
+            caller_name="LearnableGridPathfinder",
+        )
 
     def forward(
         self,
@@ -1003,7 +1017,8 @@ class LearnableGridPathfinder(nn.Module):
 
         value = value - value.amin(dim=(2, 3), keepdim=True)
         value = value / value.amax(dim=(2, 3), keepdim=True).clamp_min(1e-6)
-        semantic_walkability = torch.einsum("bchw,c->bhw", tile_probs, self.walkability_weights).unsqueeze(1)
+        weights = self.walkability_weights.to(device=tile_probs.device, dtype=tile_probs.dtype)
+        semantic_walkability = torch.einsum("bchw,c->bhw", tile_probs, weights).unsqueeze(1)
         semantic_cost = (1.0 - semantic_walkability.clamp(0.0, 1.0)) * 5.0
         distance_scale = max(1.0, self.inf_distance - 5.0)
         distances = ((1.0 - value) * distance_scale + semantic_cost).clamp(0.0, self.inf_distance)
@@ -1047,17 +1062,12 @@ class PerturbAndMAPGridPathfinder(nn.Module):
         self.register_buffer("walkability_weights", walkability)
 
     def _derive_walkability(self, room_grid: Tensor) -> Tensor:
-        if room_grid.dim() != 4:
-            raise ValueError(f"room_grid must be [B,C,H,W], got {tuple(room_grid.shape)}.")
-        if int(room_grid.shape[1]) == 1:
-            return torch.sigmoid(room_grid[:, :1])
-        if int(room_grid.shape[1]) != self.num_classes:
-            raise ValueError(
-                f"PerturbAndMAPGridPathfinder expected {self.num_classes} tile channels, got {int(room_grid.shape[1])}."
-            )
-        probs = F.softmax(room_grid.float(), dim=1).to(dtype=room_grid.dtype)
-        walkability = torch.einsum("bchw,c->bhw", probs, self.walkability_weights)
-        return walkability.unsqueeze(1)
+        return _derive_room_walkability(
+            room_grid,
+            self.walkability_weights,
+            num_classes=self.num_classes,
+            caller_name="PerturbAndMAPGridPathfinder",
+        )
 
     def forward(
         self,
@@ -1419,10 +1429,11 @@ class WalkabilityPredictor(nn.Module):
                 probs = F.softmax(tile_logits.float(), dim=1).to(dtype=tile_logits.dtype)
         
         # Weighted sum with walkability
+        weights = self.walkability_weights.to(device=probs.device, dtype=probs.dtype)
         walkability = torch.einsum(
             'bchw,c->bhw',
             probs,
-            self.walkability_weights,
+            weights,
         )
 
         if self.keep_channel_dim:
@@ -1864,11 +1875,39 @@ class LogicNet(nn.Module):
             door_target,
         )
 
-        anchor_parts = [
+        # Room connectivity is an all-endpoints condition, not reachability
+        # from the nearest of several independent entrances. Seed one fixed
+        # entry and require the remaining entries to be reachable from it.
+        # Choosing from the requested mask (never predicted walkability) keeps
+        # the model from moving its start to an easier disconnected component.
+        source = targets["source_mask"]
+        if source is not None:
+            requested_sources = (source > 0.5).to(dtype=dtype)
+            flat = requested_sources.flatten(1)
+            first = flat.argmax(dim=1, keepdim=True)
+            height, width = spatial_hw
+            center = (height // 2) * width + width // 2
+            first = torch.where(flat.any(dim=1, keepdim=True), first, torch.full_like(first, center))
+            targets["source_mask"] = torch.zeros_like(flat).scatter(1, first, 1.0).reshape_as(source)
+            if targets["target_mask"] is not None:
+                other_entries = requested_sources * (1.0 - targets["source_mask"])
+                targets["target_mask"] = torch.maximum(targets["target_mask"], other_entries)
+        target = targets["target_mask"]
+        if target is not None:
+            has_target = target.amax(dim=(1, 2, 3), keepdim=True) > 0.0
+            targets["target_mask"] = torch.where(has_target, target, torch.ones_like(target))
+
+        # Prefer interior explicit/start/goal anchors over boundary door strips,
+        # because VGLC rooms have a 2-tile-thick outer wall ring where outer-edge
+        # cells (row=0,15 / col=0,10) are solid WALL except at doorway openings.
+        interior_anchor_parts = [
             maybe
-            for maybe in (start_target, goal_target, door_target)
-            if maybe is not None
+            for maybe in (explicit_source, explicit_target, start_target, goal_target)
+            if maybe is not None and bool((maybe > 0.0).any().item())
         ]
+        anchor_parts = interior_anchor_parts
+        if not anchor_parts and door_target is not None and bool((door_target > 0.0).any().item()):
+            anchor_parts = [door_target]
         if anchor_parts:
             targets["anchor_target"] = torch.clamp(
                 torch.sum(torch.cat(anchor_parts, dim=1), dim=1, keepdim=True),
@@ -2684,16 +2723,65 @@ class LogicNet(nn.Module):
         node_mask = graph_data.get("node_mask")
         graph_scope = str(graph_data.get("graph_scope", "") or "").strip().lower()
 
-        if isinstance(adjacency, torch.Tensor) and adjacency.dim() == 2:
-            n = int(adjacency.shape[0])
-            if graph_scope == "dungeon" and int(room_passability.numel()) != n:
-                return zero, zero, zero, {
-                    "global_graph_skipped": "dungeon_scope_requires_full_room_passability",
-                    "global_graph_room_passability_count": float(room_passability.numel()),
+        def _dungeon_node_passability(node_count: int) -> Tuple[Optional[Tensor], Dict[str, Any]]:
+            """Lift rendered-room scores onto all physical and virtual graph nodes."""
+            if graph_scope != "dungeon":
+                return room_passability, {}
+            n = int(node_count)
+            current = graph_data.get("current_node_idx")
+            parent = graph_data.get("node_passability_parent_idx")
+            if not isinstance(current, torch.Tensor):
+                return None, {"global_graph_skipped": "missing_node_passability_mapping"}
+            current = current.to(device=device, dtype=torch.long).flatten()
+            room_scores = room_passability.to(device=device, dtype=dtype).flatten()
+            if int(current.numel()) != int(room_scores.numel()):
+                return None, {
+                    "global_graph_skipped": "invalid_node_passability_mapping_shape",
+                    "global_graph_room_passability_count": float(room_scores.numel()),
                     "global_graph_node_count": float(n),
                 }
+            if bool(((current < 0) | (current >= n)).any()) or int(torch.unique(current).numel()) != int(current.numel()):
+                return None, {"global_graph_skipped": "invalid_or_duplicate_current_node_indices"}
+            if not isinstance(parent, torch.Tensor):
+                # A complete one-room-per-node batch has an unambiguous identity
+                # parent mapping.  Preserve support for these all-physical graphs
+                # without weakening the fail-closed contract for virtual nodes or
+                # partial room batches.
+                if int(current.numel()) != n:
+                    return None, {"global_graph_skipped": "missing_node_passability_mapping"}
+                parent = torch.arange(n, device=device, dtype=torch.long)
+            else:
+                parent = parent.to(device=device, dtype=torch.long).flatten()
+            if int(parent.numel()) != n:
+                return None, {
+                    "global_graph_skipped": "invalid_node_passability_mapping_shape",
+                    "global_graph_room_passability_count": float(room_scores.numel()),
+                    "global_graph_node_count": float(n),
+                }
+            row_for_node = torch.full((n,), -1, device=device, dtype=torch.long)
+            row_for_node = row_for_node.index_copy(
+                0,
+                current,
+                torch.arange(current.numel(), device=device, dtype=torch.long),
+            )
+            if bool(((parent < 0) | (parent >= n)).any()):
+                return None, {"global_graph_skipped": "unresolved_virtual_node_parent"}
+            source_rows = row_for_node[parent]
+            if bool((source_rows < 0).any()):
+                return None, {"global_graph_skipped": "graph_node_without_rendered_room_source"}
+            lifted = room_scores[source_rows]
+            return lifted, {
+                "global_graph_count": 1.0,
+                "global_virtual_nodes_lifted": float(n - int(current.numel())),
+            }
+
+        if isinstance(adjacency, torch.Tensor) and adjacency.dim() == 2:
+            n = int(adjacency.shape[0])
+            graph_room_passability, lift_info = _dungeon_node_passability(n)
+            if graph_room_passability is None:
+                return zero, zero, zero, lift_info
             node_feats = node_features.to(device=device, dtype=dtype) if isinstance(node_features, torch.Tensor) and node_features.dim() == 2 else None
-            return self._compute_one_global_graph_loss(
+            total, reach, lock, info = self._compute_one_global_graph_loss(
                 node_count=n,
                 edge_index=None,
                 adjacency=adjacency.to(device=device, dtype=dtype),
@@ -2705,11 +2793,13 @@ class LogicNet(nn.Module):
                 start_idx=graph_data.get("start_idx", graph_data.get("start_node_id", 0)),
                 target_idx=graph_data.get("target_idx"),
                 key_lock_pairs=graph_data.get("key_lock_pairs"),
-                current_node_idx=graph_data.get("current_node_idx"),
-                room_passability=room_passability,
+                current_node_idx=None if graph_scope == "dungeon" else graph_data.get("current_node_idx"),
+                room_passability=graph_room_passability,
                 device=device,
                 dtype=dtype,
             )
+            info.update(lift_info)
+            return total, reach, lock, info
 
         if not isinstance(edge_index, torch.Tensor):
             return zero, zero, zero, {}
@@ -2725,17 +2815,15 @@ class LogicNet(nn.Module):
 
         if edge_index.dim() == 2 and isinstance(node_features, torch.Tensor) and node_features.dim() == 2:
             n = int(node_features.shape[0])
-            full_node_batch = room_batch == n
             if graph_scope == "dungeon":
-                if not full_node_batch:
-                    return zero, zero, zero, {
-                        "global_graph_skipped": "dungeon_scope_requires_full_room_passability",
-                        "global_graph_room_passability_count": float(room_batch),
-                        "global_graph_node_count": float(n),
-                    }
+                graph_room_passability, lift_info = _dungeon_node_passability(n)
+                if graph_room_passability is None:
+                    return zero, zero, zero, lift_info
             elif not idx_shape_valid:
                 return zero, zero, zero, {}
-            return self._compute_one_global_graph_loss(
+            else:
+                graph_room_passability, lift_info = room_passability, {}
+            total, reach, lock, info = self._compute_one_global_graph_loss(
                 node_count=n,
                 edge_index=edge_index.to(device=device, dtype=torch.long),
                 adjacency=None,
@@ -2747,11 +2835,13 @@ class LogicNet(nn.Module):
                 start_idx=graph_data.get("start_idx", graph_data.get("start_node_id", 0)),
                 target_idx=graph_data.get("target_idx"),
                 key_lock_pairs=graph_data.get("key_lock_pairs"),
-                current_node_idx=current_node_idx,
-                room_passability=room_passability,
+                current_node_idx=None if graph_scope == "dungeon" else current_node_idx,
+                room_passability=graph_room_passability,
                 device=device,
                 dtype=dtype,
             )
+            info.update(lift_info)
+            return total, reach, lock, info
 
         # Batched room-scope: each item has its own graph and one current room.
         if edge_index.dim() != 3:
@@ -2904,9 +2994,6 @@ class LogicNet(nn.Module):
         # Backward-compatible inference mode:
         #   logic_net(tile_probs, start_mask, goal_mask) -> solvability scores [B]
         if isinstance(graph_data, torch.Tensor) and isinstance(goal_mask, torch.Tensor):
-            start_mask = graph_data.float()
-            goal = goal_mask.float()
-
             # BUG-06 fix: detect whether z contains tile probs (num_classes
             # channels) or latent codes (latent_dim channels). Route through
             # tile_classifier if needed.
@@ -2919,6 +3006,8 @@ class LogicNet(nn.Module):
                 tile_logits = self.tile_classifier(z / self.latent_scale_factor)
                 tile_logits = self._project_tile_logits_to_room(tile_logits)
                 walkability = self.walkability(tile_logits, is_probs=False)
+            start_mask = graph_data.to(device=walkability.device, dtype=walkability.dtype)
+            goal = goal_mask.to(device=walkability.device, dtype=walkability.dtype)
             if start_mask.dim() == 3:
                 start_mask = start_mask.unsqueeze(1)
             if goal.dim() == 3:
@@ -3001,10 +3090,19 @@ class LogicNet(nn.Module):
         topology_trace_loss = torch.tensor(0.0, device=device)
         trace_target = room_logic_targets.get("trace_target")
         if trace_target is not None:
-            trace_mass = trace_target.sum(dim=(1, 2, 3)).clamp_min(1e-6)
-            topology_trace_loss = (
-                ((1.0 - walkability) * trace_target).sum(dim=(1, 2, 3)) / trace_mass
-            ).mean()
+            eff_trace_target = trace_target
+            if tuple(eff_trace_target.shape[-2:]) == (ROOM_HEIGHT, ROOM_WIDTH) and ROOM_HEIGHT > 4 and ROOM_WIDTH > 4:
+                interior_mask = torch.zeros_like(eff_trace_target)
+                interior_mask[..., 2:-2, 2:-2] = 1.0
+                eff_trace_target = eff_trace_target * interior_mask
+            trace_mass = eff_trace_target.sum(dim=(1, 2, 3))
+            valid_trace = trace_mass > 1e-6
+            if bool(valid_trace.any().item()):
+                per_sample_trace = (
+                    ((1.0 - walkability) * eff_trace_target).sum(dim=(1, 2, 3))
+                    / trace_mass.clamp_min(1e-6)
+                )
+                topology_trace_loss = per_sample_trace[valid_trace].mean()
 
         topology_anchor_loss = torch.tensor(0.0, device=device)
         anchor_target = room_logic_targets.get("anchor_target")

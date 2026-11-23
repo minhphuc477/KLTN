@@ -357,6 +357,32 @@ def build_training_hyperparameter_report(
                 bad_widths=bad_widths,
             )
 
+    masked_hidden_dim = int(masked_room["hidden_dim"])
+    masked_heads = int(masked_room["unet_num_heads"])
+    if masked_hidden_dim % masked_heads != 0:
+        _issue(
+            issues,
+            "ERROR",
+            "masked_room_hidden_heads_not_divisible",
+            "masked_room.hidden_dim",
+            "masked_room Transformer hidden_dim is not divisible by unet_num_heads.",
+            "Adjust masked_room.hidden_dim or masked_room.unet_num_heads.",
+            hidden_dim=masked_hidden_dim,
+            unet_num_heads=masked_heads,
+        )
+
+    if bool(diffusion.get("condition_use_rrwp_edge_features", False)) and str(diffusion["condition_gnn_type"]).strip().lower() in {"gcn", "sage"}:
+        _issue(
+            issues,
+            "ERROR",
+            "rrwp_incompatible_gnn_type",
+            "diffusion.condition_use_rrwp_edge_features",
+            "RRWP edge features require an edge-aware condition GNN backbone (gps or gat).",
+            "Set diffusion.condition_gnn_type to gps/gat or disable diffusion.condition_use_rrwp_edge_features.",
+            condition_gnn_type=str(diffusion["condition_gnn_type"]),
+            condition_use_rrwp_edge_features=bool(diffusion.get("condition_use_rrwp_edge_features", False)),
+        )
+
     if int(generation["num_diffusion_steps"]) > int(diffusion["num_timesteps"]):
         _issue(
             issues,
@@ -407,6 +433,18 @@ def build_training_hyperparameter_report(
             "Enable validation_fraction or explicitly set best_checkpoint_metric=train_loss for smoke runs.",
             validation_fraction=float(vqvae["validation_fraction"]),
             best_checkpoint_metric=str(vqvae["best_checkpoint_metric"]),
+        )
+
+    if float(masked_room["validation_fraction"]) <= 0.0 and str(masked_room["best_checkpoint_metric"]).startswith("val_"):
+        _issue(
+            issues,
+            "WARNING",
+            "val_metric_without_val_split",
+            "masked_room.best_checkpoint_metric",
+            "Masked-room training asks for a validation metric while validation_fraction is zero.",
+            "Enable masked_room.validation_fraction or explicitly set best_checkpoint_metric=train_loss for smoke runs.",
+            validation_fraction=float(masked_room["validation_fraction"]),
+            best_checkpoint_metric=str(masked_room["best_checkpoint_metric"]),
         )
 
     if float(diffusion["alpha_logic"]) > 0.0 and int(diffusion["warmup_epochs"]) >= int(diffusion["epochs"]):

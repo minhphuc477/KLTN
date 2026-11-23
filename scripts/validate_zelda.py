@@ -1,4 +1,4 @@
-﻿"""
+"""
 ZELDA VALIDATION PIPELINE
 =========================
 Main orchestration script for validating original Zelda dungeon data.

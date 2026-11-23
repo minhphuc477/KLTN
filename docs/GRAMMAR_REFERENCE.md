@@ -1,12 +1,12 @@
 # Mission Grammar Reference
 
-This document is the code-accurate reference for the mission-graph grammar implemented in `src/generation/grammar.py`.
+This document is the code-accurate reference for the mission-graph grammar implemented in the `src/generation/grammar/` package (with `src/generation/grammar/mission_grammar.py` as the primary entry point).
 
-Last updated: 2026-02-23.
+Last updated: 2026-11-12.
 
 ## 1. Purpose
 
-The mission grammar builds a directed mission graph for Zelda-like dungeon progression.
+The mission grammar builds a directed mission graph for Zelda-like dungeon progression, grounded in the mission-space decoupling established by **Dormans (2010)** (*Adventures in Level Design*), **Lavender & Thompson (2016)** (*The Zelda Dungeon Generator*), **Gutierrez & Schrum (2020)** (*Graph-GAN*), and declarative constrained graph synthesis (**Cooper 2023**, *Sturgeon-GRAPH*). Rather than delegating global lock-and-key causality to an unconstrained neural generator, Block I owns all symbolic progression semantics prior to spatial neural synthesis.
 
 It combines:
 - Topology expansion rules (branches, hubs, shortcuts, floors)
@@ -249,8 +249,14 @@ The implementation now enforces these invariants:
 
 ## 9. Related Files
 
-- Main implementation: `src/generation/grammar.py`
-- Evolutionary executor integration: `src/generation/evolutionary_director.py`
+- Grammar implementation:
+  - `src/generation/grammar/mission_grammar.py`
+  - `src/generation/grammar/core_rules.py`
+  - `src/generation/grammar/advanced_rules.py`
+  - `src/generation/grammar/progression_solver.py`
+  - `src/generation/grammar/graph_types.py`
+- Evolutionary executor integration: `src/generation/evolutionary_director/`
+- Topology constraint enforcer: `src/generation/graph_constraint_enforcer.py`
 - Tests:
   - `tests/test_wave3_pedagogical_rules.py`
   - `tests/test_advanced_rules_integration.py`

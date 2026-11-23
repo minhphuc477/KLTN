@@ -1,4 +1,4 @@
-﻿"""
+"""
 Research-Oriented Benchmark Suite for Zelda Dungeon Generation.
 
 This module provides a reproducible protocol to compare generated mission graphs
@@ -42,10 +42,11 @@ from src.core.definitions import (
     ROOM_HEIGHT,
     ROOM_WIDTH,
     TileID,
-    parse_edge_type_tokens,
     parse_node_label_tokens,
 )
 from src.zelda_data.zelda_core import DOTParser
+from src.simulation.edge_logic import edge_constraints_from_data, graph_edge_state_key
+from src.zelda_data.parsers.core_parsers import is_vglc_room_slot
 from src.zelda_data.vglc_utils import filter_virtual_nodes, get_physical_start_node
 from src.generation.evolutionary_director import (
     EvolutionaryTopologyGenerator,
@@ -278,9 +279,7 @@ def _count_hint(attrs: Dict[str, Any], keys: Sequence[str]) -> int:
 
 
 def _edge_constraints(attrs: Dict[str, Any]) -> List[str]:
-    label = str(attrs.get("label", "") or "")
-    edge_type = str(attrs.get("edge_type", attrs.get("type", "")) or "")
-    return [str(t).strip().lower() for t in parse_edge_type_tokens(label=label, edge_type=edge_type)]
+    return edge_constraints_from_data(attrs)
 
 
 def _extract_generation_stats(graph: nx.Graph) -> Dict[str, int]:
@@ -834,17 +833,21 @@ def extract_graph_descriptor(
     switch_count = 0
     stair_count = 0
     shortcut_count = 0
-    for _, _, attrs in graph.edges(data=True):
+    counted_resource_gates = set()
+    for source, target, attrs in graph.edges(data=True):
         constraints = set(_edge_constraints(attrs))
         key_requirement = max(1, _count_hint(attrs, ("requires_key_count", "token_count")))
         if constraints.intersection(LOCK_EDGE_TYPES):
             lock_count += 1
-        if "boss_locked" in constraints:
-            boss_lock_count += 1
-        elif "multi_lock" in constraints:
-            multi_lock_count += key_requirement
-        elif constraints.intersection({"locked", "key_locked"}):
-            small_lock_count += key_requirement
+        identity = graph_edge_state_key(graph, source, target)
+        if identity not in counted_resource_gates:
+            counted_resource_gates.add(identity)
+            if "boss_locked" in constraints:
+                boss_lock_count += 1
+            if "multi_lock" in constraints:
+                multi_lock_count += key_requirement
+            elif constraints.intersection({"locked", "key_locked"}):
+                small_lock_count += key_requirement
         if constraints.intersection(BOMBABLE_EDGE_TYPES):
             bombable_count += 1
         if constraints.intersection(SOFT_LOCK_EDGE_TYPES):
@@ -1385,21 +1388,8 @@ def load_vglc_reference_graphs(
 
 
 def _is_vglc_room_slot(slot: np.ndarray) -> bool:
-    """
-    Fast VGLC room detector for the canonical internal `(16, 11)` room slots.
-    """
-    if slot.size == 0:
-        return False
-    gap_count = int(np.sum(slot == "-"))
-    total = int(slot.size)
-    if gap_count > int(0.7 * total):
-        return False
-    wall_count = int(np.sum((slot == "W") | (slot == "w")))
-    door_count = int(np.sum((slot == "D") | (slot == "d")))
-    if door_count > 0 and wall_count >= 20:
-        return True
-    interior_count = total - wall_count - gap_count
-    return bool(wall_count >= 20 and interior_count >= 5)
+    """Compatibility wrapper around the canonical training-data detector."""
+    return is_vglc_room_slot(slot)
 
 
 def load_vglc_reference_rooms(

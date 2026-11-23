@@ -61,6 +61,72 @@ def canonical_node_order(graph: nx.Graph) -> List[Any]:
     return sorted(graph.nodes(), key=stable_node_sort_key)
 
 
+def causal_generation_layers(graph: nx.Graph) -> List[List[Any]]:
+    """Return dependency-safe room layers whose context only depends on earlier waves.
+
+    Directed acyclic graphs retain parallel topological generations.  Cyclic
+    directed graphs and undirected graphs are partitioned via deterministic
+    greedy independent-set waves in canonical node order so no two rooms in the
+    same wave share a direct dependency edge, allowing batched generation while
+    preserving ``earlier_generation_neighbors``.
+    """
+    if graph is None or graph.number_of_nodes() == 0:
+        return []
+    if graph.is_directed():
+        try:
+            return [
+                sorted(list(layer), key=stable_node_sort_key)
+                for layer in nx.topological_generations(graph)
+                if layer
+            ]
+        except nx.NetworkXUnfeasible:
+            pass
+
+    ordered = canonical_node_order(graph)
+    adjacency: Dict[Any, Set[Any]] = {}
+    for node in ordered:
+        if graph.is_directed():
+            neighbors = set(graph.predecessors(node)) | set(graph.successors(node))
+        else:
+            neighbors = set(graph.neighbors(node))
+        neighbors.discard(node)
+        adjacency[node] = neighbors
+
+    layers: List[List[Any]] = []
+    remaining = ordered
+    while remaining:
+        wave: List[Any] = []
+        blocked: Set[Any] = set()
+        next_remaining: List[Any] = []
+        for node in remaining:
+            if node not in blocked:
+                wave.append(node)
+                blocked.add(node)
+                blocked.update(adjacency[node])
+            else:
+                next_remaining.append(node)
+        layers.append(sorted(wave, key=stable_node_sort_key))
+        remaining = next_remaining
+    return layers
+
+
+def earlier_generation_neighbors(graph: nx.Graph, node: Any) -> Set[Any]:
+    """Return graph neighbors available before ``node`` is generated."""
+    if graph is None or node not in graph:
+        return set()
+    generated: Set[Any] = set()
+    for layer in causal_generation_layers(graph):
+        if node in layer:
+            if graph.is_directed():
+                adjacent = set(graph.predecessors(node)) | set(graph.successors(node))
+            else:
+                adjacent = set(graph.neighbors(node))
+            adjacent.discard(node)
+            return generated & adjacent
+        generated.update(layer)
+    return set()
+
+
 def coerce_bool(value: Any) -> bool:
     """Robust bool parser for graph attributes."""
     if isinstance(value, bool):

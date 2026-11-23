@@ -34,6 +34,7 @@ def corridor_grid(size=50, spacing=3):
 def maze_grid(size=50, seed=42):
     # simple recursive division / random maze generator (coarse)
     import random
+    rnd = random.Random(seed)
     grid = [[1]*size for _ in range(size)]
     def carve(r0,c0,r1,c1):
         if r1 - r0 < 2 or c1 - c0 < 2:
@@ -47,8 +48,8 @@ def maze_grid(size=50, seed=42):
     carve(0,0,size-1,size-1)
     # make some openings
     for _ in range(size*3):
-        r = random.randrange(1,size-1)
-        c = random.randrange(1,size-1)
+        r = rnd.randrange(1,size-1)
+        c = rnd.randrange(1,size-1)
         grid[r][c] = 1 if grid[r][c]==0 else 0
     return grid
 
@@ -77,7 +78,8 @@ def run_suite(out_csv='bench/results.csv'):
                     else:
                         path, nodes = res
                 dt = time.time() - t0
-                rows.append({'solver': solver_name, 'map_type': map_type, 'size': len(grid), 'allow_diagonal': allow_diag, 'time_sec': dt, 'nodes_expanded': nodes, 'path_len': len(path) if path else -1})
+                algorithm = 'jump_augmented_astar' if solver_name == 'jps' else 'astar'
+                rows.append({'solver': solver_name, 'algorithm': algorithm, 'map_type': map_type, 'size': len(grid), 'allow_diagonal': allow_diag, 'time_sec': dt, 'nodes_expanded': nodes, 'path_len': len(path) if path else -1})
                 print(f"{solver_name} {map_type} diag={allow_diag} time={dt:.4f}s nodes={nodes} pathlen={len(path) if path else -1}")
     # write CSV
     with open(out_csv, 'w', newline='') as f:

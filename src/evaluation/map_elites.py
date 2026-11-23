@@ -28,6 +28,7 @@ Metrics:
 """
 
 import logging
+import copy
 from typing import Dict, List, Tuple, Optional, Any, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -35,7 +36,8 @@ from pathlib import Path
 import numpy as np
 import networkx as nx
 
-from src.core.definitions import parse_edge_type_tokens, parse_node_label_tokens
+from src.core.definitions import parse_node_label_tokens
+from src.simulation.edge_logic import edge_constraints_from_data, graph_edge_state_key
 from src.evaluation.structural_metrics import compute_path_linearity
 from src.utils.stable_seed import stable_int_hash
 
@@ -132,6 +134,7 @@ def _stable_graph_cache_key(graph: nx.DiGraph) -> int:
     return stable_int_hash(
         (
             bool(graph.is_directed()),
+            _canonical_cache_value(dict(graph.graph)),
             tuple(sorted(node_payload, key=repr)),
             tuple(sorted(edge_payload, key=repr)),
         )
@@ -166,10 +169,7 @@ def _count_hint(data: Dict[str, Any], names: Tuple[str, ...]) -> int:
 
 def _edge_tokens(data: Dict[str, Any]) -> List[str]:
     """Normalize edge constraints from compact and canonical forms."""
-    return parse_edge_type_tokens(
-        label=str(data.get('label', '') or ''),
-        edge_type=str(data.get('edge_type', data.get('type', '')) or ''),
-    )
+    return edge_constraints_from_data(data)
 
 
 class LinearityLeniencyExtractor(FeatureExtractor):
@@ -260,16 +260,22 @@ class LinearityLeniencyExtractor(FeatureExtractor):
             if has_boss_key:
                 boss_keys += max(1, token_count)
         
-        for _, _, data in graph.edges(data=True):
+        counted_gates = set()
+        for source, target, data in graph.edges(data=True):
+            identity = graph_edge_state_key(graph, source, target)
+            if identity in counted_gates:
+                continue
+            counted_gates.add(identity)
             constraints = set(_edge_tokens(data))
             edge_type = str(data.get('edge_type', '') or '').strip().upper()
             has_boss_lock = 'boss_locked' in constraints or edge_type == 'BOSS_LOCKED'
             key_count = int(max(1, data.get('requires_key_count') or data.get('token_count') or 1))
             has_small_lock = (
                 'key_locked' in constraints
+                or 'multi_lock' in constraints
                 or 'locked' in constraints
                 or edge_type in {'LOCKED', 'MULTI_LOCK'}
-            ) and not has_boss_lock
+            )
             if has_small_lock:
                 small_locks += key_count
             if has_boss_lock:
@@ -481,11 +487,11 @@ class EliteArchive:
         cell = self._discretize(validated_features)
         
         elite = Elite(
-            solution=solution,
+            solution=copy.deepcopy(solution),
             fitness=fitness_value,
             features=validated_features,
             cell=cell,
-            metadata=metadata or {},
+            metadata=copy.deepcopy(metadata or {}),
         )
         
         # Check if cell is empty or new solution is better
@@ -502,18 +508,18 @@ class EliteArchive:
     
     def get(self, cell: Tuple[int, ...]) -> Optional[Elite]:
         """Get elite at a specific cell."""
-        return self.archive.get(cell)
+        return copy.deepcopy(self.archive.get(cell))
     
     def get_random_elite(self) -> Optional[Elite]:
         """Get a random elite from the archive."""
         if not self.archive:
             return None
         elites = list(self.archive.values())
-        return elites[int(self.rng.integers(0, len(elites)))]
+        return copy.deepcopy(elites[int(self.rng.integers(0, len(elites)))])
     
     def get_all_elites(self) -> List[Elite]:
         """Get all elites in the archive."""
-        return list(self.archive.values())
+        return copy.deepcopy(list(self.archive.values()))
     
     def get_stats(self) -> ArchiveStats:
         """Compute archive statistics."""
@@ -963,7 +969,7 @@ class CVTEliteArchive:
         """
         Compute CVT centroids via k-means on uniform feature samples.
         
-        Falls back to uniform grid centroids if scipy is unavailable.
+        Require the declared number of distinct, finite CVT cells.
         """
         # Generate uniform samples in feature space
         low = np.array([r[0] for r in self.feature_ranges])
@@ -980,16 +986,13 @@ class CVTEliteArchive:
             initial_centroids = samples[initial_indices]
             centroids, _ = kmeans(samples, initial_centroids)
             logger.info(f"CVT: computed {len(centroids)} centroids via k-means")
-        except ImportError:
-            # Fallback: uniform grid centroids
-            logger.warning("scipy unavailable, using uniform grid centroids")
-            cells_per_dim = max(
-                2,
-                int(np.ceil(self.num_cells ** (1.0 / self.feature_dims))),
-            )
-            grids = [np.linspace(r[0], r[1], cells_per_dim) for r in self.feature_ranges]
-            mesh = np.meshgrid(*grids)
-            centroids = np.column_stack([m.flatten() for m in mesh])[:self.num_cells]
+        except ImportError as exc:
+            raise RuntimeError("CVT construction requires scipy; a grid is a different archive algorithm.") from exc
+        centroids = np.asarray(centroids, dtype=np.float64)
+        if (centroids.shape != (self.num_cells, self.feature_dims)
+                or not np.isfinite(centroids).all()
+                or len(np.unique(centroids, axis=0)) != self.num_cells):
+            raise RuntimeError("CVT construction did not produce the declared number of distinct finite cells.")
         
         return centroids
     
@@ -1042,11 +1045,11 @@ class CVTEliteArchive:
         cell = self._find_cell(validated_features)
         
         elite = Elite(
-            solution=solution,
+            solution=copy.deepcopy(solution),
             fitness=fitness_value,
             features=validated_features,
             cell=(cell,),
-            metadata=metadata or {},
+            metadata=copy.deepcopy(metadata or {}),
         )
         
         if cell not in self.archive:
@@ -1061,17 +1064,17 @@ class CVTEliteArchive:
         return False
     
     def get(self, cell: int) -> Optional[Elite]:
-        return self.archive.get(cell)
+        return copy.deepcopy(self.archive.get(cell))
     
     def get_random_elite(self) -> Optional[Elite]:
         if not self.archive:
             return None
         elites = list(self.archive.values())
         index = int(self.rng.integers(0, len(elites)))
-        return elites[index]
+        return copy.deepcopy(elites[index])
     
     def get_all_elites(self) -> List[Elite]:
-        return list(self.archive.values())
+        return copy.deepcopy(list(self.archive.values()))
     
     def get_stats(self) -> ArchiveStats:
         if not self.archive:
@@ -1132,14 +1135,8 @@ class CBSFeatureExtractor(FeatureExtractor):
     """
     CBS-derived feature extractor for MAP-Elites.
     
-    Uses Cognitive Bounded Search confusion ratio and room entropy
-    as behavior descriptors. This is the paper's key novelty --
-    dungeons are characterized by how humans would perceive them,
-    not just structural properties.
-    
-    Integrating CBS features into MAP-Elites transforms the contribution
-    from 'we have a CBS metric' to 'we optimize for human-centric
-    dungeon diversity using CBS as a behavior descriptor.'
+    Graph inputs use the structural cognitive proxy from ``cbs_fitness``.
+    These descriptors do not establish human navigation behavior.
     """
     
     def __init__(self, persona: str = 'balanced'):
@@ -1152,21 +1149,17 @@ class CBSFeatureExtractor(FeatureExtractor):
         
         Uses caching since CBS evaluation can be expensive.
         """
-        cache_key = _stable_graph_cache_key(graph)
+        cache_key = stable_int_hash((self.persona, _stable_graph_cache_key(graph)))
         
         if cache_key in self._cache:
             return self._cache[cache_key]
         
-        try:
-            from src.evaluation.cbs_fitness import compute_cbs_fitness
-            metrics = compute_cbs_fitness(graph, persona=self.persona)
-            
-            cr = min(1.0, metrics.get('confusion_ratio', 0.0) / 5.0)
-            entropy = min(1.0, metrics.get('room_entropy', 0.5))
-            features = (cr, entropy)
-        except Exception:
-            # Fallback if CBS fails
-            features = (0.5, 0.5)
+        from src.evaluation.cbs_fitness import compute_cbs_fitness
+        metrics = compute_cbs_fitness(graph, persona=self.persona)
+        raw = (float(metrics['confusion_ratio']), float(metrics['room_entropy']))
+        if not all(np.isfinite(value) and value >= 0.0 for value in raw):
+            raise ValueError("CBS descriptors must be finite and nonnegative.")
+        features = (min(1.0, raw[0] / 5.0), min(1.0, raw[1]))
         
         self._cache[cache_key] = features
         return features

@@ -1,9 +1,11 @@
-# H-MOLQD Block I/O Reference
+# G-LMDM (Canonical) & H-MOLQD (Comparator) Block I/O Reference
 
-> **Input/output specification for Block 0 and the seven H-MOLQD blocks.**
-> This is an interface reference, not evidence that every optional block is
-> trained, enabled, or validated in a particular run. Consult the publication
-> guidance and experiment artifacts for execution status.
+> **Input/output specification for Block 0 through Block VII.**
+> The primary proposed architecture is **`G-LMDM`** (zero VQ-VAE, operating
+> directly on $16\times 11$ discrete tokens via `Block III -> Block IV (Discrete) <- Block V -> Block VI -> Block VII`).
+> `Block II (VQ-VAE)` and `Block IV (Continuous UNet/DiT)` are retained strictly as
+> matched continuous comparators for $H_1/H_2$. Consult [`publication_guidance_card.json`](publication_guidance_card.json)
+> and [`CURRENT_ARCHITECTURE.md`](CURRENT_ARCHITECTURE.md) for current execution status.
 > Verified against source code (all class names, signatures, and shapes confirmed).
 
 ---
@@ -11,40 +13,24 @@
 ## Architecture Overview
 
 ```
-VGLC Files ---> [Block 0] ---> Aligned Rooms + Reference Graph
-Designer Targets ---> [Block I] ---> Mission Graph
-                                 |
-                   +-------------+-------------+
-                   v             v             v
-             [Block II]    [Block III]    [Block V]
-             VQ-VAE        CondEncoder   LogicNet
-                |             |             |
-                v             v             v
-             Latent z      Context c    Logic Loss
-                |             |
-                +------+------+
-                       v
-                  [Block IV]
-              Latent Diffusion
-                       |
-                       v
-                Generated z_gen
-                       |
-               +-------+-------+
-               v               v
-          [Block II]      [Block VI]
-           Decode        SymbolicRefiner
-               |               |
-               +-------+-------+
-                       v
-               Refined Room Grid
-                       |
-                       v
-                  [Block VII]
-             Validation / MAP-Elites
-                       |
-                       v
-              Diverse Elite Archive
+Primary Stack — G-LMDM (Zero VQ-VAE, Discrete 16x11 Tokens):
+  VGLC Files ---> [Block 0] ---> Aligned Rooms + Reference Graph
+  Designer Targets ---> [Block I: Mission Grammar] ---> Mission DAG G
+                                  |
+                                  v
+                        [Block III: GraphGPS+RRWP] ---> Context (c_v, C_G)
+                                  |
+                                  v
+    [Block V: Direct Soft BF LogicNet] ---> [Block IV: DiscreteMaskedRoomModel]
+                                                      |
+                                                      v
+    [Block VI: PuzzleGenerator + SymbolicRefiner] ---> 4-Stage Attributed Dungeon
+                                                      |
+                                                      v
+    [Block VII: StateSpaceAStar Oracle + P-CBS Proxy] ---> Formal Proofs & Complexity
+
+Continuous Comparator Branch — H-MOLQD (RQ1 / H1 Baseline Only):
+  Mission DAG G + [Block II: VQ-VAE] ---> Continuous Latent z ---> [Block IVb: UNet/DiT] ---> Decode ---> [Block VI–VII]
 ```
 
 ---
@@ -771,7 +757,7 @@ Flow:
 | `H` | 16 | Room height (rows) |
 | `W` | 11 | Room width (columns) |
 | `D` | 64 | Latent dimension (VQ-VAE) |
-| `K` | 512 | Codebook size (VQ-VAE) |
+| `K` | 512 (default constructor) / 256 (canonical YAML) | Codebook size (VQ-VAE) |
 | `H'` | ~3 | Latent spatial height (H/4) |
 | `W'` | ~4 | Latent spatial width (W/4) |
 | `ctx_dim` | 256 | Conditioning dimension |
@@ -800,7 +786,7 @@ Flow:
 |------|---------|
 | `src/train_diffusion.py` | Training orchestrator (all blocks) |
 | `src/generate.py` | Generation/inference pipeline |
-| `src/data/zelda_loader.py` | PyTorch Dataset/DataLoader for VGLC files |
+| `src/zelda_data/zelda_loader.py` | PyTorch Dataset/DataLoader for VGLC files |
 | `src/core/definitions.py` | `TileID` IntEnum, `SEMANTIC_PALETTE`, `CHAR_TO_SEMANTIC` |
 | `src/core/__init__.py` | Re-exports all core classes |
 | `src/evaluation/__init__.py` | Re-exports MAP-Elites classes |

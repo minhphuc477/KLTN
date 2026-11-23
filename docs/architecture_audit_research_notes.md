@@ -1,9 +1,11 @@
 # Architecture Audit Research Notes
 
-Last consolidated: 2026-07-02.
+Last consolidated: 2026-11-12.
 
-This is the current non-GUI audit ledger for H-MOLQD. It replaces the previous
-chronological append-only log. Historical reviews remain under `docs/archive/`.
+This is the current non-GUI audit ledger for the canonical **`G-LMDM`** system
+and its `H-MOLQD` continuous comparators. Superseded chronological
+Q1/Q2 snapshots have been removed; this document tracks current implementation
+and verification status.
 
 Publication-facing claim boundaries now live in
 [`PUBLICATION_GUIDANCE_AND_CARDS.md`](PUBLICATION_GUIDANCE_AND_CARDS.md) and
@@ -16,16 +18,16 @@ requirements, and IP note.
 
 ## Scope
 
-The audited system combines:
+The audited system centers on **G-LMDM** (5 active blocks) plus comparative baselines:
 
 - Block 0: VGLC parsing, room extraction, graph alignment, and split control.
 - Block I: directed mission-graph generation and evolutionary/QD search.
-- Block II: semantic VQ-VAE/FSQ room tokenization.
-- Block III: local-neighbor and graph condition encoding.
-- Block IV: latent diffusion, DiT, masked-token, categorical, and fast samplers.
-- Block V: LogicNet differentiable feasibility guidance.
-- Block VI: symbolic repair, WFC, overlays, and puzzle scaffolds.
-- Block VII: hard validation, A*/Dijkstra, P-CBS, metrics, and MAP-Elites.
+- Block II *(Comparator-Only in `H1`/`H2`)*: semantic VQ-VAE/FSQ continuous room tokenization.
+- Block III: local-neighbor and GraphGPS+RRWP graph condition encoding.
+- Block IV: primary `DiscreteMaskedRoomModel` (`G-LMDM`, 84.8K denoiser) vs. continuous `UNet[1,2]` / `DiT+Flow` comparators.
+- Block V: `LogicNet` differentiable Soft Bellman-Ford feasibility regularization (`alpha_logic=0.1`).
+- Block VI: constructive [`PuzzleGenerator`](../src/generation/puzzle_generator.py), symbolic repair, WFC, and 4-stage attribution.
+- Block VII: exact `StateSpaceAStar` oracle, `P-CBS` bounded-agent proxy, metrics, and MAP-Elites.
 
 GUI code is outside this audit unless it changes model, solver, or experiment
 semantics.
@@ -75,6 +77,10 @@ An exit code of zero is not by itself scientific evidence.
 
 The architecture is positioned against these primary references:
 
+- Mission-space graph grammars & hybrid Zelda PCG: Dormans (2010); Summerville et al. (2015); Lavender & Thompson (2016); Gutierrez & Schrum (2020, IEEE CEC, `arXiv:2001.05065`, *Graph-GAN*); Cooper (2022/2023, *Sturgeon* / *Sturgeon-GRAPH*).
+- Discrete vs. continuous generation & categorical rarity: MaskGIT (Chang et al., 2022, `arXiv:2202.04200`); LayoutDM (Inoue et al., 2023, `arXiv:2303.08137`); HouseDiffusion (Shabani et al., 2023, `arXiv:2211.13287`); Schrum et al. (2025, AIIDE, `arXiv:2507.00184`).
+- Graph positional structure & differentiable symbolic priors: GRIT / RRWP (Ma et al., 2023, `arXiv:2305.17589`); Semantic Loss (Xu et al., ICML 2018, `arXiv:1711.11157`); GAN + MILP repair (Zhang et al., AIIDE 2020, `arXiv:2010.06627`); Value Iteration Networks (Tamar et al., 2016).
+- Evaluation & statistical methodology: *PCG Benchmark* (Khalifa et al., FDG 2025, `arXiv:2503.21474`); Withington et al. (2024, `arXiv:2404.18657`).
 - VQ-VAE: van den Oord et al., 2017, arXiv:1711.00937.
 - FSQ: Mentzer et al., 2023, arXiv:2309.15505.
 - Latent Diffusion: Rombach et al., 2022, CVPR.
@@ -483,12 +489,12 @@ Research basis:
   response only and must be labeled as such.
 - large-dungeon controllability studies.
 
-### Hard blocker
+### Checkpoint Status & Prerequisites
 
-`outputs/zelda_hmolqd/checkpoints/vqvae/vqvae_pretrained.pth` is a diffusion
-bundle rather than a valid VQ-VAE checkpoint. Conditioning, LogicNet, repair,
-and end-to-end neural experiments using that path are invalid until Block II is
-retrained or a correct artifact is supplied.
+No pre-existing `outputs/` model checkpoints are retained in the clean workspace.
+All conditioning, LogicNet, repair, and end-to-end neural experiments must run
+from freshly trained, matched Block II (VQ-VAE/VQ-VAE-2) and Block IV
+checkpoints accompanied by validated metadata sidecars.
 
 Experiment manifests now merge their base configuration and require an
 explicit VQ-VAE checkpoint for execution. Plan-only manifests may contain a
@@ -628,6 +634,16 @@ Research boundary:
   serialized as one edge or two reciprocal arcs.
 - These are implementation-contract fixes. They do not establish model quality
   until matched checkpoints and planned experiments are executed.
+
+## Model Architecture, Heuristics & Rules Audit (2026-11-12)
+
+Focused code audit and regression-tested fixes completed across Blocks II, IV-B, VI, and VII:
+
+- **Block II (`src/core/vqvae.py`)**: `SemanticVQVAE2` now honors `quantizer_type="fsq"` via `FSQuantizer` for both hierarchical levels (raising `ValueError` on invalid quantizers and guarding `get_codebook()` when `FSQuantizer` exposes no embedding table). Shared helpers (`_build_semantic_tile_weights`, `_build_semantic_illegal_adjacency_matrix`, `_compute_illegal_adjacency_penalty`, `_compute_weighted_reconstruction_loss`) removed duplicate math and removed the throwaway `SemanticVQVAE` allocation inside `SemanticVQVAE2.__init__`.
+- **Block IV-B (`src/optimization/lcm_lora.py`)**: `LoRALayer.forward` aligns adapter weights `lora_A` and `lora_B` to input `(device, dtype)` so FP16/BF16 AMP forward passes remain safe without weight-cast side effects.
+- **Block VI Symbolic Refiner (`src/core/symbolic_refiner.py`)**: `PathAnalyzer._astar` now rejects non-walkable `start`/`goal` tiles immediately instead of walking out of solid walls, and `PathAnalyzer.analyze_grid` guarantees non-empty `FailurePoint` diagnostics whenever `path is None`. `LearnedTileStatistics.get_adjacency_rules` adds a post-symmetrization empty-set fallback for non-self-adjacent sparse tiles. `WaveFunctionCollapse.collapse` retains its explicit bounded-budget contract (returning `True` when `max_iterations` finishes without contradictions).
+- **Block VI Topology Enforcer (`src/generation/graph_constraint_enforcer.py`)**: `enforce_all_rooms` promotes adjacent physical room starts on a non-mutating copy passed into `enforce_graph_constraints`, and `verify_topology_match` uses mixed `int`/`str`-safe `_canonical_edge_key` while excluding self-loops, `is_virtual` endpoints, and non-physical edges (`visual_link`, `window`, `hidden`, `secret`).
+- **Block VII ML Heuristic & Search (`src/ml/heuristic_learning.py`, `src/simulation/validator.py`)**: Unified `HeuristicTrainer.featurize_state` and `MLHeuristicAStar._featurize_runtime_state` on `_extract_heuristic_state_features`, cached locked-door coordinates per `env.grid` identity, and aligned heuristic tensor devices/dtypes. Confirmed `StateSpaceAStar._heuristic` remains strictly admissible in canonical `astar` mode (`0.0` under portals, `max(distance_lb, graph_hops_lb, locked_edges_lb)` otherwise).
 
 ## Verification Policy
 
@@ -998,7 +1014,7 @@ Implemented safeguards from a direct source audit:
   on valid graph candidates, and the report exposes the random generation
   success rate instead of silently dropping failed draws.
 - `validate_all_features.py` is labeled as a synthetic component smoke harness.
-  It is not a checkpoint evaluation or a thesis-readiness signal.
+  It is not a checkpoint evaluation or a publication-readiness signal.
 
 Verification in this pass covered the WFC fallback boundary, the
 controllability observation contract, and fixed-budget random-baseline
@@ -1975,7 +1991,9 @@ reachable.
   supervision with an actionable graph-preparation error instead of failing
   deep in a sampling step. A direct loader audit of the current 356-room
   training corpus found explicit pairs for every locked graph record.
-- This does not make a 70.15M-parameter diffusion model statistically sound
+- This does not make a 70.15M-parameter diffusion model (the historical
+  pre-reduction figure; canonical `configs/zelda_hmolqd.yaml` now uses `29.76M`
+  total for the `[1, 2]` U-Net teacher bundle) statistically sound
   on roughly 296 training rooms. That is a capacity/experimental-design risk,
   not a runtime defect. Publication runs need a reduced-capacity comparison,
   held-out dungeon evaluation, and matched-budget baselines before drawing
@@ -1985,3 +2003,24 @@ Verification: `131` tests covering diffusion conditioning, LogicNet resource
 rollouts, and Zelda loader graph conditioning passed. The regression creates a
 three-room dungeon scope with a one-room metric budget and verifies that its
 three logic masks remain aligned through validation.
+
+### G-LMDM 4-Arm Autopsy & Root-Cause Architecture Fixes (2026-11-24)
+
+Post-training inspection of the initial 120-epoch 4-arm GPU checkpoints (`G-LG`, `G-L`, `G`, `N`) with `puzzle_room_scaffold_enabled=false` exposed four root-cause defects across data extraction, differentiable logic regularization, discrete unmasking, conditioning capacity, and topology planarity:
+
+1. **Autopsy Findings on Real VGLC Data (`349` rooms, `45` unique interiors):**
+   - Interior `BLOCK` tiles appear in `171/349` (`49.0%`) training rooms (`8.61%` of interior cells; `ELEMENT` = `6.26%`, `ENEMY` = `1.43%`, interior `WALL` = `0.0%`).
+   - All 4 trained checkpoints produced `BLOCK=0` across 37 generated rooms (`seeds 42, 123, 777`) and `BLOCK=0/25`, `ELEM=0/70` even when sampling from real VGLC room conditions at `T=1.0..1.3`.
+   - At `mask_ratio=0.5`, non-LogicNet arms learned interior tiles (`G`: `BLOCK rec=0.270`, `ELEM rec=0.680`, `ENEMY rec=0.618`; `N`: `0.264 / 0.630 / 0.529`), whereas LogicNet-regularized arms collapsed `ENEMY rec` to `0.000` (`G-LG`, `G-L`), halved `BLOCK rec` (`0.122`, `0.196`), and pushed `condition_encoder` anchor pairwise cosine similarity up to `0.6851–0.7072` (vs. `0.2729` for `G` and `0.0815` for `N`).
+   - Evaluating `LogicNet` directly on **ground-truth** one-hot VGLC rooms gave `total=1.7929` (`topology_anchor_loss=1.0000`, `grid_reach_loss=0.5276`, `topology_trace_loss=0.4162`) because `_direction_mask` (`logic_source_mask`/`logic_target_mask`), `_graph_room_start_goal`, and `door_target` placed anchors on the outer 2-tile VGLC `WALL` perimeter (`rows 0, 15`, `cols 0, 10`).
+
+2. **Root-Cause Fixes Applied:**
+   - **LogicNet & VGLC 2-Tile Border Alignment:** Updated `_graph_room_start_goal` and `_direction_mask` (`src/zelda_data/graph_extraction.py`, `src/pipeline/generation/graph_context.py`) to target interior doorway aprons (`rows 2..13, cols 2..8`), preferred interior anchors in `LogicNet._resolve_room_logic_targets`, masked the 2-tile outer border out of `topology_trace_loss` (`src/core/logic_net.py`), and gated `logic_loss` by `(1 - mask_ratio)^2` (`src/core/discrete_masked_model.py`, `src/train_masked_room.py`). Post-fix ground-truth VGLC `LogicNet` check dropped `topology_anchor_loss` from `1.0000 -> 0.0625` and `grid_reach_loss` from `0.5276 -> 0.1325`.
+   - **Self-Reinforcing Floor Cascade:** Added `TileID.BLOCK` to `DiscreteMaskedRoomModel.RARE_TILES`, removed `anneal` temperature flattening during `_iterative_fill`, and ranked stochastic unmasking via cell-level `probs.max(dim=1).values` + annealed Gumbel noise instead of sampled-class probability `P(sampled_token)`.
+   - **Conditioning Capacity Rebalance (Breaking Checkpoint Change):** Reduced `context_dim` (`256 -> 96`), `condition_hidden_dim` (`192 -> 96`), and `condition_num_attention_heads` (`8 -> 4`), set `rare_tile_weight=2.0`, and set `logic_topology_trace_weight = logic_topology_anchor_weight = 0.1` across all 4 `configs/glmdm_*.yaml` files (`G-LG`: `841,293` total params with `77,084` denoiser; `N`: `460,045` total params). Previous `256`-dim checkpoints must be retrained from scratch.
+   - **Bipartite + Degree-Cap Topology Enforcement:** Added `_enforce_bipartite_cycles` and connectivity-preserving non-bridge edge selection to `GraphGrammarExecutor` (`src/generation/evolutionary_director/executor.py`), executed during both evolution and `_finalize_graph_output` (`src/generation/evolutionary_director/generator.py`). Verified `seeds 42, 123, 777` all yield `bipartite=True` and `max_deg <= 4`.
+
+3. **Operational Reminders Before Next Benchmark / Paper Table:**
+   - Retrain all 4 arms (`G-LG`, `G-L`, `G`, `N`) from scratch using `configs/glmdm_*.yaml`.
+   - If evaluating inference-time LogicNet guidance, pass a valid `logic_net_checkpoint` alongside `masked_room_checkpoint` (or confirm `logic_guidance_scale` is intentionally active/disabled across arms).
+   - Evaluate over `50–100` seeds per arm with Schema 2.0 (`raw -> constrained -> repaired -> compiled`), interior tile density vs. VGLC (`BLOCK`, `ELEMENT`, `ENEMY`), Novelty/Duplication vs. the 45 unique VGLC rooms, Expressive Range Analysis (ERA), and external baselines.

@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from src.simulation.dstar_lite import DStarLiteSolver
-from src.simulation.search_base import GameStateSearchConfig, GameStateSearchResult
+from src.simulation.search_base import GameStateSearchConfig, GameStateSearchResult, apply_rules_profile
 from src.simulation.search_status import oracle_status_from_outcome
 
 
@@ -17,6 +17,7 @@ class DStarLiteGameStateSolver:
         self.config = config
 
     def solve(self) -> GameStateSearchResult:
+        apply_rules_profile(self.env, self.config.rules_profile)
         solver = DStarLiteSolver(
             self.env,
             heuristic_mode="balanced",
@@ -24,7 +25,11 @@ class DStarLiteGameStateSolver:
             allow_diagonals=bool(self.config.allow_diagonals),
         )
         success, path, states = solver.solve(self.env.state.copy())
-        if success:
+        retained_status = str(getattr(solver, "last_termination_status", "not_run"))
+        if retained_status != "not_run":
+            termination_status = retained_status
+            failure_reason = str(getattr(solver, "last_failure_reason", ""))
+        elif success:
             termination_status = "solved"
             failure_reason = ""
         elif self.env.start_pos is None or self.env.goal_pos is None:
@@ -51,6 +56,7 @@ class DStarLiteGameStateSolver:
             metadata={
                 "fallback_used": bool(getattr(solver, "used_fallback", False)),
                 "replans": int(getattr(solver, "replans_count", 0) or 0),
+                "vertex_updates": int(getattr(solver, "states_updated", 0) or 0),
                 "allow_diagonals": bool(self.config.allow_diagonals),
                 "intended_use": "incremental_replanning",
                 "independent_oracle": False,

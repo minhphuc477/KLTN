@@ -1,5 +1,6 @@
 import math
 from pathlib import Path
+from types import SimpleNamespace
 
 import networkx as nx
 import numpy as np
@@ -514,6 +515,25 @@ def test_core_parser_detects_outer_and_inner_wall_doors():
 
     assert doors["N"] is True
     assert doors["S"] is True
+
+
+def test_core_parser_excludes_wall_void_layout_placeholders(tmp_path: Path):
+    placeholder = np.full((ROOM_HEIGHT, ROOM_WIDTH), "-", dtype="<U1")
+    placeholder[:2, :] = "W"
+    placeholder[-2:, :] = "W"
+    placeholder[:, :2] = "W"
+    placeholder[:, -2:] = "W"
+    playable = placeholder.copy()
+    playable[2:-2, 2:-2] = "F"
+    source = tmp_path / "two_slots.txt"
+    source.write_text(
+        "\n".join("".join(row) for row in np.concatenate([placeholder, playable], axis=1)),
+        encoding="utf-8",
+    )
+
+    rooms = VGLCParser(room_cls=SimpleNamespace).parse(str(source))
+
+    assert list(rooms) == [(0, 1)]
 
 
 @pytest.mark.parametrize("glyph", ["D", "d", "F", "f", "."])

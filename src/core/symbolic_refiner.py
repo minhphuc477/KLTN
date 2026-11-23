@@ -435,6 +435,28 @@ class PathAnalyzer:
                     required_item=None,
                     blocking_tiles=boundary,
                 ))
+            else:
+                blocking = [
+                    pos for pos in (start, goal)
+                    if grid[pos] not in self.walkable_tiles
+                ]
+                if not blocking:
+                    blocking = [start]
+                failures.append(FailurePoint(
+                    position=blocking[0],
+                    failure_type='disconnected',
+                    required_item=None,
+                    blocking_tiles=blocking,
+                ))
+        else:
+            # _astar returned None despite flood-fill reachability (e.g., cost_map
+            # barrier or iteration cap); never report zero failures when unsolvable.
+            failures.append(FailurePoint(
+                position=goal,
+                failure_type='disconnected',
+                required_item=None,
+                blocking_tiles=[goal],
+            ))
         
         return failures
     
@@ -569,6 +591,11 @@ class PathAnalyzer:
     ) -> Optional[List[Tuple[int, int]]]:
         """A* pathfinding using (row, col) coordinates with parent-pointer reconstruction."""
         h, w = grid.shape[:2]
+        if (
+            int(grid[start[0], start[1]]) not in self.walkable_tiles
+            or int(grid[goal[0], goal[1]]) not in self.walkable_tiles
+        ):
+            return None
         costs = self._normalize_cost_map(cost_map, grid.shape[:2])
         
         def heuristic(a, b):
@@ -878,7 +905,27 @@ class LearnedTileStatistics:
             if tile not in adjacency:
                 adjacency[tile] = {tile}
         
-        return _symmetrize_adjacency(dict(adjacency))
+        result = _symmetrize_adjacency(dict(adjacency))
+        # _symmetrize_adjacency intentionally strips self-adjacency from non-tileable
+        # markers (keys, stairs, doors, goal). If thresholding filtered every partner
+        # for an observed tile, connect it to its strongest observed neighbor so WFC
+        # does not trigger an immediate empty-domain contradiction.
+        for tile in self._tile_counts:
+            tile_i = int(tile)
+            if result.get(tile_i):
+                continue
+            best_partner = None
+            best_count = -1
+            for (a, b), count in self._pair_counts.items():
+                if int(a) == tile_i and int(count) > best_count:
+                    best_count = int(count)
+                    best_partner = int(b)
+            if best_partner is not None:
+                result.setdefault(tile_i, set()).add(best_partner)
+                result.setdefault(best_partner, set()).add(tile_i)
+            else:
+                result[tile_i] = {tile_i}
+        return result
     
     def get_tile_weights(self) -> Dict[int, float]:
         """

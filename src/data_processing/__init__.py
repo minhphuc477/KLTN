@@ -17,6 +17,11 @@ from .data_adapter import (
     GraphFingerprinter,
     DungeonTensor,
 )
+from src.zelda_data.zelda_loader import (
+    ZeldaRoomDataset,
+    apply_room_symmetry_transform,
+    compute_room_tile_frequencies,
+)
 
 __all__ = [
     'IntelligentDataAdapter',
@@ -25,4 +30,7 @@ __all__ = [
     'PhaseAligner',
     'GraphFingerprinter',
     'DungeonTensor',
+    'ZeldaRoomDataset',
+    'apply_room_symmetry_transform',
+    'compute_room_tile_frequencies',
 ]

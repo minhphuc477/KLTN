@@ -1,4 +1,9 @@
 """
+[STATUS: DEPRECATED / ABLATION-ONLY COMPARATOR — INACTIVE IN CANONICAL G-LMDM]
+Excluded from the primary 5-block G-LMDM stack (`loss_weight = 0.0` in canonical
+configs) under the small-data minimalist budget rules (AGENTS.md, N=349 rooms).
+Retained strictly for optional staged-puzzle retraining ablations and legacy tests.
+
 Auxiliary learned supervision for ordered puzzle-stage semantics.
 
 This module turns the repo's shared `puzzle_stage_condition` metadata into

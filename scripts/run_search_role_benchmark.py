@@ -1,8 +1,8 @@
 # ruff: noqa: E402
 """Run role-separated search benchmarks for Zelda validation.
 
-This script implements the search work from
-``docs/SEARCH_ALGORITHM_AUDIT_AND_RECOMMENDATION_2026_04_18.md``:
+This script implements the search role separation documented in
+``docs/SOLVERS_AND_GUI_REFERENCE.md`` and ``src/simulation/search_factory.py``:
 
 * full game-state A* and Dijkstra are reported as validation/exact solvers;
 * P-CBS personas are reported as bounded-player simulations;

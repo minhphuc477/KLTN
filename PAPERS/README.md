@@ -8,7 +8,7 @@ Folder nay gom PDF paper, bao cao coverage publication trong docs, va note theo 
 - Covered IDs by current PAPERS inventory: 35
 - Missing IDs: 0
 
-Chi tiet xem [publication_gap_report.md](publication_gap_report.md).
+Chi tiet xem [SOTA_COMPARISON_AND_BENCHMARKS.md](../docs/SOTA_COMPARISON_AND_BENCHMARKS.md) va [PUBLICATION_GUIDANCE_AND_CARDS.md](../docs/PUBLICATION_GUIDANCE_AND_CARDS.md).
 
 ## Topics
 

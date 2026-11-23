@@ -169,8 +169,10 @@ def test_predicted_latent_logic_branch_backpropagates_from_vqvae_decode_to_unet(
     trainer.config = SimpleNamespace(
         num_classes=44,
         latent_dim=4,
-        alpha_visual=1.0,
-        alpha_logic=0.1,
+        # Isolate the claimed auxiliary path: any denoiser gradient in this
+        # test must come from predicted-latent LogicNet supervision, not MSE.
+        alpha_visual=0.0,
+        alpha_logic=1.0,
         alpha_logic_tile=0.0,
         logic_net_enabled=True,
         logic_net_trainable=True,
@@ -539,6 +541,55 @@ def _make_stub_trainer(context_dim: int = 8) -> DiffusionTrainer:
     return trainer
 
 
+@pytest.mark.parametrize("fail", [False, True])
+def test_validation_restores_rng_and_all_original_module_modes(monkeypatch, fail):
+    import random
+    trainer = _make_stub_trainer()
+    trainer.condition_encoder = torch.nn.Sequential(torch.nn.Dropout(), torch.nn.Dropout())
+    trainer.condition_encoder[1].eval()
+    modules = [module for root in (trainer.condition_encoder, trainer.logic_net, trainer.diffusion, trainer.ema_diffusion)
+               for module in root.modules()]
+    modes = [module.training for module in modules]
+    before_torch = torch.get_rng_state().clone()
+    before_python = random.getstate()
+    before_numpy = np.random.get_state()
+    def evaluate(*args):
+        assert all(not module.training for module in modules)
+        value = float(torch.rand(())) + random.random() + float(np.random.random())
+        if fail:
+            raise RuntimeError("injected evaluation failure")
+        return {"probe": value}
+    monkeypatch.setattr(trainer, "_validate_impl", evaluate)
+    if fail:
+        with pytest.raises(RuntimeError, match="injected evaluation"):
+            trainer.validate([])
+    else:
+        assert trainer.validate([]) == trainer.validate([])
+    assert torch.equal(before_torch, torch.get_rng_state())
+    assert before_python == random.getstate()
+    assert np.array_equal(before_numpy[1], np.random.get_state()[1])
+    assert before_numpy[2:] == np.random.get_state()[2:]
+    assert [module.training for module in modules] == modes
+
+
+def test_validation_keeps_hard_validator_failures_in_denominator():
+    trainer = _make_stub_trainer()
+    calls = []
+    def hard(decoded):
+        calls.append(decoded)
+        if len(calls) == 1:
+            raise RuntimeError("injected first validator failure")
+        return 1.0
+    trainer._compute_hard_solvability = hard
+    trainer._repair_validation_decoded_logits = lambda decoded, **kwargs: (decoded, 1.0)
+    batches = [torch.zeros((1, 1, ROOM_HEIGHT, ROOM_WIDTH)) for _ in range(2)]
+    metrics = trainer.validate(batches, num_samples=2, num_diffusion_samples=2)
+    assert metrics["val_hard_validation_attempts"] == 2.0
+    assert metrics["val_hard_validation_failures"] == 1.0
+    assert metrics["val_hard_solvability"] == pytest.approx(0.5)
+    assert metrics["val_hard_solvability_after_repair"] == pytest.approx(0.5)
+
+
 def test_diffusion_objective_loss_delegates_to_model_compute_loss():
     trainer = DiffusionTrainer.__new__(DiffusionTrainer)
     trainer.config = SimpleNamespace(diffusion_training_objective="flow_matching")
@@ -642,6 +693,45 @@ def test_try_stack_dungeon_scope_graph_batch_collapses_full_room_set():
         ROOM_HEIGHT,
         ROOM_WIDTH,
     )
+
+
+def test_try_stack_dungeon_scope_graph_batch_lifts_virtual_nodes_from_parent_rooms():
+    trainer = DiffusionTrainer.__new__(DiffusionTrainer)
+    trainer.device = torch.device("cpu")
+    trainer.config = SimpleNamespace(
+        edge_feature_dim=GRAPH_EDGE_FEATURE_DIM,
+        current_node_distance_max=8,
+        graph_conditioning_mode="node_sequence",
+    )
+    base = {
+        "node_features": torch.zeros(3, 6),
+        "edge_index": torch.tensor([[0, 1], [1, 2]], dtype=torch.long),
+        "edge_features": torch.zeros(2, GRAPH_EDGE_FEATURE_DIM),
+        "edge_attr": torch.zeros(2, dtype=torch.long),
+        "edge_rrwp": torch.zeros(2, GRAPH_TPE_DIM),
+        "tpe": torch.zeros(3, GRAPH_TPE_DIM),
+        "node_positions": torch.zeros(3, 2),
+        "node_passability_parent_idx": torch.tensor([0, 0, 2]),
+        "num_nodes": 3,
+        "num_edges": 2,
+        "start_node_id": 0,
+        "target_idx": 2,
+        "node_to_idx": {"start": 0, "virtual": 1, "goal": 2},
+        "room_topology_map": torch.zeros(ROOM_TOPOLOGY_CHANNEL_COUNT, ROOM_HEIGHT, ROOM_WIDTH),
+        "boundary_constraints": torch.zeros(8),
+    }
+    graph_list = []
+    for idx in (0, 2):
+        item = dict(base)
+        item["current_node_idx"] = idx
+        graph_list.append(item)
+
+    graph_data = DiffusionTrainer._try_stack_dungeon_scope_graph_batch(trainer, graph_list)
+
+    assert graph_data is not None
+    assert graph_data["graph_scope"] == "dungeon"
+    assert graph_data["current_node_idx"].tolist() == [0, 2]
+    assert graph_data["node_passability_parent_idx"].tolist() == [0, 0, 2]
 
 
 def test_validate_keeps_dungeon_scope_masks_atomic_when_budget_is_smaller():
@@ -2103,6 +2193,23 @@ def test_validate_skips_nonfinite_generated_samples():
     assert metrics["val_skipped_nonfinite"] == pytest.approx(4.0)
 
 
+@pytest.mark.parametrize("source", ["diffusion", "sample", "logic"])
+def test_validate_aborts_on_nonfinite_under_publication_policy(source):
+    trainer = _make_stub_trainer(context_dim=8)
+    trainer.config.nonfinite_policy = "error"
+    if source == "diffusion":
+        trainer.ema_diffusion.diffusion_loss = float("nan")
+    elif source == "sample":
+        trainer.ema_diffusion.sample = lambda conditioning, shape, graph_data=None: torch.full(
+            shape, float("nan")
+        )
+    else:
+        trainer.logic_net.forward = lambda z, graph_data=None: (torch.tensor(float("nan")), {})
+    batch = (torch.zeros((2, 1, ROOM_HEIGHT, ROOM_WIDTH)), _make_node_sequence_graph_list())
+    with pytest.raises(FloatingPointError, match="non-finite"):
+        DiffusionTrainer.validate(trainer, [batch], num_samples=2, num_diffusion_samples=2)
+
+
 def test_validate_reports_logic_tile_accuracy():
     class _PerfectTileLogicNet(_DummyLogicNet):
         def __init__(self):
@@ -2545,6 +2652,7 @@ def test_stateful_resume_rejects_weights_only_torch_checkpoint(tmp_path):
 
 
 def test_stateful_resume_restores_complete_training_state(tmp_path):
+    from src.utils.training_rng import capture_training_rng
     source = DiffusionTrainer.__new__(DiffusionTrainer)
     source.device = torch.device("cpu")
     source.config = SimpleNamespace(use_amp=False)
@@ -2570,6 +2678,7 @@ def test_stateful_resume_restores_complete_training_state(tmp_path):
     torch.save(
         {
             "epoch": source.epoch,
+            "training_rng_state": capture_training_rng(),
             "global_step": source.global_step,
             "diffusion_state_dict": source.diffusion.state_dict(),
             "ema_diffusion_state_dict": source.ema_diffusion.state_dict(),
@@ -2612,6 +2721,7 @@ def test_stateful_resume_restores_complete_training_state(tmp_path):
 
 
 def test_stateful_resume_rejects_missing_enabled_puzzle_semantics_head(tmp_path):
+    from src.utils.training_rng import capture_training_rng
     trainer = DiffusionTrainer.__new__(DiffusionTrainer)
     trainer.device = torch.device("cpu")
     trainer.config = SimpleNamespace(use_amp=False)
@@ -2632,6 +2742,7 @@ def test_stateful_resume_rejects_missing_enabled_puzzle_semantics_head(tmp_path)
     torch.save(
         {
             "epoch": 1,
+            "training_rng_state": capture_training_rng(),
             "global_step": 2,
             "diffusion_state_dict": trainer.diffusion.state_dict(),
             "ema_diffusion_state_dict": trainer.ema_diffusion.state_dict(),
@@ -2745,3 +2856,60 @@ def test_nonfinite_microbatch_preserves_prior_valid_accumulated_gradient():
     assert second_metrics["skipped_nonfinite_batch"] == pytest.approx(1.0)
     assert trainer._accumulation_micro_steps == 1
     assert torch.equal(trainer.diffusion.weight.grad, prior_grad)
+
+
+def test_update_ema_warms_up_early_steps_and_preserves_zero_decay():
+    trainer = DiffusionTrainer.__new__(DiffusionTrainer)
+    trainer.diffusion = torch.nn.Linear(2, 2, bias=False)
+    trainer.ema_diffusion = torch.nn.Linear(2, 2, bias=False)
+    with torch.no_grad():
+        trainer.diffusion.weight.fill_(1.0)
+        trainer.ema_diffusion.weight.zero_()
+    trainer.distributed_context = None
+    trainer.global_step = 0
+    trainer._ema_step = 0
+    trainer.ema_decay = 0.9999
+
+    DiffusionTrainer._update_ema(trainer)
+    # Step 1 uses decay = min(0.9999, 2/11) -> alpha = 9/11 > 0.81 (not frozen at 0.0001).
+    assert float(trainer.ema_diffusion.weight.mean().item()) > 0.5
+
+    trainer.ema_decay = 0.0
+    DiffusionTrainer._update_ema(trainer)
+    assert torch.allclose(trainer.ema_diffusion.weight, trainer.diffusion.weight)
+
+
+def test_validate_epoch_prefers_ddim_sample_over_1000_step_sample():
+    class _DDIMEvalModel(_DummyEvalModel):
+        num_timesteps = 1000
+
+        def __init__(self):
+            super().__init__()
+            self.ddim_calls = 0
+            self.ddpm_calls = 0
+
+        def ddim_sample(self, context, shape, num_steps=50, eta=0.0, graph_data=None):
+            _ = (context, eta, graph_data)
+            self.ddim_calls += 1
+            self.last_ddim_steps = int(num_steps)
+            return torch.zeros(shape, dtype=torch.float32)
+
+        def sample(self, conditioning, shape, graph_data=None):
+            self.ddpm_calls += 1
+            return super().sample(conditioning, shape, graph_data=graph_data)
+
+    trainer = _make_stub_trainer()
+    eval_model = _DDIMEvalModel()
+    trainer.ema_diffusion = eval_model
+    trainer.diffusion = eval_model
+    trainer.config.num_timesteps = 1000
+    trainer.config.validation_num_samples = 1
+    trainer.config.validation_num_diffusion_samples = 1
+    trainer.config.validation_max_batches = 1
+
+    fake_loader = [torch.zeros((1, 1, ROOM_HEIGHT, ROOM_WIDTH), dtype=torch.float32)]
+    DiffusionTrainer.validate(trainer, fake_loader, num_samples=1, num_diffusion_samples=1)
+
+    assert eval_model.ddim_calls == 1
+    assert eval_model.last_ddim_steps == 50
+    assert eval_model.ddpm_calls == 0

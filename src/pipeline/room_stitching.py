@@ -263,6 +263,26 @@ def solve_component_strict_adjacency(
                 return False
         return True
 
+    color: Dict[Any, int] = {}
+    for seed_node in comp_nodes:
+        if seed_node in color:
+            continue
+        color[seed_node] = 0
+        queue: deque[Any] = deque([seed_node])
+        while queue:
+            curr = queue.popleft()
+            next_color = 1 - color[curr]
+            for nb in adjacency.get(curr, ()):
+                if nb not in color:
+                    color[nb] = next_color
+                    queue.append(nb)
+                elif color[nb] == color[curr]:
+                    raise ValueError(
+                        "Failed strict adjacency placement for component with nodes "
+                        f"{comp_nodes}: non-bipartite odd cycle containing {curr!r}<->{nb!r} "
+                        "cannot be embedded edge-adjacent on a 2D orthogonal grid."
+                    )
+
     def _dfs() -> bool:
         nonlocal search_budget
         if len(placement) == len(comp_nodes):
@@ -1305,6 +1325,13 @@ def validate_connection_realizations(
     height, width = np.asarray(grid).shape
     for edge, record in realizations.items():
         cells = list(record.get("cells", []) or [])
+        if record.get('mode') == 'graph_transition':
+            endpoints = [record.get('source_position'), record.get('target_position')]
+            if (record.get('transition_cost') != 1 or any(pos is None for pos in endpoints)
+                    or any(not (0 <= int(pos[0]) < height and 0 <= int(pos[1]) < width)
+                           or int(grid[int(pos[0]), int(pos[1])]) != int(TileID.STAIR) for pos in endpoints)):
+                broken.append(edge)
+                continue
         if not cells or any(
             not (0 <= int(row) < height and 0 <= int(col) < width)
             or int(grid[int(row), int(col)]) in sealed_ids
@@ -1418,6 +1445,7 @@ def build_stitched_room_layout_from_slots(
     fill_tile: int = 0,
     carve_connections: bool = True,
     diagnostic_callback: Optional[DiagnosticCallback] = None,
+    fixed_graph_transitions: Optional[Mapping] = None,
 ) -> StitchedRoomLayout:
     """Stitch rooms at fixed slots and realize graph edges consistently.
 
@@ -1474,6 +1502,11 @@ def build_stitched_room_layout_from_slots(
                     "cells": recorded_cells,
                 }
 
+    stitched.connection_realizations = connection_realizations
+    if carve_connections:
+        from src.pipeline.graph_transitions import record_graph_transitions
+        record_graph_transitions(stitched, graph, _is_spatial_room_edge, fixed_graph_transitions)
+        carved_edge_modes = {edge: record['mode'] for edge, record in connection_realizations.items()}
     stitched.realization_metrics = compute_graph_edge_realization_metrics(
         graph,
         stitched.slot_positions,
@@ -1482,6 +1515,11 @@ def build_stitched_room_layout_from_slots(
         carved_edge_modes=carved_edge_modes,
     )
     stitched.connection_realizations = connection_realizations
+    transition_count = sum(record.get('mode') == 'graph_transition' for record in connection_realizations.values())
+    stitched.realization_metrics['recorded_graph_transition_count'] = transition_count
+    stitched.realization_metrics['artifact_representation'] = (
+        'grid_with_recorded_graph_transitions' if transition_count else 'physical_grid'
+    )
     return stitched
 
 

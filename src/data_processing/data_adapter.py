@@ -33,11 +33,15 @@ import networkx as nx
 from src.core.definitions import (
     ROOM_HEIGHT,
     ROOM_WIDTH,
-    EDGE_TYPE_MAP,
     NODE_CONTENT_MAP,
+    parse_node_label_tokens,
+    parse_edge_type_tokens,
+    select_primary_edge_type,
     TileID,
 )
-from src.zelda_data.parsers.core_parsers import VGLCParser as CoreVGLCParser
+from src.zelda_data.parsers.core_parsers import (
+    VGLCParser as CoreVGLCParser, DOTParser as CoreDOTParser,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -332,108 +336,28 @@ class GraphvizParser:
 
     def parse_string(self, dot_content: str, source: str = "<memory>") -> nx.DiGraph:
         """Parse DOT content from an in-memory string."""
-        G = nx.DiGraph()
+        graph = CoreDOTParser().parse_string(dot_content)
+        for _node, attrs in graph.nodes(data=True):
+            attrs['has_triforce'] = bool(attrs.get('is_triforce', False))
+            attrs['has_boss'] = bool(attrs.get('is_boss', False))
+            attrs['contents'] = [NODE_CONTENT_MAP[token]
+                                 for token in parse_node_label_tokens(attrs.get('label', ''))
+                                 if token in NODE_CONTENT_MAP]
+        logger.info("Parsed graph with %d nodes, %d edges from %s",
+                    graph.number_of_nodes(), graph.number_of_edges(), source)
+        return graph
 
-        # Parse nodes
-        for match in self.node_pattern.finditer(dot_content):
-            node_id = int(match.group(1))
-            attrs_str = match.group(2)
-
-            attrs = self._parse_node_attrs(attrs_str)
-            G.add_node(node_id, **attrs)
-
-        # Parse edges
-        for match in self.edge_pattern.finditer(dot_content):
-            from_node = int(match.group(1))
-            operator = str(match.group(2))
-            to_node = int(match.group(3))
-            attrs_str = match.group(4) or ''
-
-            attrs = self._parse_edge_attrs(attrs_str)
-            G.add_edge(from_node, to_node, **attrs)
-            if operator == '--':
-                G.add_edge(to_node, from_node, **dict(attrs))
-
-        # Ensure all edge endpoints exist as nodes
-        for u, v in list(G.edges()):
-            if u not in G.nodes:
-                G.add_node(u, label='')
-            if v not in G.nodes:
-                G.add_node(v, label='')
-
-        logger.info(
-            "Parsed graph with %d nodes, %d edges from %s",
-            G.number_of_nodes(),
-            G.number_of_edges(),
-            source,
-        )
-        return G
-    
     def _parse_node_attrs(self, attrs_str: str) -> Dict[str, Any]:
-        """Parse node attributes from DOT string."""
-        attrs = {
-            'label': '',
-            'is_start': False,
-            'has_enemy': False,
-            'has_key': False,
-            'has_boss_key': False,
-            'has_triforce': False,
-            'has_boss': False,
-            'has_item': False,
-            'contents': [],
-        }
-        
-        # Extract label
-        label_match = self.label_pattern.search(attrs_str)
-        if label_match:
-            label = label_match.group(1)
-            attrs['label'] = label
-            
-            # Parse label parts
-            parts = [p.strip() for p in label.split(',')]
-            
-            for part in parts:
-                lookup_key = part
-                if lookup_key not in NODE_CONTENT_MAP:
-                    if lookup_key.lower() in NODE_CONTENT_MAP:
-                        lookup_key = lookup_key.lower()
-                    elif lookup_key.upper() in NODE_CONTENT_MAP:
-                        lookup_key = lookup_key.upper()
-                if lookup_key in NODE_CONTENT_MAP:
-                    content = NODE_CONTENT_MAP[lookup_key]
-                    attrs['contents'].append(content)
-                    
-                    if content == 'start':
-                        attrs['is_start'] = True
-                    elif content == 'enemy':
-                        attrs['has_enemy'] = True
-                    elif content == 'key':
-                        attrs['has_key'] = True
-                    elif content == 'boss_key':
-                        attrs['has_boss_key'] = True
-                    elif content == 'triforce':
-                        attrs['has_triforce'] = True
-                    elif content == 'boss':
-                        attrs['has_boss'] = True
-                    elif content in ('item', 'key_item'):
-                        attrs['has_item'] = True
-        
-        return attrs
-    
+        """Use the same case-sensitive source schema as file ingestion."""
+        return dict(self.parse_string('digraph G { 0 [' + attrs_str + ']; }').nodes[0])
+
     def _parse_edge_attrs(self, attrs_str: str) -> Dict[str, Any]:
-        """Parse edge attributes from DOT string."""
-        attrs = {
-            'label': '',
-            'edge_type': 'open',
-        }
-        
-        label_match = self.label_pattern.search(attrs_str)
-        if label_match:
-            label = label_match.group(1)
-            attrs['label'] = label
-            attrs['edge_type'] = EDGE_TYPE_MAP.get(label, EDGE_TYPE_MAP.get(label.lower(), 'open'))
-        
-        return attrs
+        """Preserve compound and unknown constraints instead of making them open."""
+        match = self.label_pattern.search(attrs_str)
+        label = match.group(1) if match else ''
+        constraints = parse_edge_type_tokens(label=label)
+        return {'label': label, 'edge_constraints': constraints,
+                'edge_type': select_primary_edge_type(constraints)}
 
 
 # ============================================================================

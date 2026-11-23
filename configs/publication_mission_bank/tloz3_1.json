@@ -1,0 +1,732 @@
+{
+  "directed": true,
+  "multigraph": false,
+  "graph": {
+    "source_schema": "vglc_zelda",
+    "non_traversable_edges": [
+      {
+        "source": 16,
+        "target": 1,
+        "label": "s",
+        "edge_type": "impassable",
+        "edge_constraints": [
+          "impassable"
+        ]
+      },
+      {
+        "source": 1,
+        "target": 16,
+        "label": "s",
+        "edge_type": "impassable",
+        "edge_constraints": [
+          "impassable"
+        ]
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "label": "e,i,k",
+      "source_label": "e,i,k",
+      "is_start": false,
+      "is_start_pointer": false,
+      "is_triforce": false,
+      "is_boss": false,
+      "has_key": true,
+      "has_item": true,
+      "has_boss_key": false,
+      "has_switch": false,
+      "switch_tokens": [],
+      "has_enemy": true,
+      "has_puzzle": false,
+      "id": 0
+    },
+    {
+      "label": "e,i,k",
+      "source_label": "e,i,k",
+      "is_start": false,
+      "is_start_pointer": false,
+      "is_triforce": false,
+      "is_boss": false,
+      "has_key": true,
+      "has_item": true,
+      "has_boss_key": false,
+      "has_switch": false,
+      "switch_tokens": [],
+      "has_enemy": true,
+      "has_puzzle": false,
+      "id": 1
+    },
+    {
+      "label": "e,k",
+      "source_label": "e,k",
+      "is_start": false,
+      "is_start_pointer": false,
+      "is_triforce": false,
+      "is_boss": false,
+      "has_key": true,
+      "has_item": false,
+      "has_boss_key": false,
+      "has_switch": false,
+      "switch_tokens": [],
+      "has_enemy": true,
+      "has_puzzle": false,
+      "id": 2
+    },
+    {
+      "label": "",
+      "source_label": "",
+      "is_start": false,
+      "is_start_pointer": false,
+      "is_triforce": false,
+      "is_boss": false,
+      "has_key": false,
+      "has_item": false,
+      "has_boss_key": false,
+      "has_switch": false,
+      "switch_tokens": [],
+      "has_enemy": false,
+      "has_puzzle": false,
+      "id": 3
+    },
+    {
+      "label": "",
+      "source_label": "",
+      "is_start": false,
+      "is_start_pointer": false,
+      "is_triforce": false,
+      "is_boss": false,
+      "has_key": false,
+      "has_item": false,
+      "has_boss_key": false,
+      "has_switch": false,
+      "switch_tokens": [],
+      "has_enemy": false,
+      "has_puzzle": false,
+      "id": 4
+    },
+    {
+      "label": "e,i,p",
+      "source_label": "e,i,p",
+      "is_start": false,
+      "is_start_pointer": false,
+      "is_triforce": false,
+      "is_boss": false,
+      "has_key": false,
+      "has_item": true,
+      "has_boss_key": false,
+      "has_switch": false,
+      "switch_tokens": [],
+      "has_enemy": true,
+      "has_puzzle": true,
+      "id": 5
+    },
+    {
+      "label": "I",
+      "source_label": "I",
+      "is_start": false,
+      "is_start_pointer": false,
+      "is_triforce": false,
+      "is_boss": false,
+      "has_key": false,
+      "has_item": true,
+      "has_boss_key": false,
+      "has_switch": false,
+      "switch_tokens": [],
+      "has_enemy": false,
+      "has_puzzle": false,
+      "id": 6
+    },
+    {
+      "label": "e,i",
+      "source_label": "e,i",
+      "is_start": false,
+      "is_start_pointer": false,
+      "is_triforce": false,
+      "is_boss": false,
+      "has_key": false,
+      "has_item": true,
+      "has_boss_key": false,
+      "has_switch": false,
+      "switch_tokens": [],
+      "has_enemy": true,
+      "has_puzzle": false,
+      "id": 7
+    },
+    {
+      "label": "e,p",
+      "source_label": "e,p",
+      "is_start": false,
+      "is_start_pointer": false,
+      "is_triforce": false,
+      "is_boss": false,
+      "has_key": false,
+      "has_item": false,
+      "has_boss_key": false,
+      "has_switch": false,
+      "switch_tokens": [],
+      "has_enemy": true,
+      "has_puzzle": true,
+      "id": 8
+    },
+    {
+      "label": "e,k",
+      "source_label": "e,k",
+      "is_start": false,
+      "is_start_pointer": false,
+      "is_triforce": false,
+      "is_boss": false,
+      "has_key": true,
+      "has_item": false,
+      "has_boss_key": false,
+      "has_switch": false,
+      "switch_tokens": [],
+      "has_enemy": true,
+      "has_puzzle": false,
+      "id": 9
+    },
+    {
+      "label": "e",
+      "source_label": "e",
+      "is_start": false,
+      "is_start_pointer": false,
+      "is_triforce": false,
+      "is_boss": false,
+      "has_key": false,
+      "has_item": false,
+      "has_boss_key": false,
+      "has_switch": false,
+      "switch_tokens": [],
+      "has_enemy": true,
+      "has_puzzle": false,
+      "id": 10
+    },
+    {
+      "label": "t",
+      "source_label": "t",
+      "is_start": false,
+      "is_start_pointer": false,
+      "is_triforce": true,
+      "is_boss": false,
+      "has_key": false,
+      "has_item": false,
+      "has_boss_key": false,
+      "has_switch": false,
+      "switch_tokens": [],
+      "has_enemy": false,
+      "has_puzzle": false,
+      "id": 11
+    },
+    {
+      "label": "s",
+      "source_label": "s",
+      "is_start": true,
+      "is_start_pointer": true,
+      "is_triforce": false,
+      "is_boss": false,
+      "has_key": false,
+      "has_item": false,
+      "has_boss_key": false,
+      "has_switch": false,
+      "switch_tokens": [],
+      "has_enemy": false,
+      "has_puzzle": false,
+      "is_virtual": true,
+      "id": 12
+    },
+    {
+      "label": "e,k",
+      "source_label": "e,k",
+      "is_start": false,
+      "is_start_pointer": false,
+      "is_triforce": false,
+      "is_boss": false,
+      "has_key": true,
+      "has_item": false,
+      "has_boss_key": false,
+      "has_switch": false,
+      "switch_tokens": [],
+      "has_enemy": true,
+      "has_puzzle": false,
+      "id": 13
+    },
+    {
+      "label": "",
+      "source_label": "",
+      "is_start": false,
+      "is_start_pointer": false,
+      "is_triforce": false,
+      "is_boss": false,
+      "has_key": false,
+      "has_item": false,
+      "has_boss_key": false,
+      "has_switch": false,
+      "switch_tokens": [],
+      "has_enemy": false,
+      "has_puzzle": false,
+      "id": 14
+    },
+    {
+      "label": "e",
+      "source_label": "e",
+      "is_start": false,
+      "is_start_pointer": false,
+      "is_triforce": false,
+      "is_boss": false,
+      "has_key": false,
+      "has_item": false,
+      "has_boss_key": false,
+      "has_switch": false,
+      "switch_tokens": [],
+      "has_enemy": true,
+      "has_puzzle": false,
+      "id": 15
+    },
+    {
+      "label": "e,i,t",
+      "source_label": "e,i,t",
+      "is_start": false,
+      "is_start_pointer": false,
+      "is_triforce": true,
+      "is_boss": false,
+      "has_key": false,
+      "has_item": true,
+      "has_boss_key": false,
+      "has_switch": false,
+      "switch_tokens": [],
+      "has_enemy": true,
+      "has_puzzle": false,
+      "is_virtual": true,
+      "virtual_parent": 17,
+      "id": 16
+    },
+    {
+      "label": "e,i",
+      "source_label": "ei",
+      "is_start": false,
+      "is_start_pointer": false,
+      "is_triforce": false,
+      "is_boss": false,
+      "has_key": false,
+      "has_item": true,
+      "has_boss_key": false,
+      "has_switch": false,
+      "switch_tokens": [],
+      "has_enemy": true,
+      "has_puzzle": false,
+      "id": 17
+    },
+    {
+      "label": "e",
+      "source_label": "e",
+      "is_start": false,
+      "is_start_pointer": false,
+      "is_triforce": false,
+      "is_boss": false,
+      "has_key": false,
+      "has_item": false,
+      "has_boss_key": false,
+      "has_switch": false,
+      "switch_tokens": [],
+      "has_enemy": true,
+      "has_puzzle": false,
+      "id": 18
+    },
+    {
+      "label": "b",
+      "source_label": "b",
+      "is_start": false,
+      "is_start_pointer": false,
+      "is_triforce": false,
+      "is_boss": true,
+      "has_key": false,
+      "has_item": false,
+      "has_boss_key": false,
+      "has_switch": false,
+      "switch_tokens": [],
+      "has_enemy": false,
+      "has_puzzle": false,
+      "id": 19
+    }
+  ],
+  "links": [
+    {
+      "label": "",
+      "edge_type": "open",
+      "edge_constraints": [
+        "open"
+      ],
+      "source": 0,
+      "target": 1
+    },
+    {
+      "label": "",
+      "edge_type": "open",
+      "edge_constraints": [
+        "open"
+      ],
+      "source": 0,
+      "target": 15
+    },
+    {
+      "label": "",
+      "edge_type": "open",
+      "edge_constraints": [
+        "open"
+      ],
+      "source": 1,
+      "target": 0
+    },
+    {
+      "label": "k",
+      "edge_type": "key_locked",
+      "edge_constraints": [
+        "key_locked"
+      ],
+      "source": 1,
+      "target": 4
+    },
+    {
+      "label": "",
+      "edge_type": "open",
+      "edge_constraints": [
+        "open"
+      ],
+      "source": 2,
+      "target": 3
+    },
+    {
+      "label": "l",
+      "edge_type": "soft_locked",
+      "edge_constraints": [
+        "soft_locked"
+      ],
+      "source": 3,
+      "target": 2
+    },
+    {
+      "label": "l",
+      "edge_type": "soft_locked",
+      "edge_constraints": [
+        "soft_locked"
+      ],
+      "source": 3,
+      "target": 8
+    },
+    {
+      "label": "",
+      "edge_type": "open",
+      "edge_constraints": [
+        "open"
+      ],
+      "source": 4,
+      "target": 17
+    },
+    {
+      "label": "k",
+      "edge_type": "key_locked",
+      "edge_constraints": [
+        "key_locked"
+      ],
+      "source": 4,
+      "target": 1
+    },
+    {
+      "label": "k",
+      "edge_type": "key_locked",
+      "edge_constraints": [
+        "key_locked"
+      ],
+      "source": 4,
+      "target": 8
+    },
+    {
+      "label": "k",
+      "edge_type": "key_locked",
+      "edge_constraints": [
+        "key_locked"
+      ],
+      "source": 4,
+      "target": 5
+    },
+    {
+      "label": "",
+      "edge_type": "open",
+      "edge_constraints": [
+        "open"
+      ],
+      "source": 5,
+      "target": 18
+    },
+    {
+      "label": "k",
+      "edge_type": "key_locked",
+      "edge_constraints": [
+        "key_locked"
+      ],
+      "source": 5,
+      "target": 4
+    },
+    {
+      "label": "",
+      "edge_type": "open",
+      "edge_constraints": [
+        "open"
+      ],
+      "source": 6,
+      "target": 7
+    },
+    {
+      "label": "l",
+      "edge_type": "soft_locked",
+      "edge_constraints": [
+        "soft_locked"
+      ],
+      "source": 7,
+      "target": 15
+    },
+    {
+      "label": "",
+      "edge_type": "open",
+      "edge_constraints": [
+        "open"
+      ],
+      "source": 7,
+      "target": 6
+    },
+    {
+      "label": "",
+      "edge_type": "open",
+      "edge_constraints": [
+        "open"
+      ],
+      "source": 8,
+      "target": 3
+    },
+    {
+      "label": "k",
+      "edge_type": "key_locked",
+      "edge_constraints": [
+        "key_locked"
+      ],
+      "source": 8,
+      "target": 4
+    },
+    {
+      "label": "",
+      "edge_type": "open",
+      "edge_constraints": [
+        "open"
+      ],
+      "source": 9,
+      "target": 13
+    },
+    {
+      "label": "",
+      "edge_type": "open",
+      "edge_constraints": [
+        "open"
+      ],
+      "source": 9,
+      "target": 17
+    },
+    {
+      "label": "l",
+      "edge_type": "soft_locked",
+      "edge_constraints": [
+        "soft_locked"
+      ],
+      "source": 10,
+      "target": 18
+    },
+    {
+      "label": "l",
+      "edge_type": "soft_locked",
+      "edge_constraints": [
+        "soft_locked"
+      ],
+      "source": 10,
+      "target": 19
+    },
+    {
+      "label": "l",
+      "edge_type": "soft_locked",
+      "edge_constraints": [
+        "soft_locked"
+      ],
+      "source": 11,
+      "target": 19
+    },
+    {
+      "label": "",
+      "edge_type": "open",
+      "edge_constraints": [
+        "open"
+      ],
+      "source": 12,
+      "target": 14
+    },
+    {
+      "label": "",
+      "edge_type": "open",
+      "edge_constraints": [
+        "open"
+      ],
+      "source": 13,
+      "target": 14
+    },
+    {
+      "label": "",
+      "edge_type": "open",
+      "edge_constraints": [
+        "open"
+      ],
+      "source": 13,
+      "target": 9
+    },
+    {
+      "label": "",
+      "edge_type": "open",
+      "edge_constraints": [
+        "open"
+      ],
+      "source": 14,
+      "target": 12
+    },
+    {
+      "label": "",
+      "edge_type": "open",
+      "edge_constraints": [
+        "open"
+      ],
+      "source": 14,
+      "target": 13
+    },
+    {
+      "label": "",
+      "edge_type": "open",
+      "edge_constraints": [
+        "open"
+      ],
+      "source": 15,
+      "target": 0
+    },
+    {
+      "label": "",
+      "edge_type": "open",
+      "edge_constraints": [
+        "open"
+      ],
+      "source": 15,
+      "target": 7
+    },
+    {
+      "label": "k",
+      "edge_type": "key_locked",
+      "edge_constraints": [
+        "key_locked"
+      ],
+      "source": 15,
+      "target": 16
+    },
+    {
+      "label": "",
+      "edge_type": "open",
+      "edge_constraints": [
+        "open"
+      ],
+      "source": 16,
+      "target": 17
+    },
+    {
+      "label": "k",
+      "edge_type": "key_locked",
+      "edge_constraints": [
+        "key_locked"
+      ],
+      "source": 16,
+      "target": 15
+    },
+    {
+      "label": "",
+      "edge_type": "open",
+      "edge_constraints": [
+        "open"
+      ],
+      "source": 17,
+      "target": 9
+    },
+    {
+      "label": "",
+      "edge_type": "open",
+      "edge_constraints": [
+        "open"
+      ],
+      "source": 17,
+      "target": 16
+    },
+    {
+      "label": "",
+      "edge_type": "open",
+      "edge_constraints": [
+        "open"
+      ],
+      "source": 17,
+      "target": 4
+    },
+    {
+      "label": "b",
+      "edge_type": "bombable",
+      "edge_constraints": [
+        "bombable"
+      ],
+      "source": 17,
+      "target": 18
+    },
+    {
+      "label": "",
+      "edge_type": "open",
+      "edge_constraints": [
+        "open"
+      ],
+      "source": 18,
+      "target": 5
+    },
+    {
+      "label": "b",
+      "edge_type": "bombable",
+      "edge_constraints": [
+        "bombable"
+      ],
+      "source": 18,
+      "target": 17
+    },
+    {
+      "label": "l",
+      "edge_type": "soft_locked",
+      "edge_constraints": [
+        "soft_locked"
+      ],
+      "source": 18,
+      "target": 10
+    },
+    {
+      "label": "l",
+      "edge_type": "soft_locked",
+      "edge_constraints": [
+        "soft_locked"
+      ],
+      "source": 19,
+      "target": 10
+    },
+    {
+      "label": "",
+      "edge_type": "open",
+      "edge_constraints": [
+        "open"
+      ],
+      "source": 19,
+      "target": 11
+    }
+  ]
+}

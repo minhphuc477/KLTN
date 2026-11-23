@@ -5,7 +5,7 @@ import torch
 
 from src.core.definitions import SEMANTIC_PALETTE
 from src.core.logic_net import LogicNet, WalkabilityPredictor
-from src.utils.gradient_probe import GradientProbe
+from src.utils.gradient_probe import GradientProbe, objective_gradient_diagnostics
 
 
 @pytest.mark.parametrize("pathfinder", ["bellman_ford", "cnn"])
@@ -63,6 +63,38 @@ def test_logicnet_graph_loss_backpropagates_to_room_passability():
     assert float(grad.abs().sum().item()) > 1e-8
 
 
+def test_dungeon_graph_loss_lifts_virtual_nodes_without_constant_fallback():
+    net = LogicNet(latent_dim=8, num_classes=44, hidden_dim=16, num_iterations=3)
+    room_passability = torch.tensor([0.35, 0.8], requires_grad=True)
+    node_features = torch.zeros(3, 6)
+    node_features[2, 3] = 1.0
+    graph_data = {
+        "graph_scope": "dungeon",
+        "node_features": node_features,
+        "edge_index": torch.tensor([[0, 1], [1, 2]], dtype=torch.long),
+        "edge_features": torch.zeros(2, 8),
+        "current_node_idx": torch.tensor([0, 2]),
+        "node_passability_parent_idx": torch.tensor([0, 0, 2]),
+        "start_node_id": 0,
+        "target_idx": 2,
+        "key_lock_pairs": [],
+    }
+
+    total, _reach, _lock, info = net._compute_global_graph_losses(
+        graph_data,
+        room_passability=room_passability,
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+    )
+    grad = torch.autograd.grad(total, room_passability, allow_unused=False)[0]
+
+    assert "global_graph_skipped" not in info
+    assert info["global_graph_count"] == pytest.approx(1.0)
+    assert info["global_virtual_nodes_lifted"] == pytest.approx(1.0)
+    assert torch.isfinite(grad).all()
+    assert float(grad.abs().sum().item()) > 1e-8
+
+
 def test_walkability_ids_from_palette():
     predictor = WalkabilityPredictor(num_classes=44)
 
@@ -99,3 +131,25 @@ def test_gradient_probe_records_logicnet_module_gradients():
 
     assert any(name.startswith("grad/logicnet/tile_classifier") for name in probe.last_stats)
     assert any(value > 0 for value in probe.last_stats.values())
+
+
+def test_objective_gradient_diagnostics_detects_conflict_and_dead_objective():
+    parameters = torch.nn.Parameter(torch.tensor([1.0, 2.0]))
+    diagnostics = objective_gradient_diagnostics(
+        {
+            "aligned": parameters.sum(),
+            "opposed": -parameters.sum(),
+            "orthogonal": parameters[0] - parameters[1],
+            "dead": torch.zeros(()),
+        },
+        [parameters],
+    )
+
+    norms = diagnostics["objective_gradient_norms"]
+    cosines = diagnostics["objective_gradient_cosines"]
+    assert norms["aligned"] == pytest.approx(2.0**0.5)
+    assert norms["dead"] == pytest.approx(0.0)
+    assert cosines["aligned__vs__opposed"] == pytest.approx(-1.0)
+    assert cosines["aligned__vs__orthogonal"] == pytest.approx(0.0)
+    assert cosines["aligned__vs__dead"] is None
+    assert parameters.grad is None

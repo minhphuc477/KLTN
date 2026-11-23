@@ -16,10 +16,44 @@ import numpy as np
 from .records import PublicationResultRecord, STAGE_NAMES
 
 
+def holm_adjust_pvalues(
+    p_values: Dict[str, float],
+    *,
+    familywise_alpha: float = 0.05,
+) -> Dict[str, Dict[str, Any]]:
+    """Apply Holm's step-down correction to one preregistered contrast family."""
+    if not 0.0 < float(familywise_alpha) < 1.0:
+        raise ValueError("familywise_alpha must lie strictly between zero and one.")
+    checked: list[Tuple[str, float]] = []
+    for name, value in p_values.items():
+        p_value = float(value)
+        if not np.isfinite(p_value) or not 0.0 <= p_value <= 1.0:
+            raise ValueError(f"Invalid p-value for {name!r}: {value!r}.")
+        checked.append((str(name), p_value))
+    ordered = sorted(checked, key=lambda item: (item[1], item[0]))
+    family_size = len(ordered)
+    running_adjusted = 0.0
+    output: Dict[str, Dict[str, Any]] = {}
+    for rank, (name, p_value) in enumerate(ordered, start=1):
+        multiplier = family_size - rank + 1
+        running_adjusted = max(running_adjusted, min(1.0, multiplier * p_value))
+        output[name] = {
+            "raw_p_value": p_value,
+            "holm_adjusted_p_value": running_adjusted,
+            "holm_rank": rank,
+            "family_size": family_size,
+            "familywise_alpha": float(familywise_alpha),
+            "reject_familywise_null": bool(running_adjusted <= float(familywise_alpha)),
+        }
+    return output
+
+
 def aggregate_publication_records(
     records: Iterable[PublicationResultRecord],
 ) -> list[Dict[str, Any]]:
     """Aggregate every attempted record without silently dropping failures."""
+    records = list(records)
+    _validate_record_collection(records)
     grouped: dict[Tuple[str, str, str], list[PublicationResultRecord]] = defaultdict(list)
     for record in records:
         for stage in STAGE_NAMES:
@@ -79,6 +113,28 @@ def _guidance_pair_key(record: PublicationResultRecord) -> Tuple[Any, ...]:
     )
 
 
+def _validate_record_collection(records: Sequence[PublicationResultRecord]) -> None:
+    """Reject reruns and incompatible evidence before computing any rate or test.
+
+    Configurations legitimately differ between model arms. Corpus/split
+    manifests can differ between outer folds, but must agree within a fold.
+    All included records must come from the same code and sealed protocol.
+    """
+    seen: set[Tuple[Any, ...]] = set()
+    provenance: dict[Tuple[str, str], str] = {}
+    for record in records:
+        key = (record.model_id, *_record_pair_key(record))
+        if key in seen:
+            raise ValueError(f"Duplicate publication record for attempt key={key!r}.")
+        seen.add(key)
+        for field in ("protocol_sha256", "git_commit", "dataset_manifest_sha256"):
+            scope = record.outer_fold if field == "dataset_manifest_sha256" else "all"
+            provenance_key = (field, scope)
+            value = getattr(record, field)
+            if provenance.setdefault(provenance_key, value) != value:
+                raise ValueError(f"Mixed {field} in publication records for scope={scope!r}.")
+
+
 def _conservative_stage_validity(
     record: PublicationResultRecord,
     stage: str,
@@ -109,6 +165,7 @@ def _paired_fold_summary(
     stage: str,
     bootstrap_samples: int,
     seed: int,
+    inferential: bool = True,
 ) -> Dict[str, Any]:
     baseline_keys = set(baseline)
     comparison_keys = set(comparison)
@@ -141,6 +198,11 @@ def _paired_fold_summary(
     fold_deltas = {fold: float(np.mean(values)) for fold, values in sorted(by_fold.items())}
     deltas = np.asarray(list(fold_deltas.values()), dtype=np.float64)
     result.update({"outer_fold_count": int(deltas.size), "fold_mean_deltas": fold_deltas})
+    if not inferential:
+        return {**result, "analysis_status": "descriptive_only",
+                "estimand": "comparison minus baseline exact-valid rate across all matched attempts",
+                "mean_fold_delta": float(np.mean(deltas)) if deltas.size else None,
+                "reason": "Fold dependence has not been accounted for; no p-value or confidence interval is certified."}
     if deltas.size < 2:
         return {
             **result,
@@ -184,28 +246,40 @@ def paired_exact_validity_by_fold(
     *,
     baseline_model_id: str,
     comparison_model_id: str,
+    inference_variant: str = "unguided",
     stage: str = "raw",
     bootstrap_samples: int = 10_000,
     seed: int = 0,
+    inferential: bool = True,
 ) -> Dict[str, Any]:
     """Compare two models after aggregating matched attempts within each fold.
 
     Missing, timed-out, and validator-error stages score zero in the
     all-attempt validity estimand. Entirely missing paired records are not
     imputed: they block confirmatory inference and are reported explicitly.
+    Each contrast selects one inference condition; guided and unguided records
+    must never be pooled into the primary estimand.
     """
     if stage not in STAGE_NAMES:
         raise ValueError(f"stage must be one of {STAGE_NAMES}; got {stage!r}.")
     if baseline_model_id == comparison_model_id:
         raise ValueError("baseline_model_id and comparison_model_id must differ.")
+    if not inference_variant:
+        raise ValueError("One explicit inference_variant must be selected.")
     if bootstrap_samples < 1:
         raise ValueError("bootstrap_samples must be positive.")
+
+    _validate_record_collection([
+        record for record in records
+        if record.model_id in {baseline_model_id, comparison_model_id}
+        and record.inference_variant == inference_variant
+    ])
 
     indexes: dict[str, dict[Tuple[Any, ...], PublicationResultRecord]] = {}
     for model_id in (baseline_model_id, comparison_model_id):
         index: dict[Tuple[Any, ...], PublicationResultRecord] = {}
         for record in records:
-            if record.model_id != model_id:
+            if record.model_id != model_id or record.inference_variant != inference_variant:
                 continue
             key = _record_pair_key(record)
             if key in index:
@@ -215,6 +289,7 @@ def paired_exact_validity_by_fold(
 
     result: Dict[str, Any] = {
         "analysis": "paired_exact_validity_by_outer_fold",
+        "inference_variant": inference_variant,
         "stage": stage,
         "baseline_model_id": baseline_model_id,
         "comparison_model_id": comparison_model_id,
@@ -226,6 +301,7 @@ def paired_exact_validity_by_fold(
         stage=stage,
         bootstrap_samples=bootstrap_samples,
         seed=seed,
+        inferential=inferential,
     )
 
 
@@ -246,6 +322,12 @@ def paired_guidance_validity_by_fold(
         raise ValueError("Guidance inference variants must differ.")
     if bootstrap_samples < 1:
         raise ValueError("bootstrap_samples must be positive.")
+
+    _validate_record_collection([
+        record for record in records
+        if record.model_id == model_id
+        and record.inference_variant in {baseline_inference_variant, comparison_inference_variant}
+    ])
 
     indexes: dict[str, dict[Tuple[Any, ...], PublicationResultRecord]] = {}
     for inference_variant in (baseline_inference_variant, comparison_inference_variant):
@@ -280,6 +362,7 @@ def paired_guidance_validity_by_fold(
 
 __all__ = [
     "aggregate_publication_records",
+    "holm_adjust_pvalues",
     "paired_exact_validity_by_fold",
     "paired_guidance_validity_by_fold",
 ]

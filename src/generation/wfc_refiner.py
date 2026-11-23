@@ -1,4 +1,4 @@
-﻿"""
+"""
 Causal Wave Function Collapse for Dungeon Refinement
 =====================================================
 

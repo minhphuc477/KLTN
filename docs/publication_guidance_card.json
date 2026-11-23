@@ -1,8 +1,187 @@
 {
   "schema_version": "1.0",
-  "research_question": "Can a graph-conditioned neural-symbolic PCG pipeline generate Zelda-like dungeons while separating raw neural validity, symbolic repair, hard oracle validation, and bounded-agent diagnostics?",
+  "research_question": "Can G-LMDM (Graph-Conditioned Logic-Regularized Masked Discrete Model) synthesize Zelda-like dungeons from unseen mission graphs while cleanly attributing raw neural validity, symbolic repair burden, formal StateSpaceAStar proofs, and bounded P-CBS diagnostics?",
+  "confirmatory_research_question": "On held-out Dungeon-9 mission graphs, do causal Block III GraphGPS+RRWP conditioning, absorbing-state discrete masked synthesis on 16x11 tile tokens, and direct 16x11 Soft Bellman-Ford LogicNet supervision jointly increase pre-repair oracle solvability and reduce symbolic repair burden (repair_rate, tiles_repaired_mean) relative to unconditioned, continuous VQ-VAE latent diffusion/flow, and external symbolic baselines at matched diversity and lower parameter cost?",
+  "research_gaps": {
+    "RG1": {
+      "title": "(FG1) Macro-to-Micro Semantic-Geometric Disconnect in Hierarchical Zelda Generation",
+      "summary": "Two-stage Zelda pipelines (Dormans 2010; Summerville et al. 2015; Lavender & Thompson 2016; Gutierrez & Schrum 2020 Graph-GAN) synthesize rooms unconditionally or via PCA without causal boundary/neighbor conditioning or global relative random-walk positional encodings (RRWP, Ma et al. 2023), forcing destructive post-hoc door carving and rejection sampling.",
+      "literature_anchors": [
+        "Dormans 2010",
+        "Summerville et al. 2015",
+        "Lavender and Thompson 2016",
+        "Gutierrez and Schrum 2020",
+        "Ma et al. 2023"
+      ]
+    },
+    "RG2": {
+      "title": "(FG2) Continuous-Latent Bottleneck and Rarity Erasure in Small-Data Categorical Tile Grids",
+      "summary": "On small, severely imbalanced categorical dungeon corpora (VGLC: 349 Dungeon 1-8 train rooms, 217 unique 16x11 grids, 43 unique 12x7 structural interiors; 88.60% WALL+FLOOR vs. 0.68% ENEMY and 0.05% STAIR), continuous latent diffusion (VQ-VAE + UNet/DiT, van den Oord et al. 2017; Schrum et al. 2025) introduces tokenization distortion, parameter bloat (47.13M UNet[1,2] / 22.44M DiT+Flow), argmax rarity erasure, and low raw playability (12-27%), whereas absorbing-state discrete masked synthesis (Austin et al. 2021 D3PM; Chang et al. 2022 MaskGIT; Inoue et al. 2023 LayoutDM; Sahoo et al. 2024 MDLM) operates natively on 16x11 tokens (3.58M train / 3.36M inference) and supports exact t=0 boundary clamping.",
+      "literature_anchors": [
+        "van den Oord et al. 2017",
+        "Austin et al. 2021",
+        "Chang et al. 2022",
+        "Inoue et al. 2023",
+        "Sahoo et al. 2024",
+        "Schrum et al. 2025"
+      ]
+    },
+    "RG3": {
+      "title": "(FG3) Traversability-Blind Likelihood Training and Unattributed Post-Hoc Repair",
+      "summary": "Standard categorical cross-entropy treats single-tile corridor cut-sets (1/176 = 0.57%) identically to interior decoration, yielding fragile raw layouts (24.3% pre-repair GAN validity before MILP repair, Zhang et al. 2020; Cooper 2022/2023). Differentiable planning and semantic losses (Tamar et al. 2016 VIN; Xu et al. 2018) mitigate this only when applied directly to discrete 16x11 tile logits rather than through lossy continuous decoders, and when edit burden (repair_rate, tiles_repaired_mean) is attributed cleanly across raw -> constrained -> repaired -> compiled stages.",
+      "literature_anchors": [
+        "Tamar et al. 2016",
+        "Xu et al. 2018",
+        "Zhang et al. 2020",
+        "Cooper 2022",
+        "Cooper 2023"
+      ]
+    },
+    "RG4": {
+      "title": "(FG4) Dungeon-Split Leakage, External Baseline Deficit, and Proxy-vs-Oracle Conflation",
+      "summary": "PCG evaluation audits (Summerville et al. 2016; Holmgard et al. 2018; Withington et al. 2024; Khalifa et al. 2025) document that random room splits across the 9 Zelda dungeons leak dungeon style, internal-only ablations omit external symbolic baselines (Random, WFC, Grammar-only), dependent multi-fold averages produce pseudoreplicated intervals, and bounded-agent personas (P-CBS) cannot substitute for exact StateSpaceAStar proofs or human-subject studies.",
+      "literature_anchors": [
+        "Summerville et al. 2016",
+        "Holmgard et al. 2018",
+        "Withington et al. 2024",
+        "Khalifa et al. 2025"
+      ]
+    }
+  },
+  "problem_statements": {
+    "PS1": {
+      "research_gap": ["RG1"],
+      "title": "Causal Multi-Scale Conditioning Deficit in Two-Stage Dungeon Synthesis",
+      "summary": "Without causal Block III mission-role embeddings, GraphGPS+RRWP topological encodings, directional neighbor-map features, and incident doorway boundary signals (G vs. N and No-RRWP), room generators break inter-room door continuity and key-lock role alignment prior to repair."
+    },
+    "PS2": {
+      "research_gap": ["RG2"],
+      "title": "Continuous Latent Compression Pathology vs. Discrete Token Generation on 43 Unique Interiors",
+      "summary": "Applying 17.37M VQ-VAE + 26.33M UNet[1,2] (47.13M total) or DiT+Flow (22.44M total) to 349 training rooms (217 unique 16x11 grids, 43 unique 12x7 structural interiors) compounds tokenization distortion and rarity erasure (<0.7% ENEMY/STAIR), whereas discrete absorbing-state G-LMDM (3.58M train / 3.36M inference) avoids continuous decoding errors and permits exact token boundary clamping."
+    },
+    "PS3": {
+      "research_gap": ["RG3"],
+      "title": "Traversability-Blind Objective and Unattributed Repair Burden",
+      "summary": "Tokenwise cross-entropy alone fails to preserve 1-tile corridors and resource-ordered routes, while reporting only post-repair WFC/BFS outputs masks raw neural failure behind deterministic repair edits (repair_rate, tiles_repaired_mean)."
+    },
+    "PS4": {
+      "research_gap": ["RG4"],
+      "title": "Dungeon-Level Leakage, Omitted External Baselines, and Proof-Proxy Conflation",
+      "summary": "Non-holdout room splits, omitted external symbolic baselines (Random, WFC, Grammar-only), dependent multi-fold pooling without within-graph pairing, and equating bounded-rational P-CBS trajectories with formal StateSpaceAStar solvability proofs invalidate empirical claims."
+    }
+  },
+  "research_objectives": {
+    "RO1": {
+      "problem_statement": "PS1",
+      "summary": "Isolate G-LMDM's causal Block III GraphGPS + RRWP + directional neighbor/boundary conditioner (G) against unconditioned/neighbor-only (N) and non-RRWP graph encoders (No-RRWP) on unseen mission graphs.",
+      "experiment_blocks": ["B1"]
+    },
+    "RO2": {
+      "problem_statement": "PS2",
+      "summary": "Conduct matched-split, 4 GB GPU-budget comparisons between discrete absorbing-state G-LMDM (MaskedRoom, 3.58M train / 3.36M inference) and continuous latent baselines (VQ-VAE + UNet[1,2] 47.13M, DiT+Flow 22.44M) on rare-tile preservation, pre-repair validity, and generation latency.",
+      "experiment_blocks": ["B2", "B3"]
+    },
+    "RO3": {
+      "problem_statement": "PS3",
+      "summary": "Couple differentiable Soft Bellman-Ford LogicNet supervision directly onto G-LMDM's 16x11 tile logits (G-L/G-LG vs. G and inference-only guidance) and report full Schema 2.0 4-stage attribution (raw -> constrained -> repaired -> compiled).",
+      "experiment_blocks": ["B4", "Block_VI"]
+    },
+    "RO4": {
+      "problem_statement": "PS4",
+      "summary": "Enforce strict Dungeon-9 holdout (Dungeons 1-8 train vs. unseen Dungeon 9 test), descriptive LODO sensitivity checks, paired non-parametric Holm-corrected comparisons against external symbolic baselines (Random, WFC, Grammar-only), and strict separation between hard StateSpaceAStar proofs and bounded P-CBS diagnostics.",
+      "experiment_blocks": ["B5", "Block_I", "Block_VII"]
+    }
+  },
+  "research_subquestions": {
+    "RQ1": {
+      "objective": "RO1",
+      "question": "Relative to unconditioned/neighbor-only (N) and non-RRWP graph encoders (No-RRWP), does causal Block III GraphGPS+RRWP conditioning (G) improve pre-repair door alignment, boundary consistency, and mission-role adherence on held-out Dungeon-9 graphs?"
+    },
+    "RQ2": {
+      "objective": "RO2",
+      "question": "On the small-data VGLC 16x11 corpus (349 train rooms, 43 unique 12x7 interiors), does discrete absorbing-state G-LMDM preserve rare gameplay tiles (<0.7% ENEMY/STAIR) and achieve higher pre-repair validity at lower parameter/latency cost than continuous VQ-VAE + UNet[1,2] and DiT+Flow baselines?"
+    },
+    "RQ3": {
+      "objective": "RO3",
+      "question": "Holding GraphGPS+RRWP conditioning (G) fixed, does direct 16x11 differentiable Soft Bellman-Ford LogicNet supervision (G-LG) raise pre-repair oracle solvability and reduce repair_rate and tiles_repaired_mean across raw -> constrained -> repaired -> compiled stages without diversity collapse?"
+    },
+    "RQ4": {
+      "objective": "RO4",
+      "question": "Under held-out Dungeon-9 evaluation, external symbolic baselines (Random, WFC, Grammar-only), paired non-parametric inference, and explicit separation of StateSpaceAStar proofs from bounded P-CBS diagnostics, do G-LMDM improvements generalize to unseen dungeon topologies without human-likeness overclaiming?"
+    }
+  },
+  "hypotheses": {
+    "H1": {
+      "rq": "RQ1",
+      "statement": "Causal Block III GraphGPS+RRWP conditioning (G) significantly improves pre-repair door alignment, boundary match accuracy, and mission-role consistency over N and No-RRWP on unseen Dungeon-9 mission graphs.",
+      "null_rule": "If No-RRWP or N matches G on boundary/role consistency within paired uncertainty intervals, retain the simpler conditioner and document topological redundancy."
+    },
+    "H2": {
+      "rq": "RQ2",
+      "statement": "Absorbing-state discrete G-LMDM achieves higher rare-tile recall and pre-repair room validity with an order-of-magnitude smaller footprint (3.58M train / 3.36M inference vs. 47.13M UNet[1,2] and 22.44M DiT+Flow) and lower sampling latency on a 4 GB GPU.",
+      "null_rule": "If continuous VQ-VAE + UNet[1,2] or DiT+Flow surpasses discrete G-LMDM on raw dungeon-scale structural coherence or solvability, document the discrete-continuous Pareto trade-off rather than hiding continuous baselines."
+    },
+    "H3": {
+      "rq": "RQ3",
+      "statement": "Direct 16x11 training-time Soft Bellman-Ford LogicNet supervision (G-LG) increases raw oracle solvability and reduces symbolic repair_rate and tiles_repaired_mean relative to G and inference-only gradient guidance at comparable diversity.",
+      "null_rule": "If G-LG reduces diversity or fails to outperform G and inference-only guidance on repair_rate, report the precision-diversity trade-off explicitly."
+    },
+    "H4": {
+      "rq": "RQ4",
+      "statement": "Within-identity Dungeon-9 paired Holm-corrected tests, descriptive LODO sensitivity checks, external symbolic baselines (Random, WFC, Grammar-only), and Block I topology bounds preserve G-LMDM's pre-repair validity and lower repair burden while keeping hard StateSpaceAStar solvability distinct from P-CBS behavioral diagnostics."
+    }
+  },
+  "scientific_traceability": {
+    "RG1->PS1->RO1->RQ1->H1": {
+      "blocks": ["Block_III", "Block_IV"],
+      "experiment_blocks": ["B1"],
+      "runs": ["R001-R004"],
+      "configs": [
+        "configs/zelda_hmolqd.yaml",
+        "configs/ablation_no_rrwp.yaml",
+        "configs/ablation_neural_floor_conditioning.yaml"
+      ]
+    },
+    "RG2->PS2->RO2->RQ2->H2": {
+      "blocks": ["Block_II", "Block_IV"],
+      "experiment_blocks": ["B2", "B3"],
+      "runs": ["R005-R010"],
+      "configs": [
+        "configs/zelda_hmolqd.yaml",
+        "configs/zelda_hmolqd_masked_small.yaml",
+        "configs/ablation_flow_matching.yaml",
+        "configs/ablation_no_fsq.yaml"
+      ]
+    },
+    "RG3->PS3->RO3->RQ3->H3": {
+      "blocks": ["Block_V", "Block_VI"],
+      "experiment_blocks": ["B4"],
+      "runs": ["R011-R015"],
+      "configs": [
+        "configs/zelda_hmolqd.yaml",
+        "configs/zelda_hmolqd_masked_small.yaml",
+        "configs/ablation_no_logicnet.yaml",
+        "configs/ablation_inference_guidance_only.yaml"
+      ],
+      "modules": [
+        "src/core/logic_net.py",
+        "src/publication/stage_bridge.py",
+        "src/publication/records.py"
+      ]
+    },
+    "RG4->PS4->RO4->RQ4->H4": {
+      "blocks": ["Block_I", "Block_VII"],
+      "experiment_blocks": ["B5"],
+      "runs": ["R016"],
+      "modules": [
+        "src/publication/confirmatory.py",
+        "src/evaluation/benchmark_suite.py",
+        "scripts/run_ablation_study.py"
+      ]
+    }
+  },
   "publishable_direction": {
-    "primary": "repair-aware graph-conditioned neural-symbolic PCG system",
+    "primary": "G-LMDM: graph-conditioned, logic-regularized discrete masked neuro-symbolic PCG framework with attributed 4-stage repair verification",
     "not_primary": [
       "generic dungeon generator",
       "standalone SOTA diffusion model",
@@ -14,29 +193,32 @@
     "proposed_method_blocks": [
       "Block 0 data and graph extraction",
       "Block I mission-graph generation",
-      "Block II tokenizer",
-      "Block III condition encoder",
-      "Block IV room generator",
-      "Block V LogicNet diagnostics/guidance",
-      "Block VI symbolic repair",
-      "Block VII hard oracle and P-CBS diagnostics"
+      "Block II VQ-VAE tokenizer (continuous comparator)",
+      "Block III GraphGPS+RRWP condition encoder",
+      "Block IV G-LMDM discrete masked generator (and UNet/DiT continuous comparators)",
+      "Block V differentiable Soft Bellman-Ford LogicNet diagnostics/supervision",
+      "Block VI attributed symbolic repair",
+      "Block VII hard StateSpaceAStar oracle and bounded P-CBS diagnostics"
     ],
     "baselines_or_ablations": [
       "random topology",
       "grammar-only topology",
       "flat-prior WFC",
       "weighted-prior WFC",
-      "no graph conditioning",
-      "no LogicNet",
-      "no repair",
-      "categorical/codebook prior",
-      "masked-token generator",
-      "few-step consistency adapter"
+      "no graph conditioning (N)",
+      "no RRWP positional encoding",
+      "no LogicNet (G / zelda_hmolqd_masked_small.yaml)",
+      "inference-only LogicNet guidance",
+      "no repair (raw stage)",
+      "continuous VQ-VAE + UNet[1,2]",
+      "continuous VQ-VAE + DiT Flow Matching"
     ]
   },
   "claim_language": {
     "allowed": [
       "graph-conditioned",
+      "logic-regularized",
+      "discrete masked synthesis",
       "repair-aware",
       "bounded-agent proxy",
       "matched-budget ablation",
@@ -55,25 +237,24 @@
   "data_card": {
     "dataset": "VGLC The Legend of Zelda",
     "dataset_manifest_path": "Data/The Legend of Zelda/dataset_manifest.json",
-    "train_dungeon_ids": [
-      1,
-      2,
-      3,
-      4,
-      5,
-      6,
-      7,
-      8
-    ],
-    "test_dungeon_ids": [
-      9
-    ],
-    "room_shape": [
-      16,
-      11
-    ],
+    "train_dungeon_ids": [1, 2, 3, 4, 5, 6, 7, 8],
+    "test_dungeon_ids": [9],
+    "room_shape": [16, 11],
+    "interior_shape": [12, 7],
     "tile_classes": 44,
-    "leakage_policy": "Dungeon 9 is held out from training and model selection.",
+    "active_tile_classes_total": 9,
+    "active_tile_classes_train": 8,
+    "total_room_instances": 450,
+    "train_room_instances": 349,
+    "test_room_instances": 101,
+    "train_unique_rooms_16x11": 217,
+    "train_unique_interiors_12x7": 43,
+    "wall_floor_combined_share": 0.8860,
+    "rare_tile_shares_train": {
+      "ENEMY": 0.0068,
+      "STAIR": 0.0005
+    },
+    "leakage_policy": "Dungeon 9 (101 room instances across Quest 1 and Quest 2) is held out from training and model selection.",
     "augmentation_policy": "Document exact augmentation commands before use."
   },
   "artifact_manifest": {
@@ -90,14 +271,21 @@
         "path": "",
         "sha256": "",
         "status": "blocked",
-        "notes": "Must be a valid tokenizer checkpoint, not a diffusion bundle."
+        "notes": "Continuous baseline tokenizer checkpoint (for UNet/DiT comparators); must not be a diffusion bundle."
       },
       {
         "name": "diffusion",
         "path": "",
         "sha256": "",
         "status": "blocked",
-        "notes": "Must be trained on the locked split and paired with the tokenizer above."
+        "notes": "Continuous latent UNet/DiT comparator checkpoint trained on Dungeon 1-8 and paired with vqvae above."
+      },
+      {
+        "name": "masked_room",
+        "path": "",
+        "sha256": "",
+        "status": "blocked",
+        "notes": "Canonical G-LMDM discrete masked generator checkpoint (condition_gnn_type=gps, logic_net_enabled=true, alpha_logic=0.1) trained on Dungeon 1-8."
       }
     ]
   },
@@ -118,7 +306,7 @@
       "diversity",
       "controllability_error"
     ],
-    "raw_vs_repaired_policy": "Raw/pre-repair and post-repair oracle/P-CBS rates must be reported separately.",
+    "raw_vs_repaired_policy": "Raw, constrained, repaired, and compiled stage oracle/P-CBS rates must be reported separately.",
     "timeout_policy": "Timeout, unsolved, and invalid-input outcomes are separate labels."
   },
   "baseline_taxonomy": {
@@ -129,15 +317,19 @@
       "weighted WFC"
     ],
     "neural": [
-      "categorical prior",
-      "masked token",
-      "latent diffusion"
+      "G-LMDM (discrete masked + GPS + LogicNet)",
+      "MaskedRoom without LogicNet (G)",
+      "VQ-VAE + UNet[1,2] latent diffusion",
+      "VQ-VAE + DiT flow matching",
+      "categorical prior"
     ],
     "pipeline": [
-      "no graph",
-      "no LogicNet",
-      "no repair",
-      "full stack"
+      "no graph (N)",
+      "no RRWP",
+      "no LogicNet (G)",
+      "inference-only LogicNet guidance",
+      "no repair (raw stage)",
+      "full G-LMDM stack (G-LG)"
     ],
     "external_alignment": [
       "PCG Benchmark quality",
@@ -184,23 +376,103 @@
   },
   "literature_basis": [
     {
+      "topic": "Mission and space graph grammars for action-adventure levels",
+      "source": "Dormans, Adventures in Level Design: Generating Mission and Spaces for Action Adventure Games (FDG 2010)",
+      "url": "https://doi.org/10.1145/1814256.1814257"
+    },
+    {
+      "topic": "Bayesian topology and PCA room synthesis for Zelda dungeons",
+      "source": "Summerville et al., Sampling Hyrule: Multi-Technique Probabilistic Level Generation for Action Role Playing Games (AIIDE 2015)",
+      "url": "https://aaai.org/papers/00639-AIIDE15-11554/"
+    },
+    {
+      "topic": "Zelda-specific generative grammar adoption",
+      "source": "Lavender and Thompson, The Zelda Dungeon Generator: Adopting Generative Grammars to Create Levels for Action-Adventure Games (2016)",
+      "url": "https://scholar.google.com/scholar?q=Lavender+The+Zelda+Dungeon+Generator"
+    },
+    {
+      "topic": "Two-stage Graph-GAN hybrid dungeon generation for Zelda",
+      "source": "Gutierrez and Schrum, Generative Adversarial Network Rooms in Generative Graph Grammar Dungeons for The Legend of Zelda (IEEE CEC 2020)",
+      "url": "https://arxiv.org/abs/2001.05065"
+    },
+    {
+      "topic": "Relative random-walk positional encodings and hybrid graph transformers",
+      "source": "Ma et al., Graph Inductive Biases in Transformers without Message Passing (GRIT, ICML 2023)",
+      "url": "https://arxiv.org/abs/2305.17589"
+    },
+    {
+      "topic": "Discrete vector-quantized representation learning for categorical grids",
+      "source": "van den Oord et al., Neural Discrete Representation Learning (VQ-VAE, NeurIPS 2017)",
+      "url": "https://arxiv.org/abs/1711.00937"
+    },
+    {
+      "topic": "Structured discrete denoising diffusion with absorbing states",
+      "source": "Austin et al., Structured Denoising Diffusion Models in Discrete State-Spaces (D3PM, NeurIPS 2021)",
+      "url": "https://arxiv.org/abs/2107.03006"
+    },
+    {
+      "topic": "Confidence-scheduled masked parallel token decoding",
+      "source": "Chang et al., MaskGIT: Masked Generative Image Transformer (CVPR 2022)",
+      "url": "https://arxiv.org/abs/2202.04200"
+    },
+    {
+      "topic": "Discrete diffusion for constrained spatial layout tokens",
+      "source": "Inoue et al., LayoutDM: Discrete Diffusion Model for Controllable Layout Generation (CVPR 2023)",
+      "url": "https://arxiv.org/abs/2303.08137"
+    },
+    {
+      "topic": "Rao-Blackwellized absorbing-state masked discrete diffusion",
+      "source": "Sahoo et al., Simple and Effective Masked Diffusion Language Models (MDLM, NeurIPS 2024)",
+      "url": "https://arxiv.org/abs/2406.07524"
+    },
+    {
+      "topic": "Differentiable shortest-path / value iteration networks",
+      "source": "Tamar et al., Value Iteration Networks (NeurIPS 2016)",
+      "url": "https://arxiv.org/abs/1602.02867"
+    },
+    {
+      "topic": "Differentiable symbolic constraint regularization on neural logits",
+      "source": "Xu et al., A Semantic Loss Function for Deep Learning with Symbolic Knowledge (ICML 2018)",
+      "url": "https://arxiv.org/abs/1711.11157"
+    },
+    {
+      "topic": "Constrained tile and graph generation from VGLC examples",
+      "source": "Cooper, Sturgeon / Sturgeon-GRAPH: Constrained Graph Generation from Examples (AIIDE 2022 / FDG 2023)",
+      "url": "https://arxiv.org/abs/2202.11819"
+    },
+    {
       "topic": "PCGML and repair/evaluation framing",
-      "source": "Summerville et al., Procedural Content Generation via Machine Learning",
+      "source": "Summerville et al., Procedural Content Generation via Machine Learning (2017)",
       "url": "https://arxiv.org/abs/1702.00539"
     },
     {
-      "topic": "quality/diversity/controllability benchmark axes",
-      "source": "Khalifa et al., The Procedural Content Generation Benchmark",
+      "topic": "Exact MILP level repair",
+      "source": "Zhang et al., Video Game Level Repair via Mixed Integer Linear Programming (AIIDE 2020)",
+      "url": "https://arxiv.org/abs/2010.06627"
+    },
+    {
+      "topic": "Text-to-level continuous diffusion playability limits on Zelda",
+      "source": "Schrum et al., Text-to-Level Diffusion Models With Various Text Encoders for Super Mario Bros and The Legend of Zelda (AIIDE 2025)",
+      "url": "https://arxiv.org/abs/2507.00184"
+    },
+    {
+      "topic": "Quality, diversity, and controllability PCG benchmark axes",
+      "source": "Khalifa et al., The Procedural Content Generation Benchmark (2025)",
       "url": "https://arxiv.org/abs/2503.21474"
     },
     {
+      "topic": "Statistical and baseline rigor in PCG evaluation",
+      "source": "Withington, Cook, and Tokarchuk, On the Evaluation of Procedural Level Generation Systems (FDG 2024)",
+      "url": "https://arxiv.org/abs/2404.18657"
+    },
+    {
       "topic": "WFC as constraint solving",
-      "source": "Karth and Smith, WaveFunctionCollapse is Constraint Solving in the Wild",
+      "source": "Karth and Smith, WaveFunctionCollapse is Constraint Solving in the Wild (FDG 2017)",
       "url": "https://doi.org/10.1145/3102071.3110566"
     },
     {
-      "topic": "procedural personas as synthetic playtesters",
-      "source": "Holmgard et al., Automated Playtesting with Procedural Personas",
+      "topic": "Procedural personas as synthetic playtesters",
+      "source": "Holmgard et al., Automated Playtesting with Procedural Personas (2018)",
       "url": "https://arxiv.org/abs/1802.06881"
     }
   ]

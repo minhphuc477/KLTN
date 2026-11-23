@@ -124,11 +124,18 @@ class MaskedTokenTransformerBackbone(nn.Module):
     ) -> Tuple[Tensor, Optional[Tensor]]:
         if not isinstance(graph_data, dict):
             return context_tokens, None
+        batch_size, seq_len, _ = context_tokens.shape
+        conditioning_mode = str(graph_data.get("graph_conditioning_mode", "") or "").strip().lower()
+        if conditioning_mode == "pooled":
+            if seq_len != 1:
+                raise ModelContextContractError(
+                    f"pooled graph_conditioning_mode requires context seq_len=1, got {seq_len}."
+                )
+            return context_tokens, None
         node_mask = graph_data.get("node_mask")
         if not isinstance(node_mask, torch.Tensor):
             return context_tokens, None
 
-        batch_size, seq_len, _ = context_tokens.shape
         valid = node_mask.to(device=context_tokens.device, dtype=torch.bool)
         if valid.dim() == 1:
             valid = valid.unsqueeze(0)
@@ -276,6 +283,43 @@ class DiscreteMaskedRoomModel(nn.Module):
     - iteratively fill the most confident unknown positions
     """
 
+    RARE_TILES: Tuple[int, ...] = (
+        int(TileID.BLOCK),
+        int(TileID.DOOR_OPEN),
+        int(TileID.DOOR_LOCKED),
+        int(TileID.DOOR_BOMB),
+        int(TileID.DOOR_PUZZLE),
+        int(TileID.DOOR_BOSS),
+        int(TileID.DOOR_SOFT),
+        int(TileID.ENEMY),
+        int(TileID.START),
+        int(TileID.TRIFORCE),
+        int(TileID.BOSS),
+        int(TileID.KEY_SMALL),
+        int(TileID.KEY_BOSS),
+        int(TileID.KEY_ITEM),
+        int(TileID.ITEM_MINOR),
+        int(TileID.ELEMENT),
+        int(TileID.ELEMENT_FLOOR),
+        int(TileID.STAIR),
+        int(TileID.PUZZLE),
+    )
+    PINNED_CRITICAL_TILES: Tuple[int, ...] = (
+        int(TileID.DOOR_OPEN),
+        int(TileID.DOOR_LOCKED),
+        int(TileID.DOOR_BOMB),
+        int(TileID.DOOR_PUZZLE),
+        int(TileID.DOOR_BOSS),
+        int(TileID.DOOR_SOFT),
+        int(TileID.START),
+        int(TileID.TRIFORCE),
+        int(TileID.BOSS),
+        int(TileID.KEY_SMALL),
+        int(TileID.KEY_BOSS),
+        int(TileID.KEY_ITEM),
+        int(TileID.PUZZLE),
+    )
+
     def __init__(
         self,
         *,
@@ -298,12 +342,26 @@ class DiscreteMaskedRoomModel(nn.Module):
         room_topology_channels: int = ROOM_TOPOLOGY_CHANNEL_COUNT,
         context_attention_mode: str = "concat_encoder",
         mask_token_id: Optional[int] = None,
+        rare_tile_weight: float = 1.0,
+        focal_gamma: float = 0.0,
     ):
         super().__init__()
         self.num_classes = int(num_classes)
         self.hidden_dim = int(hidden_dim)
         self.context_dim = int(context_dim)
         self.default_num_steps = int(max(1, num_steps))
+        rare_tile_weight_val = float(rare_tile_weight)
+        if not math.isfinite(rare_tile_weight_val) or rare_tile_weight_val < 1.0:
+            raise ValueError(
+                f"rare_tile_weight must be a finite float >= 1.0, got {rare_tile_weight!r}."
+            )
+        focal_gamma_val = float(focal_gamma)
+        if not math.isfinite(focal_gamma_val) or focal_gamma_val < 0.0:
+            raise ValueError(
+                f"focal_gamma must be a finite float >= 0.0, got {focal_gamma!r}."
+            )
+        self.rare_tile_weight = rare_tile_weight_val
+        self.focal_gamma = focal_gamma_val
         mode = str(context_attention_mode).strip().lower()
         if mode in {"concat", "encoder", "original"}:
             mode = "concat_encoder"
@@ -442,6 +500,11 @@ class DiscreteMaskedRoomModel(nn.Module):
         self.register_buffer('_wall_class_mask', _wall_class_mask)
         for _name, _mask in _semantic_door_masks.items():
             self.register_buffer(f'_door_{_name}_class_mask', _mask)
+        _rare_lut = torch.zeros(self.num_classes, dtype=torch.bool)
+        for _rare_id in self.RARE_TILES:
+            if 0 <= int(_rare_id) < self.num_classes:
+                _rare_lut[int(_rare_id)] = True
+        self.register_buffer('rare_tile_lut', _rare_lut, persistent=False)
 
         # Topology channel indices for the four cardinal door channels.
         self._topo_door_ch = {
@@ -719,6 +782,7 @@ class DiscreteMaskedRoomModel(nn.Module):
         schedule_mode: str,
         stochastic: bool,
         generator: Optional[torch.Generator],
+        initial_logits: Optional[Tensor] = None,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Dict[str, float]]:
         batch_size = int(tokens.shape[0])
         device = tokens.device
@@ -726,6 +790,22 @@ class DiscreteMaskedRoomModel(nn.Module):
         total_editable_counts = (~fixed_mask).sum(dim=(1, 2)).clamp_min(1)
 
         logits = torch.zeros(batch_size, self.num_classes, ROOM_HEIGHT, ROOM_WIDTH, device=device)
+        if initial_logits is not None and tuple(initial_logits.shape) == (
+            batch_size,
+            self.num_classes,
+            ROOM_HEIGHT,
+            ROOM_WIDTH,
+        ):
+            committed_logits = initial_logits.to(device=device, dtype=torch.float32).clone()
+        else:
+            committed_logits = torch.zeros(
+                batch_size,
+                self.num_classes,
+                ROOM_HEIGHT,
+                ROOM_WIDTH,
+                device=device,
+                dtype=torch.float32,
+            )
         hidden = self._embed_tokens(tokens)
         steps_executed = 0
         committed_per_step: list[Tensor] = []
@@ -745,25 +825,26 @@ class DiscreteMaskedRoomModel(nn.Module):
             logits = self._apply_fixed_token_logits(logits, fixed_tokens=fixed_tokens, fixed_mask=fixed_mask)
 
             progress = float(i + 1) / float(max(1, total_steps))
-            anneal = max(0.25, 1.0 - progress)
-            current_temperature = max(1e-6, float(temperature) * anneal) if stochastic else max(1e-6, float(temperature))
-            probs = F.softmax((logits.float() / current_temperature), dim=1).to(dtype=logits.dtype)
+            token_temperature = max(1e-6, float(temperature))
+            probs = F.softmax((logits.float() / token_temperature), dim=1).to(dtype=logits.dtype)
             prediction, confidence = self._sample_predictions(
                 probs,
                 stochastic=stochastic,
                 generator=generator,
             )
-            ranking_scores = confidence
             if bool(stochastic):
-                ranking_scores = torch.log(ranking_scores.clamp_min(1e-9)) + (
-                    current_temperature
-                    * anneal
+                cell_confidence = probs.max(dim=1).values
+                gumbel_scale = float(temperature) * max(0.0, 1.0 - progress)
+                ranking_scores = torch.log(cell_confidence.clamp_min(1e-9)) + (
+                    gumbel_scale
                     * self._sample_gumbel(
-                        ranking_scores.shape,
+                        cell_confidence.shape,
                         device=device,
                         generator=generator,
                     )
                 )
+            else:
+                ranking_scores = confidence
 
             unresolved = ~committed
             if not bool(unresolved.any()):
@@ -800,6 +881,21 @@ class DiscreteMaskedRoomModel(nn.Module):
             committed = new_commit
             tokens[fixed_mask] = fixed_tokens[fixed_mask]
 
+            # Record logits from the masked prediction step where each token was committed
+            # (classifier head is only trained at masked positions, not unmasked inputs).
+            committed_logits = torch.where(chosen_mask.unsqueeze(1), logits.float(), committed_logits)
+            safe_committed_tokens = tokens.clamp(0, self.num_classes - 1).unsqueeze(1)
+            max_step_logit = committed_logits.max(dim=1, keepdim=True).values
+            selected_step_logit = committed_logits.gather(1, safe_committed_tokens)
+            boosted_logit = torch.maximum(selected_step_logit, max_step_logit + 1.0)
+            chosen_token_logits = committed_logits.scatter(1, safe_committed_tokens, boosted_logit)
+            committed_logits = torch.where(chosen_mask.unsqueeze(1), chosen_token_logits, committed_logits)
+
+        committed_logits = self._apply_fixed_token_logits(
+            committed_logits,
+            fixed_tokens=fixed_tokens,
+            fixed_mask=fixed_mask,
+        )
         committed_counts = (
             torch.stack(committed_per_step, dim=0).sum(dim=0)
             if committed_per_step
@@ -813,7 +909,7 @@ class DiscreteMaskedRoomModel(nn.Module):
             ),
             "mean_unresolved_tokens": float((~committed).flatten(1).sum(dim=1).float().mean().item()),
         }
-        return tokens, logits, hidden, committed, fill_metrics
+        return tokens, committed_logits, hidden, committed, fill_metrics
 
     @staticmethod
     def _normalize_fixed_layout(
@@ -1089,8 +1185,20 @@ class DiscreteMaskedRoomModel(nn.Module):
         max_mask_ratio: float = 1.0,
         topology_focus_map: Optional[Tensor] = None,
         topology_alignment_weight: float = 0.0,
+        rare_tile_weight: Optional[float] = None,
+        focal_gamma: Optional[float] = None,
         return_aux: bool = False,
     ) -> Tuple[Tensor, Dict[str, float]] | Tuple[Tensor, Dict[str, float], Dict[str, Tensor]]:
+        eff_rare_weight = self.rare_tile_weight if rare_tile_weight is None else float(rare_tile_weight)
+        if not math.isfinite(eff_rare_weight) or eff_rare_weight < 1.0:
+            raise ValueError(
+                f"rare_tile_weight must be a finite float >= 1.0, got {eff_rare_weight!r}."
+            )
+        eff_focal_gamma = self.focal_gamma if focal_gamma is None else float(focal_gamma)
+        if not math.isfinite(eff_focal_gamma) or eff_focal_gamma < 0.0:
+            raise ValueError(
+                f"focal_gamma must be a finite float >= 0.0, got {eff_focal_gamma!r}."
+            )
         target = target_tokens.long()
         if target.dim() == 2:
             target = target.unsqueeze(0)
@@ -1139,7 +1247,36 @@ class DiscreteMaskedRoomModel(nn.Module):
         ignore_target = target.masked_fill(~train_mask, -100)
         loss_map = F.cross_entropy(logits, ignore_target, ignore_index=-100, reduction="none")
         denom = train_mask.float().sum().clamp(min=1.0)
-        base_loss = F.cross_entropy(logits, ignore_target, ignore_index=-100, reduction="sum") / denom
+        rare_mask_valid = (
+            (target >= 0)
+            & (target < self.num_classes)
+            & self.rare_tile_lut[target.clamp(0, self.num_classes - 1)]
+            & train_mask
+        )
+        rare_masked_count = rare_mask_valid.float().sum()
+        if float(rare_masked_count.item()) > 0.0:
+            rare_tile_ce_loss = (loss_map * rare_mask_valid.float()).sum() / rare_masked_count.clamp(min=1.0)
+        else:
+            rare_tile_ce_loss = torch.zeros((), device=device, dtype=loss_map.dtype)
+        if eff_rare_weight == 1.0 and eff_focal_gamma == 0.0:
+            base_loss = loss_map.sum() / denom
+        else:
+            if eff_focal_gamma > 0.0:
+                pt = (-loss_map).exp().clamp(0.0, 1.0)
+                focal_factor = (1.0 - pt).pow(eff_focal_gamma)
+            else:
+                focal_factor = torch.ones_like(loss_map)
+            class_weight = torch.where(
+                rare_mask_valid,
+                torch.full_like(loss_map, eff_rare_weight),
+                torch.ones_like(loss_map),
+            )
+            pixel_weight = torch.where(
+                train_mask,
+                focal_factor * class_weight,
+                torch.zeros_like(loss_map),
+            )
+            base_loss = (loss_map * pixel_weight).sum() / pixel_weight.sum().clamp(min=1.0)
         topology_focus_loss = torch.zeros((), device=device, dtype=base_loss.dtype)
         topology_focus_fraction = torch.zeros((), device=device, dtype=base_loss.dtype)
         topology_focus_map_t = topology_focus_map
@@ -1158,12 +1295,27 @@ class DiscreteMaskedRoomModel(nn.Module):
                 topology_focus_loss = (loss_map * masked_focus).sum() / focus_denom.clamp(min=1.0)
                 topology_focus_fraction = masked_focus.gt(0).float().mean()
         loss = base_loss + float(max(0.0, topology_alignment_weight)) * topology_focus_loss
+        with torch.no_grad():
+            pred_tokens = logits.argmax(dim=1)
+            correct_mask = (pred_tokens == target) & train_mask
+            masked_token_accuracy = float(correct_mask.float().sum().item() / denom.item())
+            rare_denom_val = float(rare_masked_count.item())
+            if rare_denom_val > 0.0:
+                rare_tile_recall = float(
+                    ((pred_tokens == target) & rare_mask_valid).float().sum().item() / rare_denom_val
+                )
+            else:
+                rare_tile_recall = 1.0
         metrics = {
             "loss": float(loss.item()),
             "base_loss": float(base_loss.item()),
+            "rare_tile_ce_loss": float(rare_tile_ce_loss.item()),
             "mask_ratio": float(mask_ratio.mean().item()),
             "step_mean": float(step.float().mean().item()),
             "masked_fraction": float(train_mask.float().mean().item()),
+            "masked_token_accuracy": masked_token_accuracy,
+            "rare_tile_recall": rare_tile_recall,
+            "rare_tile_masked_count": rare_denom_val,
             "topology_focus_loss": float(topology_focus_loss.item()),
             "topology_focus_fraction": float(topology_focus_fraction.item()),
         }
@@ -1173,6 +1325,7 @@ class DiscreteMaskedRoomModel(nn.Module):
                 "train_mask": train_mask,
                 "masked_tokens": masked_tokens,
                 "step": step,
+                "mask_ratio_per_sample": mask_ratio,
             }
         return loss, metrics
 
@@ -1193,6 +1346,7 @@ class DiscreteMaskedRoomModel(nn.Module):
         seed: Optional[int] = None,
         return_sampling_metrics: bool = False,
         edge_bias_strength: float = 4.0,
+        pin_rare_tiles_in_corrector: bool = True,
     ) -> Any:
         batch_size = int(context.shape[0])
         device = context.device
@@ -1243,22 +1397,16 @@ class DiscreteMaskedRoomModel(nn.Module):
         corrector_rounds_executed = 0
         corrector_fill_steps = 0.0
         corrector_tokens_committed = 0.0
+        pinned_rare_count = 0.0
         if corrector_steps > 0 and corrector_mask_ratio > 0.0:
             editable_base = ~fixed_mask
             refinement_steps = max(1, min(3, steps // 2 if steps > 1 else 1))
+            pinned_ids_tensor = (
+                torch.tensor(self.PINNED_CRITICAL_TILES, device=device, dtype=tokens.dtype)
+                if bool(pin_rare_tiles_in_corrector)
+                else None
+            )
             for _ in range(corrector_steps):
-                logits = self.forward(
-                    tokens,
-                    torch.zeros(batch_size, device=device, dtype=torch.long),
-                    context,
-                    graph_data=graph_data,
-                )
-                logits = self._apply_edge_aware_logit_bias(
-                    logits,
-                    graph_data,
-                    bias_strength=self._edge_bias_strength,
-                )
-                logits = self._apply_fixed_token_logits(logits, fixed_tokens=fixed_tokens, fixed_mask=fixed_mask)
                 current_probs = F.softmax(
                     (logits / max(1e-6, float(temperature))).float(),
                     dim=1,
@@ -1266,6 +1414,12 @@ class DiscreteMaskedRoomModel(nn.Module):
                 safe_tokens = tokens.clamp(min=0, max=self.num_classes - 1)
                 current_confidence = current_probs.gather(1, safe_tokens.unsqueeze(1)).squeeze(1)
                 candidates = committed & editable_base
+                if pinned_ids_tensor is not None:
+                    pinned_critical = torch.isin(tokens, pinned_ids_tensor)
+                    pinned_rare_count = float(
+                        (candidates & pinned_critical).flatten(1).sum(dim=1).float().mean().item()
+                    )
+                    candidates = candidates & (~pinned_critical)
                 candidate_counts = candidates.flatten(1).sum(dim=1)
                 remask_counts = torch.ceil(candidate_counts.to(dtype=torch.float32) * float(corrector_mask_ratio)).to(
                     dtype=torch.long
@@ -1303,6 +1457,7 @@ class DiscreteMaskedRoomModel(nn.Module):
                     schedule_mode=schedule_mode,
                     stochastic=bool(stochastic),
                     generator=generator,
+                    initial_logits=logits,
                 )
                 corrector_fill_steps += float(correction_metrics["steps_executed"])
                 corrector_tokens_committed += float(correction_metrics["mean_tokens_committed"])
@@ -1316,6 +1471,7 @@ class DiscreteMaskedRoomModel(nn.Module):
             "masked_initial_editable_tokens": float(initial_editable.mean().item()),
             "masked_initial_tokens_committed": float(initial_fill_metrics["mean_tokens_committed"]),
             "masked_corrector_tokens_committed": float(corrector_tokens_committed),
+            "masked_pinned_rare_tokens": pinned_rare_count,
             "masked_mean_tokens_committed_per_step": float(
                 initial_fill_metrics["mean_tokens_committed_per_step"]
             ),
@@ -1348,6 +1504,8 @@ def create_discrete_masked_model(
     unet_dropout: float = 0.1,
     room_topology_channels: int = ROOM_TOPOLOGY_CHANNEL_COUNT,
     context_attention_mode: str = "concat_encoder",
+    rare_tile_weight: float = 1.0,
+    focal_gamma: float = 0.0,
 ) -> DiscreteMaskedRoomModel:
     """Factory for the graph-conditioned discrete masked room model."""
     return DiscreteMaskedRoomModel(
@@ -1369,6 +1527,8 @@ def create_discrete_masked_model(
         unet_dropout=unet_dropout,
         room_topology_channels=room_topology_channels,
         context_attention_mode=context_attention_mode,
+        rare_tile_weight=rare_tile_weight,
+        focal_gamma=focal_gamma,
     )
 
 

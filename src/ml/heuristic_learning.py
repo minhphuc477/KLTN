@@ -1,4 +1,4 @@
-﻿"""
+"""
 ML-Based Heuristic Learning for A* Search
 =========================================
 
@@ -68,15 +68,89 @@ def _as_position_set(values: Set[Any]) -> Set[Tuple[int, int]]:
     return positions
 
 
-def _remaining_normal_locked_doors(env, opened_doors: Set[Any]) -> int:
-    """Count unopened normal key doors from the static grid plus dynamic state."""
+def _collect_normal_locked_door_positions(env) -> Set[Tuple[int, int]]:
+    """Collect static grid coordinates of normal small-key doors."""
     from src.core.definitions import SEMANTIC_PALETTE
 
-    locked_positions = {
+    grid = getattr(env, "grid", None)
+    if grid is None:
+        return set()
+    return {
         (int(row), int(col))
-        for row, col in zip(*np.where(env.grid == SEMANTIC_PALETTE['DOOR_LOCKED']))
+        for row, col in zip(*np.where(grid == SEMANTIC_PALETTE['DOOR_LOCKED']))
     }
-    return max(0, len(locked_positions - _as_position_set(opened_doors)))
+
+
+def _remaining_normal_locked_doors(
+    env,
+    opened_doors: Set[Any],
+    *,
+    locked_positions: Optional[Set[Tuple[int, int]]] = None,
+) -> int:
+    """Count unopened normal key doors from precomputed or live grid positions."""
+    positions = (
+        locked_positions
+        if locked_positions is not None
+        else _collect_normal_locked_door_positions(env)
+    )
+    return max(0, len(positions - _as_position_set(opened_doors)))
+
+
+def _extract_heuristic_state_features(
+    state_obj: Any,
+    env: Any,
+    *,
+    map_height: int,
+    map_width: int,
+    locked_positions: Optional[Set[Tuple[int, int]]] = None,
+) -> np.ndarray:
+    """Extract the 10-element normalized heuristic input vector cleanly."""
+    features = np.zeros(10, dtype=np.float32)
+    safe_h = float(max(1, int(map_height)))
+    safe_w = float(max(1, int(map_width)))
+    safe_span = float(max(1, int(map_height) + int(map_width)))
+
+    position = tuple(getattr(state_obj, "position", (0, 0)))
+    features[0] = float(position[1]) / safe_w
+    features[1] = float(position[0]) / safe_h
+
+    keys = int(getattr(state_obj, "keys", 0) or 0)
+    bomb_count = int(getattr(state_obj, "bomb_count", 0) or 0)
+    features[2] = min(float(keys) / 5.0, 1.0)
+    features[3] = float(bomb_count > 0 or bool(getattr(state_obj, "has_bomb", False)))
+    features[4] = float(bool(getattr(state_obj, "has_boss_key", False)))
+    features[5] = float(bool(getattr(state_obj, "has_item", False)))
+
+    goal_pos = getattr(env, "goal_pos", None)
+    if goal_pos:
+        dist = abs(position[0] - goal_pos[0]) + abs(position[1] - goal_pos[1])
+        features[6] = float(dist) / safe_span
+
+    remaining_locked_doors = _remaining_normal_locked_doors(
+        env,
+        getattr(state_obj, "opened_doors", set()),
+        locked_positions=locked_positions,
+    )
+    features[7] = min(float(remaining_locked_doors) / 10.0, 1.0)
+    features[8] = min(float(len(getattr(state_obj, "collected_items", set()))) / 10.0, 1.0)
+
+    start_pos = getattr(env, "start_pos", None)
+    if start_pos is not None:
+        progress = abs(position[0] - start_pos[0]) + abs(position[1] - start_pos[1])
+        features[9] = min(float(progress) / safe_span, 1.0)
+
+    return features
+
+
+def _module_device_dtype(module: "nn.Module") -> Tuple["torch.device", "torch.dtype"]:
+    """Return the device and floating-point dtype of a torch module."""
+    ref = next(module.parameters(), None)
+    if ref is None:
+        ref = next(module.buffers(), None)
+    if ref is None:
+        return torch.device("cpu"), torch.float32
+    dtype = ref.dtype if torch.is_floating_point(ref) else torch.float32
+    return ref.device, dtype
 
 
 if TORCH_AVAILABLE:
@@ -131,8 +205,9 @@ if TORCH_AVAILABLE:
                 Predicted cost (float)
             """
             self.eval()
+            device, dtype = _module_device_dtype(self)
             with torch.no_grad():
-                x = torch.FloatTensor(state_features).unsqueeze(0)
+                x = torch.as_tensor(state_features, dtype=dtype, device=device).unsqueeze(0)
                 pred = self.forward(x)
                 return max(0.0, float(pred.item()) * float(getattr(self, "output_scale", 1.0)))
 else:
@@ -212,7 +287,13 @@ class HeuristicTrainer:
         logger.info(f"Collected {len(examples)} training examples from solution")
         return examples
     
-    def featurize_state(self, example: TrainingExample, env) -> np.ndarray:
+    def featurize_state(
+        self,
+        example: TrainingExample,
+        env,
+        *,
+        locked_positions: Optional[Set[Tuple[int, int]]] = None,
+    ) -> np.ndarray:
         """
         Convert state to feature vector (10 features).
         
@@ -227,48 +308,13 @@ class HeuristicTrainer:
         9. Number of items collected
         10. Geometric progress from the start (0-1)
         """
-        features = np.zeros(10, dtype=np.float32)
-        
-        # Position (normalized)
-        features[0] = example.position[1] / self.map_width
-        features[1] = example.position[0] / self.map_height
-        
-        # Inventory
-        features[2] = min(example.keys / 5.0, 1.0)  # Normalize to [0, 1]
-        features[3] = float(example.has_bomb)
-        features[4] = float(example.has_boss_key)
-        features[5] = float(example.has_item)
-        
-        # Manhattan distance (normalized)
-        if env.goal_pos:
-            dist = abs(example.position[0] - env.goal_pos[0]) + abs(example.position[1] - env.goal_pos[1])
-            features[6] = dist / (self.map_height + self.map_width)
-        
-        # Remaining unopened locked doors. The physical grid is static during
-        # search; progression lives in GameState.opened_doors.
-        remaining_locked_doors = _remaining_normal_locked_doors(
+        return _extract_heuristic_state_features(
+            example,
             env,
-            getattr(example, "opened_doors", set()),
+            map_height=self.map_height,
+            map_width=self.map_width,
+            locked_positions=locked_positions,
         )
-        features[7] = min(float(remaining_locked_doors) / 10.0, 1.0)
-        
-        # Items collected (stateful; do not duplicate key count).
-        features[8] = min(float(len(getattr(example, "collected_items", set()))) / 10.0, 1.0)
-        
-        # Observable geometric progress. The ground-truth remaining cost is a
-        # training label and must never enter the feature vector.
-        start_pos = getattr(env, "start_pos", None)
-        if start_pos is not None:
-            progress = (
-                abs(example.position[0] - start_pos[0])
-                + abs(example.position[1] - start_pos[1])
-            )
-            features[9] = min(
-                float(progress) / float(max(1, self.map_height + self.map_width)),
-                1.0,
-            )
-        
-        return features
     
     def train(
         self,
@@ -286,17 +332,25 @@ class HeuristicTrainer:
             epochs: Number of training epochs
             batch_size: Batch size
         """
-        # Convert examples to tensors
-        X = []
-        y = []
+        # Cache static locked-door coordinates once rather than rescanning env.grid per example.
+        locked_positions = _collect_normal_locked_door_positions(env)
+        X_list = []
+        y_list = []
         
         for example in examples:
-            features = self.featurize_state(example, env)
-            X.append(features)
-            y.append(float(example.remaining_cost) / self.target_scale)
+            features = self.featurize_state(
+                example,
+                env,
+                locked_positions=locked_positions,
+            )
+            X_list.append(features)
+            y_list.append(float(example.remaining_cost) / self.target_scale)
         
-        X = torch.FloatTensor(X)
-        y = torch.FloatTensor(y).unsqueeze(1)
+        device, dtype = _module_device_dtype(self.model)
+        X_arr = np.asarray(X_list, dtype=np.float32) if X_list else np.zeros((0, 10), dtype=np.float32)
+        y_arr = np.asarray(y_list, dtype=np.float32) if y_list else np.zeros((0,), dtype=np.float32)
+        X = torch.as_tensor(X_arr, dtype=dtype, device=device)
+        y = torch.as_tensor(y_arr, dtype=dtype, device=device).unsqueeze(1)
         
         logger.info(f"Training on {len(X)} examples for {epochs} epochs")
         
@@ -305,7 +359,7 @@ class HeuristicTrainer:
         
         for epoch in range(epochs):
             # Shuffle data
-            indices = torch.randperm(len(X))
+            indices = torch.randperm(len(X), device=device)
             X_shuffled = X[indices]
             y_shuffled = y[indices]
             
@@ -362,8 +416,9 @@ class HeuristicTrainer:
         if validation_features is not None or true_costs is not None:
             if validation_features is None or true_costs is None:
                 raise ValueError("validation_features and true_costs must be provided together.")
-            features = torch.as_tensor(validation_features, dtype=torch.float32)
-            costs = torch.as_tensor(true_costs, dtype=torch.float32).view(-1, 1)
+            device, dtype = _module_device_dtype(self.model)
+            features = torch.as_tensor(validation_features, dtype=dtype, device=device)
+            costs = torch.as_tensor(true_costs, dtype=dtype, device=device).view(-1, 1)
             if features.dim() != 2 or int(features.shape[-1]) != 10:
                 raise ValueError(f"validation_features must have shape [N, 10], got {tuple(features.shape)}.")
             if int(features.shape[0]) != int(costs.shape[0]):
@@ -461,6 +516,8 @@ class MLHeuristicAStar:
         self.model = None
         self.map_height = int(getattr(env, "height", 1) or 1)
         self.map_width = int(getattr(env, "width", 1) or 1)
+        self._cached_grid_ref = getattr(env, "grid", None)
+        self._locked_door_positions = _collect_normal_locked_door_positions(env)
         if require_model and not TORCH_AVAILABLE:
             raise ImportError("PyTorch is required for learned A* guidance.")
         if require_model and not model_path:
@@ -508,36 +565,17 @@ class MLHeuristicAStar:
 
     def _featurize_runtime_state(self, state) -> np.ndarray:
         """Featurize a live search state without constructing training modules."""
-        features = np.zeros(10, dtype=np.float32)
-
-        position = tuple(getattr(state, "position", (0, 0)))
-        features[0] = float(position[1]) / float(max(1, self.map_width))
-        features[1] = float(position[0]) / float(max(1, self.map_height))
-
-        keys = int(getattr(state, "keys", 0) or 0)
-        bomb_count = int(getattr(state, "bomb_count", 0) or 0)
-        features[2] = min(float(keys) / 5.0, 1.0)
-        features[3] = float(bomb_count > 0 or bool(getattr(state, "has_bomb", False)))
-        features[4] = float(bool(getattr(state, "has_boss_key", False)))
-        features[5] = float(bool(getattr(state, "has_item", False)))
-
-        if self.env.goal_pos:
-            dist = abs(position[0] - self.env.goal_pos[0]) + abs(position[1] - self.env.goal_pos[1])
-            features[6] = float(dist) / float(max(1, self.map_height + self.map_width))
-
-        remaining_locked_doors = _remaining_normal_locked_doors(
+        grid = getattr(self.env, "grid", None)
+        if grid is not self._cached_grid_ref:
+            self._cached_grid_ref = grid
+            self._locked_door_positions = _collect_normal_locked_door_positions(self.env)
+        return _extract_heuristic_state_features(
+            state,
             self.env,
-            getattr(state, "opened_doors", set()),
+            map_height=self.map_height,
+            map_width=self.map_width,
+            locked_positions=self._locked_door_positions,
         )
-        features[7] = min(float(remaining_locked_doors) / 10.0, 1.0)
-        features[8] = min(float(len(getattr(state, "collected_items", set()))) / 10.0, 1.0)
-
-        start_pos = getattr(self.env, "start_pos", None)
-        if start_pos is not None:
-            progress = abs(position[0] - start_pos[0]) + abs(position[1] - start_pos[1])
-            features[9] = min(float(progress) / float(max(1, self.map_height + self.map_width)), 1.0)
-
-        return features
     
     def heuristic(self, state) -> float:
         """

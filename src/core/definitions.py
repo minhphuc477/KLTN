@@ -350,8 +350,8 @@ EDGE_TYPE_MAP: Dict[str, str] = {
     'k': 'key_locked',       # Small key required
     'K': 'boss_locked',      # Boss key required
     'b': 'bombable',         # Bomb required
-    'l': 'soft_locked',      # One-way (can't return)
-    's': 'stair',            # Stair/warp connection
+    'l': 'soft_locked',      # Room-clear gate; direction comes from graph arcs
+    's': 'impassable',       # VGLC visibility relation, not a passage
     'S': 'switch',           # Switch/puzzle required
     'S1': 'switch',          # Switch variant
     'I': 'item_locked',      # Key item required
@@ -363,7 +363,7 @@ EDGE_TYPE_MAP: Dict[str, str] = {
 RESOURCE_EDGES: Set[str] = {'key_locked', 'boss_locked', 'bombable'}
 
 # Edge types that are one-way
-ONEWAY_EDGES: Set[str] = {'soft_locked'}
+ONEWAY_EDGES: Set[str] = {'one_way'}
 
 # Edge types that are warps (non-adjacent)
 WARP_EDGES: Set[str] = {'stair'}
@@ -374,6 +374,8 @@ WARP_EDGES: Set[str] = {'stair'}
 
 NODE_CONTENT_MAP: Dict[str, str] = {
     'e': 'enemy',
+    'S': 'switch',
+    'switch': 'switch',
     's': 'start',
     't': 'triforce',
     'b': 'boss',
@@ -428,6 +430,7 @@ KNOWN_EDGE_LABEL_TOKENS: Set[str] = {
 
 # Aliases for edge labels / canonical edge type names.
 EDGE_LABEL_ALIASES: Dict[str, List[str]] = {
+    'impassable': ['impassable'],
     'open': ['open'],
     'locked': ['key_locked'],
     'key_locked': ['key_locked'],
@@ -449,6 +452,7 @@ EDGE_LABEL_ALIASES: Dict[str, List[str]] = {
 
 # Higher priority means stricter traversal requirement.
 EDGE_TYPE_PRIORITY: Dict[str, int] = {
+    'impassable': 100,
     'boss_locked': 60,
     'multi_lock': 55,
     'key_locked': 50,
@@ -555,6 +559,8 @@ def _expand_edge_fragment(fragment: str) -> List[str]:
     frag = str(fragment or '').strip()
     if frag == '':
         return ['open']
+    if frag.startswith('S') and frag[1:].isdigit():
+        return ['switch']
     # NetworkX payloads may retain serialized enum names such as
     # ``EdgeType.STAIRS``. Normalize the member name at this boundary instead
     # of requiring every graph producer to know the validator's token format.

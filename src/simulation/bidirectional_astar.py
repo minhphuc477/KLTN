@@ -86,7 +86,7 @@ class BidirectionalAStar:
         """
         self.env = env
         self.timeout = timeout
-        self.allow_diagonals = allow_diagonals
+        self.allow_diagonals = bool(allow_diagonals) and not bool(getattr(env, "strict_original_mode", False))
         self.heuristic_mode = heuristic_mode
         
         # Read-only grid reference
@@ -122,6 +122,11 @@ class BidirectionalAStar:
             states_explored: Number of states explored
         """
         self.env.reset()
+        # Reset before early exits and the stateful fallback, including reuse.
+        self.states_explored = 0
+        self.collision_checks = 0
+        self.meeting_point = None
+        self.used_fallback = False
         
         if self.env.goal_pos is None or self.env.start_pos is None:
             return False, [], 0
@@ -374,8 +379,9 @@ class BidirectionalAStar:
             priority_options={'allow_diagonals': self.allow_diagonals},
             search_mode='astar',
         )
-        success, path, states = fallback.solve()
-        return success, path, int(self.states_explored) + int(states)
+        success, path, diagnostics = fallback.solve_with_verified_diagnostics()
+        self.states_explored += int(diagnostics.states_explored)
+        return success, path, self.states_explored
     
     def _create_goal_state(self) -> GameState:
         """

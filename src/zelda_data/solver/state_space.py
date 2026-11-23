@@ -59,7 +59,7 @@ class StateSpaceGraphSolverCore:
     def can_traverse_edge(self, from_node: int, to_node: int, state: Any) -> Tuple[bool, Any, str]:
         """Check edge traversability and apply inventory/state effects."""
         edge_data = self.graph.get_edge_data(from_node, to_node)
-        if not edge_data:
+        if edge_data is None:
             return False, state, "none"
 
         edge_label = str(edge_data.get("label", "") or "")
@@ -116,7 +116,8 @@ class StateSpaceGraphSolverCore:
                     return False, state, edge_type
                 continue
 
-            continue
+            # Unknown or explicitly impassable constraints cannot certify a path.
+            return False, state, edge_type
 
         return True, new_state, edge_type
 

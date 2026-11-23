@@ -18,13 +18,15 @@ class LearnedTieBreakAStarGameStateSolver:
         self.config = config
 
     def solve(self) -> GameStateSearchResult:
+        priority_options = self.config.to_priority_options()
+        if priority_options["enable_weighted_astar"] and priority_options["heuristic_weight"] != 1.0:
+            raise ValueError("Learned tie-break A* requires canonical unweighted f priorities.")
         learned = MLHeuristicAStar(
             self.env,
             model_path=self.config.learned_heuristic_model_path,
             require_model=True,
             require_matching_shape=False,
         )
-        priority_options = self.config.to_priority_options()
         priority_options["secondary_heuristic"] = learned.heuristic
         priority_options["secondary_heuristic_name"] = "learned_cost"
         solver = StateSpaceAStar(

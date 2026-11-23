@@ -1,13 +1,29 @@
-"""Simple grid solvers for benchmarking (A* and JPS variants)."""
+"""Static-grid A* and a conservative jump-augmented A* diagnostic.
+
+The legacy ``jps`` API is not a canonical JPS benchmark implementation.
+It retains unit moves to guarantee completeness under both corner policies.
+"""
 import heapq
+import math
 from typing import List, Tuple
 
 Grid = List[List[int]]  # 0 = free, 1 = blocked
 
 
+def _valid_endpoints(grid, start, goal):
+    if not grid or not grid[0]:
+        return False
+    width = len(grid[0])
+    if any(len(row) != width for row in grid):
+        raise ValueError("Grid must be rectangular.")
+    return all(0 <= r < len(grid) and 0 <= c < width and grid[r][c] == 0
+               for r, c in (start, goal))
+
+
 def neighbors_4(grid: Grid, pos: Tuple[int, int]):
     r, c = pos
-    h = len(grid); w = len(grid[0])
+    h = len(grid)
+    w = len(grid[0])
     for dr, dc in ((-1,0),(1,0),(0,-1),(0,1)):
         nr, nc = r+dr, c+dc
         if 0 <= nr < h and 0 <= nc < w and grid[nr][nc] == 0:
@@ -21,7 +37,8 @@ def neighbors_8(grid: Grid, pos: Tuple[int, int], allow_corner_cutting: bool = F
     both adjacent orthogonals are free to prevent corner-cutting.
     """
     r, c = pos
-    h = len(grid); w = len(grid[0])
+    h = len(grid)
+    w = len(grid[0])
     for dr, dc in ((-1,0),(1,0),(0,-1),(0,1),(-1,-1),(-1,1),(1,-1),(1,1)):
         nr, nc = r+dr, c+dc
         if not (0 <= nr < h and 0 <= nc < w):
@@ -35,8 +52,6 @@ def neighbors_8(grid: Grid, pos: Tuple[int, int], allow_corner_cutting: bool = F
         yield (nr, nc)
 
 
-import math
-
 def manhattan(a: Tuple[int, int], b: Tuple[int, int]) -> int:
     return abs(a[0]-b[0]) + abs(a[1]-b[1])
 
@@ -44,9 +59,7 @@ def manhattan(a: Tuple[int, int], b: Tuple[int, int]) -> int:
 def octile(a: Tuple[int,int], b: Tuple[int,int]) -> float:
     dx = abs(a[0]-b[0])
     dy = abs(a[1]-b[1])
-    D = 1.0
-    D2 = math.sqrt(2)
-    return D * (dx + dy) + (D2 - 2*D) * min(dx, dy) if False else D * (dx + dy) + (D2 - 2*D) * min(dx, dy)
+    return dx + dy + (math.sqrt(2) - 2) * min(dx, dy)
 
 
 def euclidean(a: Tuple[int,int], b: Tuple[int,int]) -> float:
@@ -59,6 +72,8 @@ def astar(grid: Grid, start: Tuple[int,int], goal: Tuple[int,int], allow_diagona
     When allow_diagonal=True, diagonal moves cost sqrt(2) (Euclidean edge cost) and
     heuristic uses Euclidean distance; corner-cutting is controlled by allow_corner_cutting.
     """
+    if not _valid_endpoints(grid, start, goal):
+        return None, 0
     open_heap = []
     h0 = euclidean(start, goal) if allow_diagonal else manhattan(start, goal)
     heapq.heappush(open_heap, (h0, 0, start, [start]))
@@ -118,19 +133,25 @@ def _bresenham_line(a: Tuple[int,int], b: Tuple[int,int]):
 
 
 def jps(grid: Grid, start: Tuple[int,int], goal: Tuple[int,int], allow_diagonal: bool = False, trace: bool = False, allow_corner_cutting: bool = False):
-    """Jump Point Search with optional diagonal support, trace, and corner policy.
+    """Jump-augmented A* under the legacy ``jps`` compatibility name.
 
     Parameters:
       - allow_diagonal: enable 8-direction movement
       - trace: if True, returns (path, nodes_expanded, trace_dict)
       - allow_corner_cutting: when False (default) prevents diagonal corner cuts
 
-    This follows canonical forced-neighbor detection based on parent direction.
+    Legal unit moves are retained alongside jump shortcuts. This deliberately
+    does not claim the pruning rules or performance of canonical JPS.
     """
+    empty_trace = {'expanded': [], 'jumps': [], 'segments': [],
+                   'algorithm': 'jump_augmented_astar'}
+    if not _valid_endpoints(grid, start, goal):
+        return (None, 0, empty_trace) if trace else (None, 0)
     if start == goal:
-        return [start], 0
+        return ([start], 0, empty_trace) if trace else ([start], 0)
 
-    h = len(grid); w = len(grid[0])
+    h = len(grid)
+    w = len(grid[0])
 
     def in_bounds(p):
         r, c = p
@@ -219,67 +240,14 @@ def jps(grid: Grid, start: Tuple[int,int], goal: Tuple[int,int], allow_diagonal:
                     if j1 is not None or j2 is not None:
                         return cur
 
-            nr += dx; nc += dy
+            nr += dx
+            nc += dy
 
 
-    def pruned_successors(node, parent):
-        if parent is None:
-            # start: all free neighbors
-            r, c = node
-            res = []
-            for dr, dc in DELTAS:
-                nb = (r+dr, c+dc)
-                if is_free(nb):
-                    res.append(nb)
-            return res
-
-        dx = node[0] - parent[0]
-        dy = node[1] - parent[1]
-        succ = []
-        # natural forward
-        forward = (node[0] + dx, node[1] + dy)
-        if is_free(forward):
-            succ.append(forward)
-        # forced neighbors: check for openings that create forced moves
-        r, c = node
+    def legal_successors(node):
         if allow_diagonal:
-            # Canonical diagonal pruning: include natural forward and orthogonal neighbors
-            forward = (r + dx, c + dy)
-            if is_free(forward):
-                succ.append(forward)
-            # include orthogonal steps if free (may lead to further jumps)
-            orth1 = (r + dx, c)
-            orth2 = (r, c + dy)
-            if is_free(orth1):
-                succ.append(orth1)
-            if is_free(orth2):
-                succ.append(orth2)
-            # Forced neighbors: if moving to surrounding cells reveals a jump point, include them
-            # (Use jump checks with depth guard in jump())
-            try:
-                if is_free(orth1) and jump((r, c), dx, 0, goal) is not None:
-                    if orth1 not in succ:
-                        succ.append(orth1)
-                if is_free(orth2) and jump((r, c), 0, dy, goal) is not None:
-                    if orth2 not in succ:
-                        succ.append(orth2)
-            except (RecursionError, TypeError, ValueError):
-                # Conservative fallback for malformed states/depth edge-cases.
-                # Keep baseline successors and continue search safely.
-                pass
-        else:
-            # orthogonal forced neighbors heuristic
-            if dx == 0:
-                for sd in ((0,-1),(0,1)):
-                    s = (r + sd[0], c + sd[1])
-                    if is_free(s) and not is_free((r + dx, c + sd[1])):
-                        succ.append(s)
-            elif dy == 0:
-                for sd in ((-1,0),(1,0)):
-                    s = (r + sd[0], c + sd[1])
-                    if is_free(s) and not is_free((r + sd[0], c + dy)):
-                        succ.append(s)
-        return succ
+            return neighbors_8(grid, node, allow_corner_cutting=allow_corner_cutting)
+        return neighbors_4(grid, node)
 
     open_heap = []
     heuristic = octile if allow_diagonal else manhattan
@@ -308,11 +276,13 @@ def jps(grid: Grid, start: Tuple[int,int], goal: Tuple[int,int], allow_diagonal:
                 else:
                     full.extend(segment)
             if trace:
-                return full, nodes_expanded, {'expanded': trace_expanded, 'jumps': trace_jumps, 'segments': trace_segments}
+                return full, nodes_expanded, {'expanded': trace_expanded, 'jumps': trace_jumps, 'segments': trace_segments, 'algorithm': 'jump_augmented_astar'}
             return full, nodes_expanded
         closed.add(node)
-        parent = path[-2] if len(path) >= 2 else None
-        for succ in pruned_successors(node, parent):
+        for succ in legal_successors(node):
+            # Keep every primitive edge: jump placement only affects efficiency.
+            g_unit = g + euclidean(node, succ)
+            heapq.heappush(open_heap, (g_unit + heuristic(succ, goal), g_unit, succ, path + [succ]))
             dx = succ[0] - node[0]
             dy = succ[1] - node[1]
             jp = jump(node, dx, dy, goal)
@@ -333,14 +303,8 @@ def jps(grid: Grid, start: Tuple[int,int], goal: Tuple[int,int], allow_diagonal:
             trace_segments.append((node, jp))
             g2 = g + euclidean(node, jp)
             heapq.heappush(open_heap, (g2 + heuristic(jp, goal), g2, jp, path + [jp]))
-    # JPS did not find a path; fall back to A* (guarantees a result when one exists)
-    try:
-        if trace:
-            path, nodes = astar(grid, start, goal, allow_diagonal=allow_diagonal)
-            return path, nodes, {'expanded': trace_expanded, 'jumps': trace_jumps, 'segments': trace_segments}
-        path, nodes = astar(grid, start, goal, allow_diagonal=allow_diagonal)
-        return path, nodes
-    except Exception:
-        if trace:
-            return None, nodes_expanded, {'expanded': trace_expanded, 'jumps': trace_jumps, 'segments': trace_segments}
-        return None, nodes_expanded
+    if trace:
+        return None, nodes_expanded, {'expanded': trace_expanded, 'jumps': trace_jumps,
+                                      'segments': trace_segments,
+                                      'algorithm': 'jump_augmented_astar'}
+    return None, nodes_expanded

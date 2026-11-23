@@ -61,7 +61,7 @@ class DStarLiteSolver:
         self.env = env
         self.heuristic_mode = str(heuristic_mode)
         self.timeout = int(max(1, timeout))
-        self.allow_diagonals = bool(allow_diagonals)
+        self.allow_diagonals = bool(allow_diagonals) and not bool(getattr(env, "strict_original_mode", False))
 
         self.g_scores: Dict[Any, float] = {}
         self.rhs_scores: Dict[Any, float] = {}
@@ -85,6 +85,8 @@ class DStarLiteSolver:
         self.used_fallback = False
         self.current_path: List[Tuple[int, int]] = []
         self.path_index = 0
+        self.last_termination_status = "not_run"
+        self.last_failure_reason = ""
 
     def _iter_action_deltas(self) -> Iterable[Tuple[int, int]]:
         for dr, dc in ACTION_DELTAS.values():
@@ -347,6 +349,10 @@ class DStarLiteSolver:
         spent = max(0, int(prior_iterations))
         remaining_budget = max(0, int(self.timeout) - spent)
         if remaining_budget <= 0:
+            self.current_path = []
+            self.path_index = 0
+            self.last_termination_status = "budget_exhausted"
+            self.last_failure_reason = "D* Lite/A* shared state budget reached"
             return False, [], spent
         previous_state = self.env.state
         self.env.state = start_state.copy()
@@ -358,8 +364,12 @@ class DStarLiteSolver:
                 priority_options={"allow_diagonals": self.allow_diagonals},
                 search_mode="astar",
             )
-            success, path, states = solver.solve()
-            return success, path, spent + int(states)
+            success, path, diagnostics = solver.solve_with_verified_diagnostics(start_state=start_state)
+            self.current_path = list(path or [])
+            self.path_index = 0
+            self.last_termination_status = diagnostics.termination_status
+            self.last_failure_reason = diagnostics.failure_reason
+            return success, path, spent + int(diagnostics.states_explored)
         finally:
             self.env.state = previous_state
 
@@ -367,6 +377,10 @@ class DStarLiteSolver:
         """Plan from ``start_state`` using D* Lite or the exact stateful oracle."""
         self._clear_search()
         self.used_fallback = False
+        self.current_path = []
+        self.path_index = 0
+        self.last_termination_status = "not_run"
+        self.last_failure_reason = ""
         self.current_start_state = start_state.copy()
         self.last_start_state = start_state.copy()
         self._textbook_core_active = self._supports_textbook_core()
@@ -387,7 +401,9 @@ class DStarLiteSolver:
 
         success = self.compute_shortest_path()
         if not success and not self._last_compute_budget_exhausted:
-            return False, [], len(self.g_scores)
+            self.last_termination_status = "exhausted"
+            self.last_failure_reason = "Reversible search frontier exhausted"
+            return False, [], self._last_compute_iterations
         path = self._extract_path(start_state) if success else []
         if not path or path[-1] != self.env.goal_pos:
             logger.warning("Backward D* Lite could not certify a path; using state-space A*")
@@ -398,9 +414,10 @@ class DStarLiteSolver:
 
         self.current_path = path
         self.path_index = 0
+        self.last_termination_status = "solved"
         self.last_opened_doors = set(start_state.opened_doors)
         self.last_pushed_blocks = set(start_state.pushed_blocks)
-        return True, path, len(self.g_scores)
+        return True, path, self._last_compute_iterations
 
     def _changed_grid_positions(self) -> List[Tuple[int, int]]:
         current = np.asarray(self.env.grid)
@@ -416,6 +433,10 @@ class DStarLiteSolver:
         """Incrementally replan after movement or reversible edge-cost changes."""
         self.replans_count += 1
         self.states_updated = 0
+        self.current_path = []
+        self.path_index = 0
+        self.last_termination_status = "not_run"
+        self.last_failure_reason = ""
 
         if not self._textbook_core_active or not self._supports_textbook_core():
             result = self._fallback_to_astar(current_state)
@@ -445,7 +466,9 @@ class DStarLiteSolver:
 
         success = self.compute_shortest_path()
         if not success and not self._last_compute_budget_exhausted:
-            return False, [], self.states_updated
+            self.last_termination_status = "exhausted"
+            self.last_failure_reason = "Reversible search frontier exhausted"
+            return False, [], self._last_compute_iterations
         path = self._extract_path(current_state) if success else []
         if not path or path[-1] != self.env.goal_pos:
             return self._fallback_to_astar(
@@ -455,7 +478,8 @@ class DStarLiteSolver:
 
         self.current_path = path
         self.path_index = 0
-        return True, path, self.states_updated
+        self.last_termination_status = "solved"
+        return True, path, self._last_compute_iterations
 
     def needs_replan(self, current_state: GameState) -> bool:
         grid_changed = bool(self._changed_grid_positions())

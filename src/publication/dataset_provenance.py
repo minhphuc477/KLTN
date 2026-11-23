@@ -13,12 +13,45 @@ from .protocol import canonical_json
 DATASET_MANIFEST_NAME = "dataset_manifest.json"
 
 
+from collections import OrderedDict
+import threading
+
+_LARGE_FILE_SHA256_THRESHOLD = 1_000_000
+_LARGE_FILE_SHA256_MAX_ENTRIES = 128
+_LARGE_FILE_SHA256_CACHE: "OrderedDict[tuple[str, int, int], str]" = OrderedDict()
+_LARGE_FILE_SHA256_LOCK = threading.RLock()
+
+
 def file_sha256(path: Path) -> str:
+    resolved = path.resolve()
+    try:
+        stat_result = resolved.stat()
+    except OSError:
+        stat_result = None
+
+    cache_key = None
+    if stat_result is not None and stat_result.st_size >= _LARGE_FILE_SHA256_THRESHOLD:
+        cache_key = (str(resolved), int(stat_result.st_size), int(stat_result.st_mtime_ns))
+        with _LARGE_FILE_SHA256_LOCK:
+            cached = _LARGE_FILE_SHA256_CACHE.get(cache_key)
+            if cached is not None:
+                _LARGE_FILE_SHA256_CACHE.move_to_end(cache_key)
+                return cached
+
     digest = hashlib.sha256()
-    with path.open("rb") as handle:
+    with resolved.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
-    return digest.hexdigest()
+    hex_digest = digest.hexdigest()
+
+    if cache_key is not None:
+        with _LARGE_FILE_SHA256_LOCK:
+            _LARGE_FILE_SHA256_CACHE[cache_key] = hex_digest
+            _LARGE_FILE_SHA256_CACHE.move_to_end(cache_key)
+            while len(_LARGE_FILE_SHA256_CACHE) > _LARGE_FILE_SHA256_MAX_ENTRIES:
+                _LARGE_FILE_SHA256_CACHE.popitem(last=False)
+
+    return hex_digest
 
 
 def iter_dataset_files(data_root: Path) -> list[Path]:

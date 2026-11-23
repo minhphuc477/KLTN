@@ -249,6 +249,9 @@ def pipeline_kwargs_from_resolved_config(config: Dict[str, Any]) -> Dict[str, An
     generation = config["generation"]
     room_generator_mode = str(generation.get("room_generator_mode", "latent_diffusion")).strip().lower()
     condition_source = masked_room if room_generator_mode == "discrete_masked" else diffusion
+    graph_conditioning_mode = str(
+        condition_source.get("graph_conditioning_mode", "node_sequence") or "node_sequence"
+    ).strip().lower()
     topology_kwargs = topology_generation_kwargs_from_resolved_config(config)
     kwargs = {
         "topology_default_target_curve": list(topology_kwargs["target_curve"]),
@@ -297,6 +300,7 @@ def pipeline_kwargs_from_resolved_config(config: Dict[str, Any]) -> Dict[str, An
             ),
             "condition_use_rrwp_edge_features": condition_source.get("condition_use_rrwp_edge_features", diffusion.get("condition_use_rrwp_edge_features", True)),
             "condition_strict_schema": condition_source.get("condition_strict_schema", diffusion.get("condition_strict_schema", True)),
+            "use_graph_node_cross_attention": bool(graph_conditioning_mode == "node_sequence"),
             "diffusion_condition_global_graph_enabled": diffusion.get(
                 "condition_global_graph_enabled",
                 True,

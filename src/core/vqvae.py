@@ -281,19 +281,21 @@ class VectorQuantizer(nn.Module):
         # Flatten spatial dimensions
         z_flat = z_e.view(-1, D)  # [B*H*W, D]
         
-        # Compute distances to codebook entries
-        # ||z - e||^2 = ||z||^2 + ||e||^2 - 2*z·e
+        # Compute distances to codebook entries in FP32 to prevent FP16 square/dot overflow
+        # and handle mixed-precision encoder latents safely.
+        z_flat_fp32 = z_flat.float()
+        emb_fp32 = self.embedding.weight.float()
         distances = (
-            torch.sum(z_flat ** 2, dim=1, keepdim=True)
-            + torch.sum(self.embedding.weight ** 2, dim=1)
-            - 2 * torch.matmul(z_flat, self.embedding.weight.t())
+            torch.sum(z_flat_fp32 ** 2, dim=1, keepdim=True)
+            + torch.sum(emb_fp32 ** 2, dim=1)
+            - 2 * torch.matmul(z_flat_fp32, emb_fp32.t())
         )  # [B*H*W, K]
         
         # Find nearest codebook entries
         indices = torch.argmin(distances, dim=1)  # [B*H*W]
         
         # Quantize
-        z_q = self.embedding(indices)  # [B*H*W, D]
+        z_q = self.embedding(indices).to(dtype=z_e.dtype)  # [B*H*W, D]
         z_q = z_q.view(B, H, W, D)
         
         # Compute losses
@@ -357,17 +359,21 @@ class VectorQuantizer(nn.Module):
     def _ema_update(self, z_flat: Tensor, indices: Tensor):
         """Update codebook using exponential moving average (DDP-safe)."""
         with self._codebook_update_lock, torch.no_grad():
+            z_flat_ema = z_flat.to(
+                device=self.ema_cluster_size.device,
+                dtype=self.ema_cluster_size.dtype,
+            )
             cluster_size = torch.bincount(
                 indices,
                 minlength=self.num_embeddings,
-            ).to(device=z_flat.device, dtype=z_flat.dtype)
+            ).to(device=self.ema_cluster_size.device, dtype=self.ema_cluster_size.dtype)
             embedding_sum = torch.zeros(
                 self.num_embeddings,
                 self.embedding_dim,
-                device=z_flat.device,
-                dtype=z_flat.dtype,
+                device=self.ema_cluster_size.device,
+                dtype=self.ema_cluster_size.dtype,
             )
-            embedding_sum.index_add_(0, indices, z_flat)
+            embedding_sum.index_add_(0, indices.to(device=self.ema_cluster_size.device), z_flat_ema)
             
             # DDP synchronization: aggregate stats across all GPUs
             # before applying EMA so every replica sees the same update.
@@ -407,6 +413,18 @@ class VectorQuantizer(nn.Module):
             self._reset_counter += 1
             if self._reset_counter % self._reset_interval == 0:
                 self._reset_dead_codes(z_flat, indices)
+
+    @staticmethod
+    def _sample_dead_code_replacements(z_flat: Tensor, num_dead: int) -> Tensor:
+        """Sample encoder vectors with scale-aware jitter to revive dead codes cleanly."""
+        random_indices = torch.randint(0, z_flat.shape[0], (int(num_dead),), device=z_flat.device)
+        new_embeddings = z_flat[random_indices].detach()
+        noise_scale = torch.clamp(
+            z_flat.detach().std(dim=0, unbiased=False) * 0.1,
+            min=1e-4,
+            max=0.05,
+        )
+        return new_embeddings + torch.randn_like(new_embeddings) * noise_scale
 
     def _reset_dead_codes(self, z_flat: Tensor, indices: Optional[Tensor] = None):
         """
@@ -458,11 +476,9 @@ class VectorQuantizer(nn.Module):
             num_dead = int(dead_mask.sum().item())
             
             if num_dead > 0 and z_flat.shape[0] > 0:
-                # Replace dead codes with random encoder outputs + small noise
-                random_indices = torch.randint(0, z_flat.shape[0], (int(num_dead),),
-                                               device=z_flat.device)
-                new_embeddings = z_flat[random_indices].detach()
-                new_embeddings = new_embeddings + torch.randn_like(new_embeddings) * 0.01
+                # Replace dead codes with random encoder outputs + scale-aware noise so reset
+                # vectors separate from collapsed spatial clusters even when variance shrinks.
+                new_embeddings = self._sample_dead_code_replacements(z_flat, num_dead)
                 
                 # DDP: broadcast from rank 0 so all replicas reset identically
                 if dist.is_available() and dist.is_initialized():
@@ -526,14 +542,7 @@ class VectorQuantizer(nn.Module):
             num_dead = int(dead_mask.sum().item())
             if num_dead <= 0:
                 return
-            random_indices = torch.randint(
-                0,
-                z_flat.shape[0],
-                (num_dead,),
-                device=z_flat.device,
-            )
-            new_embeddings = z_flat[random_indices].detach()
-            new_embeddings = new_embeddings + torch.randn_like(new_embeddings) * 0.01
+            new_embeddings = self._sample_dead_code_replacements(z_flat, num_dead)
             weight_mask = dead_mask.to(device=self.embedding.weight.device)
             self.embedding.weight.data[weight_mask] = new_embeddings.to(
                 device=self.embedding.weight.device,
@@ -1018,6 +1027,84 @@ class Decoder(nn.Module):
 # SEMANTIC VQ-VAE
 # ============================================================================
 
+
+def _build_semantic_tile_weights(
+    num_classes: int,
+    rare_tiles: Iterable[int],
+    rare_tile_weight: float,
+) -> Tensor:
+    """Build class-weighted semantic tile tensor for reconstruction loss."""
+    weights = torch.ones(int(num_classes))
+    for tile_id in rare_tiles:
+        if int(tile_id) < int(num_classes):
+            weights[int(tile_id)] = float(rare_tile_weight)
+    return weights
+
+
+def _build_semantic_illegal_adjacency_matrix(num_classes: int) -> Tensor:
+    """Build static illegal tile-pair mask for soft MRF-style penalties."""
+    n = int(num_classes)
+    m = torch.zeros(n, n, dtype=torch.float32)
+    door_ids = [
+        int(TileID.DOOR_OPEN),
+        int(TileID.DOOR_LOCKED),
+        int(TileID.DOOR_BOMB),
+        int(TileID.DOOR_PUZZLE),
+        int(TileID.DOOR_BOSS),
+        int(TileID.DOOR_SOFT),
+    ]
+    for a in (int(TileID.ELEMENT),):
+        if a >= n:
+            continue
+        for b in door_ids:
+            if b >= n:
+                continue
+            m[a, b] = 1.0
+            m[b, a] = 1.0
+    return m
+
+
+def _compute_illegal_adjacency_penalty(
+    recon_logits: Tensor,
+    illegal_adjacency_matrix: Tensor,
+) -> Tensor:
+    """Differentiable soft penalty over 8-connected illegal tile adjacencies."""
+    probs = F.softmax(recon_logits.float(), dim=1).to(dtype=recon_logits.dtype)
+    illegal = illegal_adjacency_matrix.to(dtype=probs.dtype, device=probs.device)
+    shifts = [
+        (-1, -1), (-1, 0), (-1, 1),
+        (0, -1),           (0, 1),
+        (1, -1),  (1, 0),  (1, 1),
+    ]
+    total = torch.tensor(0.0, device=probs.device, dtype=probs.dtype)
+    padded = F.pad(probs, (1, 1, 1, 1), mode="constant", value=0.0)
+    h = probs.shape[2]
+    w = probs.shape[3]
+    for dy, dx in shifts:
+        y0 = 1 + dy
+        x0 = 1 + dx
+        neighbor = padded[:, :, y0:y0 + h, x0:x0 + w]
+        pair_score = torch.einsum("bchw,cd,bdhw->bhw", probs, illegal, neighbor)
+        total = total + pair_score.mean()
+    return total / float(len(shifts))
+
+
+def _compute_weighted_reconstruction_loss(
+    recon: Tensor,
+    target: Tensor,
+    tile_weights: Tensor,
+    num_classes: int,
+) -> Tensor:
+    """Compute rare-tile weighted semantic cross-entropy reconstruction loss."""
+    if target.shape[1] == int(num_classes):
+        target_idx = target.argmax(dim=1)
+    else:
+        target_idx = target.squeeze(1).long()
+    weights = tile_weights[target_idx]
+    loss = F.cross_entropy(recon, target_idx, reduction="none")
+    return (loss * weights).mean()
+
+
 class SemanticVQVAE(nn.Module):
     """
     Semantic Vector Quantized VAE for Zelda Dungeon Rooms.
@@ -1039,7 +1126,11 @@ class SemanticVQVAE(nn.Module):
         latent_dim: Dimension of latent vectors D (default: 64)
         hidden_dim: Hidden channel dimension (default: 128)
         commitment_cost: VQ commitment loss weight β (default: 0.25)
-        rare_tile_weight: Weight multiplier for rare tiles (default: 5.0)
+        rare_tile_weight: Weight multiplier for rare tiles (default: 10.0).
+            Schrum et al. (AIIDE 2025) documents "rarity erasure" — Key, Door, and
+            Player tiles constitute <0.6% of tokens in a typical Zelda corpus and
+            are erased under argmax projection unless their reconstruction loss is
+            upweighted 10–50x relative to floor/wall tiles.
     
     Usage:
         model = SemanticVQVAE(num_classes=44, codebook_size=512)
@@ -1069,7 +1160,7 @@ class SemanticVQVAE(nn.Module):
         hidden_dims: Optional[List[int]] = None,
         num_res_blocks: int = 2,
         commitment_cost: float = 0.25,
-        rare_tile_weight: float = 5.0,
+        rare_tile_weight: float = 10.0,
         use_codebook: bool = True,
         quantizer_type: str = "vq",
         fsq_levels: Optional[Iterable[int]] = None,
@@ -1165,11 +1256,9 @@ class SemanticVQVAE(nn.Module):
     
     def _build_tile_weights(self) -> Tensor:
         """Build weight tensor for semantic-aware reconstruction."""
-        weights = torch.ones(self.num_classes)
-        for tile_id in self.RARE_TILES:
-            if tile_id < self.num_classes:
-                weights[tile_id] = self.rare_tile_weight
-        return weights
+        return _build_semantic_tile_weights(
+            self.num_classes, self.RARE_TILES, self.rare_tile_weight
+        )
 
     def _build_illegal_adjacency_matrix(self) -> Tensor:
         """
@@ -1177,31 +1266,7 @@ class SemanticVQVAE(nn.Module):
 
         Mask value 1 means adjacency is illegal and should be penalized.
         """
-        m = torch.zeros(self.num_classes, self.num_classes, dtype=torch.float32)
-
-        door_ids = [
-            int(TileID.DOOR_OPEN),
-            int(TileID.DOOR_LOCKED),
-            int(TileID.DOOR_BOMB),
-            int(TileID.DOOR_PUZZLE),
-            int(TileID.DOOR_BOSS),
-            int(TileID.DOOR_SOFT),
-        ]
-        element_ids = [
-            int(TileID.ELEMENT),
-        ]
-
-        # Example hard rule from user request: Water/Element next to doors is illegal.
-        for a in element_ids:
-            if a >= self.num_classes:
-                continue
-            for b in door_ids:
-                if b >= self.num_classes:
-                    continue
-                m[a, b] = 1.0
-                m[b, a] = 1.0
-
-        return m
+        return _build_semantic_illegal_adjacency_matrix(self.num_classes)
 
     def _empty_indices(self, batch_size: int, height: int, width: int, device: torch.device) -> Tensor:
         return torch.zeros((batch_size, height, width), dtype=torch.long, device=device)
@@ -1210,30 +1275,7 @@ class SemanticVQVAE(nn.Module):
         """
         Differentiable soft penalty over 3x3 neighborhood illegal adjacencies.
         """
-        probs = F.softmax(recon_logits.float(), dim=1).to(dtype=recon_logits.dtype)
-        illegal = self.illegal_adjacency_matrix.to(dtype=probs.dtype, device=probs.device)
-
-        # 8-neighborhood shifts (3x3 window excluding center).
-        shifts = [
-            (-1, -1), (-1, 0), (-1, 1),
-            (0, -1),           (0, 1),
-            (1, -1),  (1, 0),  (1, 1),
-        ]
-
-        total = torch.tensor(0.0, device=probs.device, dtype=probs.dtype)
-        padded = F.pad(probs, (1, 1, 1, 1), mode='constant', value=0.0)
-        h = probs.shape[2]
-        w = probs.shape[3]
-
-        for dy, dx in shifts:
-            y0 = 1 + dy
-            x0 = 1 + dx
-            neighbor = padded[:, :, y0:y0 + h, x0:x0 + w]
-            # Expected illegal pair probability per pixel.
-            pair_score = torch.einsum('bchw,cd,bdhw->bhw', probs, illegal, neighbor)
-            total = total + pair_score.mean()
-
-        return total / float(len(shifts))
+        return _compute_illegal_adjacency_penalty(recon_logits, self.illegal_adjacency_matrix)
     
     def encode(self, x: Tensor) -> Tuple[Tensor, Tensor]:
         """
@@ -1389,27 +1431,9 @@ class SemanticVQVAE(nn.Module):
         Returns:
             Weighted reconstruction loss
         """
-        # Handle one-hot vs class index targets
-        if target.shape[1] == self.num_classes:
-            # One-hot encoded - convert to class indices
-            target_idx = target.argmax(dim=1)  # [B, H, W]
-        else:
-            target_idx = target.squeeze(1)
-        
-        # Get per-class weights
-        weights = self.tile_weights[target_idx]  # [B, H, W]
-        
-        # Cross-entropy loss with class weights
-        loss = F.cross_entropy(
-            recon, 
-            target_idx,
-            reduction='none'
-        )  # [B, H, W]
-        
-        # Apply tile weights
-        weighted_loss = (loss * weights).mean()
-        
-        return weighted_loss
+        return _compute_weighted_reconstruction_loss(
+            recon, target, self.tile_weights, self.num_classes
+        )
     
     def get_codebook(self) -> Tensor:
         """Get the learned codebook embeddings."""
@@ -1452,7 +1476,7 @@ class SemanticVQVAE2(nn.Module):
         hidden_dims: Optional[List[int]] = None,
         num_res_blocks: int = 2,
         commitment_cost: float = 0.25,
-        rare_tile_weight: float = 5.0,
+        rare_tile_weight: float = 10.0,
         use_codebook: bool = True,
         quantizer_type: str = "vq",
         fsq_levels: Optional[Iterable[int]] = None,
@@ -1509,28 +1533,44 @@ class SemanticVQVAE2(nn.Module):
         )
 
         if self.use_codebook:
-            self.top_quantizer = VectorQuantizer(
-                num_embeddings=int(top_codebook_size),
-                embedding_dim=self.top_latent_dim,
-                commitment_cost=commitment_cost,
-                use_ema=use_ema,
-                dead_code_reset_interval=dead_code_reset_interval,
-                dead_code_threshold=dead_code_threshold,
-                dead_code_warmup_steps=dead_code_warmup_steps,
-                protect_active_codes_during_reset=protect_active_codes_during_reset,
-                max_dead_code_resets_per_event=max_dead_code_resets_per_event,
-            )
-            self.bottom_quantizer = VectorQuantizer(
-                num_embeddings=int(codebook_size),
-                embedding_dim=self.latent_dim,
-                commitment_cost=commitment_cost,
-                use_ema=use_ema,
-                dead_code_reset_interval=dead_code_reset_interval,
-                dead_code_threshold=dead_code_threshold,
-                dead_code_warmup_steps=dead_code_warmup_steps,
-                protect_active_codes_during_reset=protect_active_codes_during_reset,
-                max_dead_code_resets_per_event=max_dead_code_resets_per_event,
-            )
+            if self.quantizer_type == "fsq":
+                self.top_quantizer = FSQuantizer(
+                    embedding_dim=self.top_latent_dim,
+                    levels=fsq_levels,
+                    num_dims=fsq_num_dims,
+                )
+                self.bottom_quantizer = FSQuantizer(
+                    embedding_dim=self.latent_dim,
+                    levels=fsq_levels,
+                    num_dims=fsq_num_dims,
+                )
+                self.top_codebook_size = int(self.top_quantizer.num_embeddings)
+                self.codebook_size = int(self.bottom_quantizer.num_embeddings)
+            elif self.quantizer_type in {"vq", "vector", "vector_quantizer"}:
+                self.top_quantizer = VectorQuantizer(
+                    num_embeddings=int(top_codebook_size),
+                    embedding_dim=self.top_latent_dim,
+                    commitment_cost=commitment_cost,
+                    use_ema=use_ema,
+                    dead_code_reset_interval=dead_code_reset_interval,
+                    dead_code_threshold=dead_code_threshold,
+                    dead_code_warmup_steps=dead_code_warmup_steps,
+                    protect_active_codes_during_reset=protect_active_codes_during_reset,
+                    max_dead_code_resets_per_event=max_dead_code_resets_per_event,
+                )
+                self.bottom_quantizer = VectorQuantizer(
+                    num_embeddings=int(codebook_size),
+                    embedding_dim=self.latent_dim,
+                    commitment_cost=commitment_cost,
+                    use_ema=use_ema,
+                    dead_code_reset_interval=dead_code_reset_interval,
+                    dead_code_threshold=dead_code_threshold,
+                    dead_code_warmup_steps=dead_code_warmup_steps,
+                    protect_active_codes_during_reset=protect_active_codes_during_reset,
+                    max_dead_code_resets_per_event=max_dead_code_resets_per_event,
+                )
+            else:
+                raise ValueError("quantizer_type must be 'vq' or 'fsq'.")
             # Compatibility for code paths that expect `model.quantizer`.
             self.quantizer = self.bottom_quantizer
         else:
@@ -1551,52 +1591,23 @@ class SemanticVQVAE2(nn.Module):
         self.register_buffer("illegal_adjacency_matrix", self._build_illegal_adjacency_matrix())
 
     def _build_tile_weights(self) -> Tensor:
-        weights = torch.ones(self.num_classes)
-        for tile_id in self.RARE_TILES:
-            if tile_id < self.num_classes:
-                weights[tile_id] = self.rare_tile_weight
-        return weights
+        return _build_semantic_tile_weights(
+            self.num_classes, self.RARE_TILES, self.rare_tile_weight
+        )
 
     def _build_illegal_adjacency_matrix(self) -> Tensor:
-        helper = SemanticVQVAE(
-            num_classes=self.num_classes,
-            codebook_size=max(8, self.codebook_size or 8),
-            latent_dim=self.latent_dim,
-            use_codebook=False,
-        )
-        return helper._build_illegal_adjacency_matrix()
+        return _build_semantic_illegal_adjacency_matrix(self.num_classes)
 
     def _empty_indices(self, batch_size: int, height: int, width: int, device: torch.device) -> Tensor:
         return torch.zeros((batch_size, height, width), dtype=torch.long, device=device)
 
     def _illegal_adjacency_penalty(self, recon_logits: Tensor) -> Tensor:
-        probs = F.softmax(recon_logits.float(), dim=1).to(dtype=recon_logits.dtype)
-        illegal = self.illegal_adjacency_matrix.to(dtype=probs.dtype, device=probs.device)
-        shifts = [
-            (-1, -1), (-1, 0), (-1, 1),
-            (0, -1),           (0, 1),
-            (1, -1),  (1, 0),  (1, 1),
-        ]
-        total = torch.tensor(0.0, device=probs.device, dtype=probs.dtype)
-        padded = F.pad(probs, (1, 1, 1, 1), mode="constant", value=0.0)
-        h = probs.shape[2]
-        w = probs.shape[3]
-        for dy, dx in shifts:
-            y0 = 1 + dy
-            x0 = 1 + dx
-            neighbor = padded[:, :, y0:y0 + h, x0:x0 + w]
-            pair_score = torch.einsum("bchw,cd,bdhw->bhw", probs, illegal, neighbor)
-            total = total + pair_score.mean()
-        return total / float(len(shifts))
+        return _compute_illegal_adjacency_penalty(recon_logits, self.illegal_adjacency_matrix)
 
     def _weighted_reconstruction_loss(self, recon: Tensor, target: Tensor) -> Tensor:
-        if target.shape[1] == self.num_classes:
-            target_idx = target.argmax(dim=1)
-        else:
-            target_idx = target.squeeze(1)
-        weights = self.tile_weights[target_idx]
-        loss = F.cross_entropy(recon, target_idx, reduction="none")
-        return (loss * weights).mean()
+        return _compute_weighted_reconstruction_loss(
+            recon, target, self.tile_weights, self.num_classes
+        )
 
     def _encode_hierarchy(self, x: Tensor) -> Tuple[Tensor, Tensor, Tensor, Dict[str, Tensor]]:
         bottom_e = self.encoder(x)
@@ -1695,6 +1706,8 @@ class SemanticVQVAE2(nn.Module):
     def get_codebook(self) -> Tensor:
         if not self.use_codebook or self.bottom_quantizer is None:
             raise RuntimeError("get_codebook is only available when use_codebook=True.")
+        if not hasattr(self.bottom_quantizer, "embedding"):
+            raise RuntimeError("FSQ uses an implicit scalar codebook; get_codebook is not available.")
         return self.bottom_quantizer.embedding.weight.data
 
     def get_codebook_usage(self) -> Tensor:
@@ -1734,10 +1747,14 @@ class VQVAETrainer:
         learning_rate: Optional[float] = None,
         weight_decay: float = 1e-5,
         grad_clip_norm: float = 1.0,
+        nonfinite_policy: str = "skip",
     ):
         if learning_rate is not None:
             lr = float(learning_rate)
         self.model = model
+        self.nonfinite_policy = str(nonfinite_policy).strip().lower()
+        if self.nonfinite_policy not in {"skip", "error"}:
+            raise ValueError("nonfinite_policy must be 'skip' or 'error'.")
         self.grad_clip_norm = float(max(0.0, float(grad_clip_norm)))
         self.optimizer = torch.optim.AdamW(
             adamw_decay_param_groups(
@@ -1748,6 +1765,10 @@ class VQVAETrainer:
             lr=lr,
             weight_decay=0.0,
         )
+
+    def _handle_nonfinite(self, source: str) -> None:
+        if self.nonfinite_policy == "error":
+            raise FloatingPointError(f"VQ-VAE: non-finite {source}; aborting publication run.")
 
     @staticmethod
     def _tensor_is_finite(value: Any) -> bool:
@@ -1804,6 +1825,7 @@ class VQVAETrainer:
         # Backward
         loss = losses['total_loss']
         if not self._tensor_is_finite(loss):
+            self._handle_nonfinite("training loss")
             metrics = self._skipped_metrics(losses)
             if return_metrics:
                 return 0.0, metrics
@@ -1813,6 +1835,7 @@ class VQVAETrainer:
         parameters = tuple(self.model.parameters())
         if not self._gradients_are_finite(parameters):
             self.optimizer.zero_grad(set_to_none=True)
+            self._handle_nonfinite("gradients")
             metrics = self._skipped_metrics(losses)
             if return_metrics:
                 return 0.0, metrics
@@ -1823,6 +1846,7 @@ class VQVAETrainer:
             grad_norm = torch.nn.utils.clip_grad_norm_(parameters, self.grad_clip_norm)
             if not self._tensor_is_finite(grad_norm):
                 self.optimizer.zero_grad(set_to_none=True)
+                self._handle_nonfinite("clipped gradient norm")
                 metrics = self._skipped_metrics(losses)
                 if return_metrics:
                     return 0.0, metrics
@@ -1867,6 +1891,8 @@ class VQVAETrainer:
         metrics['skipped_nonfinite_batch'] = (
             0.0 if all(self._tensor_is_finite(value) for value in metrics.values()) else 1.0
         )
+        if metrics['skipped_nonfinite_batch']:
+            self._handle_nonfinite("validation metrics")
         return metrics
 
 

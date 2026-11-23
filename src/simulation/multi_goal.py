@@ -24,13 +24,7 @@ from typing import Any, Dict, FrozenSet, Iterable, List, Optional, Tuple
 from src.core.definitions import ROOM_HEIGHT, ROOM_WIDTH, SEMANTIC_PALETTE
 
 from .state import (
-    BLOCKING_IDS,
-    CARDINAL_COST,
-    CONDITIONAL_IDS,
-    DIAGONAL_COST,
     PICKUP_IDS,
-    PUSHABLE_IDS,
-    WATER_IDS,
     GameState,
     game_state_key,
 )
@@ -230,116 +224,8 @@ class MultiGoalPathfinder:
         )
 
     def _successors(self, state: GameState) -> Iterable[Tuple[GameState, float]]:
-        """Yield the same tile and graph transitions used by canonical A*."""
-        grid = self.env.original_grid
-        height, width = grid.shape
-        current_row, current_col = state.position
-        transitions: List[Tuple[Position, int, float, Any]] = []
-
-        for delta_row, delta_col in ((-1, 0), (1, 0), (0, -1), (0, 1)):
-            row, col = current_row + delta_row, current_col + delta_col
-            if 0 <= row < height and 0 <= col < width:
-                transitions.append(
-                    ((row, col), int(grid[row, col]), float(CARDINAL_COST), None)
-                )
-
-        if self.allow_diagonals:
-            for delta_row, delta_col in ((-1, -1), (-1, 1), (1, -1), (1, 1)):
-                row, col = current_row + delta_row, current_col + delta_col
-                if not (0 <= row < height and 0 <= col < width):
-                    continue
-                corner_tiles = (
-                    int(grid[current_row + delta_row, current_col]),
-                    int(grid[current_row, current_col + delta_col]),
-                )
-                if any(
-                    tile in BLOCKING_IDS
-                    or tile in CONDITIONAL_IDS
-                    or tile in PUSHABLE_IDS
-                    or tile in WATER_IDS
-                    for tile in corner_tiles
-                ):
-                    continue
-                transitions.append(
-                    ((row, col), int(grid[row, col]), float(DIAGONAL_COST), None)
-                )
-
-        current_tile = int(grid[current_row, current_col])
-        is_stair = current_tile == int(SEMANTIC_PALETTE["STAIR"])
-        is_door = current_tile in {
-            int(SEMANTIC_PALETTE["DOOR_OPEN"]),
-            int(SEMANTIC_PALETTE["DOOR_SOFT"]),
-            int(SEMANTIC_PALETTE["DOOR_LOCKED"]),
-            int(SEMANTIC_PALETTE["DOOR_BOMB"]),
-            int(SEMANTIC_PALETTE["DOOR_BOSS"]),
-        }
-        is_at_boundary = self._is_at_room_boundary(state.position)
-        can_teleport = is_stair or is_door
-        if not self._transition_solver.vglc_strict_mode:
-            can_teleport = can_teleport or is_at_boundary
-        if self._transition_solver.strict_original_mode:
-            can_teleport = is_stair
-
-        if is_stair:
-            for destination in self._transition_solver.get_stair_destinations(state.position):
-                row, col = destination
-                if 0 <= row < height and 0 <= col < width:
-                    transitions.append(
-                        (tuple(destination), int(grid[row, col]), 1.0, "stair")
-                    )
-
-        if can_teleport and not self._transition_solver.strict_original_mode:
-            graph_destinations = (
-                self._transition_solver.get_controlled_virtual_destinations(
-                    state.position, state
-                )
-                + self._transition_solver.get_graph_warp_destinations(
-                    state.position, state
-                )
-            )
-            for destination, base_cost, edge_type in graph_destinations:
-                row, col = destination
-                if 0 <= row < height and 0 <= col < width:
-                    transitions.append(
-                        (
-                            tuple(destination),
-                            int(grid[row, col]),
-                            float(base_cost),
-                            edge_type,
-                        )
-                    )
-
-        for target_pos, target_tile, base_cost, edge_type in transitions:
-            transition_state = state
-            if edge_type is not None and edge_type != "stair":
-                allowed, transition_state = (
-                    self._transition_solver.apply_graph_edge_transition(
-                        state,
-                        state.position,
-                        target_pos,
-                        edge_type,
-                    )
-                )
-                if not allowed:
-                    continue
-
-            allowed, next_state = self.env.try_move_pure(
-                transition_state,
-                target_pos,
-                target_tile,
-            )
-            if not allowed:
-                continue
-            next_state.current_floor = self.env.floor_for_position(
-                target_pos,
-                default=state.current_floor,
-            )
-            movement_cost = self._transition_solver._get_movement_cost(
-                target_tile,
-                target_pos,
-                state,
-            )
-            yield next_state, float(movement_cost) * base_cost
+        """Use canonical transitions without dropping any remaining objectives."""
+        yield from self._transition_solver.iter_successors(state)
 
     def _is_at_room_boundary(self, position: Position) -> bool:
         if not self.env.room_positions:

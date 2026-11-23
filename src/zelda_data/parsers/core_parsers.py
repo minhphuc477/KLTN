@@ -21,6 +21,50 @@ from src.core.definitions import (
 )
 
 
+def _read_vglc_lines(filepath: str) -> List[str]:
+    """Reject malformed maps instead of silently padding or dropping tiles."""
+    with open(filepath, "r", encoding="utf-8") as file_obj:
+        lines = file_obj.read().splitlines()
+    if not lines:
+        return []
+    width = len(lines[0])
+    if width == 0 or any(len(line) != width for line in lines):
+        raise ValueError(f"VGLC map must be a nonempty rectangle: {filepath}")
+    if len(lines) % ROOM_HEIGHT or width % ROOM_WIDTH:
+        raise ValueError(f"VGLC map dimensions must be multiples of {ROOM_HEIGHT}x{ROOM_WIDTH}: {filepath}")
+    unknown = set("".join(lines)).difference(CHAR_TO_SEMANTIC)
+    if unknown:
+        raise ValueError(f"Unknown VGLC glyphs {sorted(unknown)!r}: {filepath}")
+    return lines
+
+
+def is_vglc_room_slot(slot_grid: np.ndarray) -> bool:
+    """Return whether a canonical VGLC slot contains a playable room.
+
+    Some Zelda maps contain framed placeholders made entirely from WALL and
+    VOID glyphs.  They are layout blanks, not training rooms: VGLC defines
+    ``-`` as VOID, and these slots contain no floor, door, stair, entity, or
+    other playable content.  Keep one detector shared by both parser paths so
+    training and reference evaluation cannot silently use different corpora.
+    """
+    if slot_grid.size == 0:
+        return False
+
+    normalized = np.char.upper(np.asarray(slot_grid, dtype="<U1"))
+    gap_count = int(np.sum(normalized == "-"))
+    total = int(normalized.size)
+    if gap_count > int(0.7 * total):
+        return False
+
+    wall_count = int(np.sum(normalized == "W"))
+    door_count = int(np.sum(normalized == "D"))
+    if door_count > 0 and wall_count >= 20:
+        return True
+
+    content_count = total - wall_count - gap_count
+    return bool(wall_count >= 20 and content_count >= 5)
+
+
 class GridBasedRoomExtractor:
     """Extract rooms from fixed-size VGLC slots."""
 
@@ -30,8 +74,7 @@ class GridBasedRoomExtractor:
     WALL_MARKER = "W"
 
     def _load_grid(self, filepath: str) -> np.ndarray:
-        with open(filepath, "r") as file_obj:
-            lines = [line.rstrip("\n") for line in file_obj]
+        lines = _read_vglc_lines(filepath)
 
         if not lines:
             return np.zeros((0, 0), dtype="<U1")
@@ -41,22 +84,7 @@ class GridBasedRoomExtractor:
         return np.array(padded)
 
     def _is_room_slot(self, slot_grid: np.ndarray) -> bool:
-        if slot_grid.size == 0:
-            return False
-
-        dash_count = np.sum(slot_grid == self.GAP_MARKER)
-        total = slot_grid.size
-        if dash_count > total * 0.7:
-            return False
-
-        wall_count = np.sum(slot_grid == self.WALL_MARKER)
-        door_count = int(np.sum(slot_grid == "D"))
-
-        if door_count > 0 and wall_count >= 20:
-            return True
-
-        interior_count = total - wall_count - dash_count
-        return bool(wall_count >= 20 and interior_count >= 5)
+        return is_vglc_room_slot(slot_grid)
 
     def extract(self, filepath: str) -> List[Tuple[Tuple[int, int], np.ndarray]]:
         grid = self._load_grid(filepath)
@@ -108,8 +136,7 @@ class VGLCParser:
         self.room_cls = room_cls
 
     def parse(self, filepath: str) -> Dict[Tuple[int, int], Any]:
-        with open(filepath, "r") as file_obj:
-            lines = [line.rstrip("\n") for line in file_obj]
+        lines = _read_vglc_lines(filepath)
 
         if not lines:
             return {}
@@ -125,7 +152,6 @@ class VGLCParser:
         for row in range(num_rows):
             for col in range(num_cols):
                 room_chars = []
-                is_void = True
                 has_stair = False
 
                 for inner_row in range(ROOM_HEIGHT):
@@ -142,15 +168,13 @@ class VGLCParser:
 
                     room_chars.append(list(line_slice))
 
-                    if any(char not in "-" for char in line_slice):
-                        is_void = False
                     if "S" in line_slice:
                         has_stair = True
 
-                if is_void:
+                char_grid = np.array(room_chars, dtype="<U1")
+                if not is_vglc_room_slot(char_grid):
                     continue
 
-                char_grid = np.array(room_chars, dtype="<U1")
                 doors = self._detect_doors(char_grid)
                 semantic_grid = self._to_semantic(char_grid, doors)
 
@@ -235,15 +259,26 @@ class VGLCParser:
 
 
 class DOTParser:
-    """Parse DOT graph files into NetworkX digraphs."""
+    """Parse VGLC DOT into a traversable mission graph.
+
+    VGLC edge ``s`` means visible but impassable (see the corpus zelda.json).
+    Keep those source relations in graph metadata, outside passage adjacency.
+    Explicit ``stair``/``warp`` edges remain supported for authored missions.
+    """
 
     def parse(self, filepath: str) -> nx.DiGraph:
-        with open(filepath, "r") as file_obj:
+        with open(filepath, "r", encoding="utf-8") as file_obj:
             content = file_obj.read()
+        return self.parse_string(content)
+
+    def parse_string(self, content: str) -> nx.DiGraph:
+        """Parse the same source schema from an in-memory DOT document."""
 
         graph = nx.DiGraph()
+        graph.graph["source_schema"] = "vglc_zelda"
+        graph.graph["non_traversable_edges"] = []
 
-        node_pattern = r"^\s*(\d+)\s*\[([^\]]*)\]"
+        node_pattern = r"(?:^|[;{}])\s*(\d+)\s*\[([^\]]*)\]"
         for match in re.finditer(node_pattern, content, re.MULTILINE):
             node_id = int(match.group(1))
             attrs = match.group(2)
@@ -262,29 +297,46 @@ class DOTParser:
                     label = attrs[start:end].strip()
 
             parts = parse_node_label_tokens(label)
-            label_norm = normalize_node_label(label)
+            # Uppercase S is a switch in the source, whereas legacy internal
+            # graphs use it as a start alias. Normalize at the ingestion boundary
+            # and preserve the source label for an auditable, lossless mapping.
+            switch_tokens = [part for part in parts if re.fullmatch(r"S\d*", part)]
+            label_norm = normalize_node_label(
+                ",".join("switch" if part in switch_tokens else part for part in parts)
+            )
 
-            is_start = ("s" in parts) or ("S" in parts)
+            is_start = "s" in parts
             is_start_pointer = is_start and all(part in ("s", "") for part in parts)
 
             graph.add_node(
                 node_id,
                 label=label_norm,
+                source_label=label,
                 is_start=is_start,
                 is_start_pointer=is_start_pointer,
                 is_triforce="t" in parts,
                 is_boss="b" in parts,
                 has_key="k" in parts,
-                has_item="I" in parts or "i" in parts or "K" in parts,
+                has_item="I" in parts,
+                has_minor_item="i" in parts,
+                has_boss_key="K" in parts,
+                has_switch=bool(switch_tokens),
+                switch_tokens=switch_tokens,
                 has_enemy="e" in parts,
                 has_puzzle="p" in parts,
             )
 
-        edge_pattern = r"(\d+)\s*->\s*(\d+)(?:\s*\[([^\]]*)\])?"
+        switch_providers = {}
+        for node_id, data in graph.nodes(data=True):
+            for token in data.get("switch_tokens", []):
+                switch_providers.setdefault(token, []).append(node_id)
+
+        edge_pattern = r"(\d+)\s*(->|--)\s*(\d+)(?:\s*\[([^\]]*)\])?"
         for match in re.finditer(edge_pattern, content, re.MULTILINE):
             src = int(match.group(1))
-            dst = int(match.group(2))
-            attrs = match.group(3) or ""
+            operator = match.group(2)
+            dst = int(match.group(3))
+            attrs = match.group(4) or ""
 
             label = ""
             quoted = re.search(r"label\s*=\s*\"", attrs)
@@ -306,6 +358,19 @@ class DOTParser:
             edge_constraints = parse_edge_type_tokens(label=label_clean)
             edge_type = select_primary_edge_type(edge_constraints)
 
+            if "impassable" in edge_constraints:
+                graph.graph["non_traversable_edges"].append(
+                    {"source": src, "target": dst, "label": label_clean,
+                     "edge_type": edge_type, "edge_constraints": edge_constraints}
+                )
+                # DOT permits nodes to be declared implicitly by an edge.
+                graph.add_nodes_from((src, dst))
+                if operator == "--":
+                    graph.graph["non_traversable_edges"].append(
+                        {**graph.graph["non_traversable_edges"][-1], "source": dst, "target": src}
+                    )
+                continue
+
             graph.add_edge(
                 src,
                 dst,
@@ -313,5 +378,28 @@ class DOTParser:
                 edge_type=edge_type,
                 edge_constraints=edge_constraints,
             )
+            # Numbered source switches name a particular provider, not any
+            # puzzle previously visited. DOT node IDs here are nonnegative;
+            # a missing/ambiguous provider gets an impossible negative ID.
+            numbered_switches = [token for token in label_clean.split(",") if re.fullmatch(r"S\d+", token)]
+            if numbered_switches:
+                required = []
+                unresolved = []
+                for token in numbered_switches:
+                    providers = switch_providers.get(token, [])
+                    if len(providers) == 1:
+                        required.append(providers[0])
+                    else:
+                        required.append(-1 - int(token[1:]))
+                        unresolved.append(token)
+                graph.edges[src, dst]["switches_required"] = list(dict.fromkeys(required))
+                if len(set(required)) == 1:
+                    graph.edges[src, dst]["switch_id"] = required[0]
+                if unresolved:
+                    graph.edges[src, dst]["unresolved_switch_tokens"] = unresolved
+            if operator == "--":
+                reverse = dict(graph.edges[src, dst])
+                reverse['metadata'] = {**dict(reverse.get('metadata', {})), 'implied_reverse': True}
+                graph.add_edge(dst, src, **reverse)
 
         return graph

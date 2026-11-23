@@ -39,7 +39,7 @@ def run_simple_bench():
     t0 = time.time()
     path, nodes = jps(grid, start, goal)
     dt = time.time() - t0
-    print(f"jps,{len(grid)},{0.12},{dt:.4f},{nodes},{len(path) if path else -1}")
+    print(f"jump_augmented_astar,{len(grid)},{0.12},{dt:.4f},{nodes},{len(path) if path else -1}")
 
 
 if __name__ == '__main__':

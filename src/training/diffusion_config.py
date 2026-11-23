@@ -74,6 +74,8 @@ class DiffusionTrainingConfig:
         # Diffusion Model
         latent_dim: int = 64,
         latent_scale_factor: float = 1.0,
+        latent_clip_bound: Optional[float] = 5.0,
+        aux_max_timestep_fraction: float = 0.5,
         model_channels: int = 128,
         context_dim: int = 256,
         denoiser_backbone: str = "unet",
@@ -150,6 +152,7 @@ class DiffusionTrainingConfig:
         logic_final_temperature: float = 0.05,
         logic_topology_trace_weight: float = 0.25,
         logic_topology_anchor_weight: float = 0.25,
+        logic_lock_weight: float = 0.5,
         logic_global_reach_weight: float = 1.0,
         logic_global_room_weight: float = 0.25,
         guidance_scale: float = 1.0,
@@ -264,6 +267,15 @@ class DiffusionTrainingConfig:
         self.latent_scale_factor = float(latent_scale_factor)
         if not math.isfinite(self.latent_scale_factor) or self.latent_scale_factor <= 0.0:
             raise ValueError("latent_scale_factor must be finite and greater than zero.")
+        if latent_clip_bound is None:
+            self.latent_clip_bound = None
+        else:
+            self.latent_clip_bound = float(latent_clip_bound)
+            if not math.isfinite(self.latent_clip_bound) or self.latent_clip_bound <= 0.0:
+                raise ValueError("latent_clip_bound must be None or a finite positive value.")
+        self.aux_max_timestep_fraction = float(aux_max_timestep_fraction)
+        if not math.isfinite(self.aux_max_timestep_fraction) or not (0.0 < self.aux_max_timestep_fraction <= 1.0):
+            raise ValueError("aux_max_timestep_fraction must be in (0, 1].")
         self.model_channels = int(model_channels)
         self.context_dim = int(context_dim)
         self.denoiser_backbone = str(denoiser_backbone).strip().lower()
@@ -473,6 +485,7 @@ class DiffusionTrainingConfig:
                 raise ValueError(f"{name} must be finite and greater than zero.")
         self.logic_topology_trace_weight = float(max(0.0, logic_topology_trace_weight))
         self.logic_topology_anchor_weight = float(max(0.0, logic_topology_anchor_weight))
+        self.logic_lock_weight = float(max(0.0, logic_lock_weight))
         self.logic_global_reach_weight = float(max(0.0, logic_global_reach_weight))
         self.logic_global_room_weight = float(max(0.0, logic_global_room_weight))
         self.guidance_scale = guidance_scale if self.logic_net_enabled else 0.0
@@ -590,6 +603,18 @@ class DiffusionTrainingConfig:
         self.cudnn_deterministic = bool(cudnn_deterministic)
         self.deterministic_algorithms = bool(deterministic_algorithms)
         self.distributed_enabled = bool(distributed_enabled)
+        if self.logic_net_enabled and self.alpha_logic > 0.0 and self.room_level:
+            if not self.dungeon_batch_mode:
+                raise ValueError(
+                    "Room-level global LogicNet training requires dungeon_batch_mode=True "
+                    "so every update contains one complete dungeon variant."
+                )
+            if self.distributed_enabled:
+                raise ValueError(
+                    "Distributed room-level global LogicNet training is not supported: "
+                    "the current distributed sampler fragments dungeon variants and would "
+                    "silently replace the joint graph objective with per-room proxies."
+                )
         backend = str(distributed_backend).strip().lower()
         if backend not in {"nccl", "gloo"}:
             raise ValueError(
@@ -665,6 +690,8 @@ def diffusion_training_kwargs_from_resolved_config(
         "vqvae_mrf_penalty_weight": vqvae_stage["mrf_penalty_weight"],
         "latent_dim": stage["latent_dim"],
         "latent_scale_factor": stage.get("latent_scale_factor", 1.0),
+        "latent_clip_bound": stage.get("latent_clip_bound", 5.0),
+        "aux_max_timestep_fraction": stage.get("aux_max_timestep_fraction", 0.5),
         "model_channels": stage["model_channels"],
         "context_dim": stage["context_dim"],
         "denoiser_backbone": stage.get("denoiser_backbone", "unet"),
@@ -745,6 +772,7 @@ def diffusion_training_kwargs_from_resolved_config(
         "logic_final_temperature": stage.get("logic_final_temperature", 0.05),
         "logic_topology_trace_weight": stage["logic_topology_trace_weight"],
         "logic_topology_anchor_weight": stage["logic_topology_anchor_weight"],
+        "logic_lock_weight": stage.get("logic_lock_weight", 0.5),
         "logic_global_reach_weight": stage.get("logic_global_reach_weight", 1.0),
         "logic_global_room_weight": stage.get("logic_global_room_weight", 0.25),
         "guidance_scale": stage["guidance_scale"],
@@ -933,6 +961,7 @@ def _legacy_diffusion_overrides_from_args(args: argparse.Namespace) -> Dict[str,
     _set("guidance_scale", getattr(args, "guidance_scale", None))
     _set("logic_topology_trace_weight", getattr(args, "logic_topology_trace_weight", None))
     _set("logic_topology_anchor_weight", getattr(args, "logic_topology_anchor_weight", None))
+    _set("logic_lock_weight", getattr(args, "logic_lock_weight", None))
     _set("logic_global_reach_weight", getattr(args, "logic_global_reach_weight", None))
     _set("logic_global_room_weight", getattr(args, "logic_global_room_weight", None))
     _set("diffusion_training_objective", getattr(args, "diffusion_training_objective", None))

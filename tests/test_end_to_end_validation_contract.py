@@ -6,6 +6,7 @@ from src.core.definitions import SEMANTIC_PALETTE
 from src.evaluation.validator import ExternalValidator
 from src.simulation.validator import StateSpaceAStar, ZeldaLogicEnv, ZeldaValidator
 from src.validation.end_to_end import build_end_to_end_validation_report
+from src.validation.end_to_end import graph_tile_projection_issues
 from src.validation.pacing import evaluate_solution_path_pacing
 
 
@@ -42,6 +43,20 @@ def test_end_to_end_contract_requires_all_applicable_exact_stages():
     report.require_accepted()
 
 
+@pytest.mark.parametrize("termination", ["timeout", "budget_exhausted", "unknown", "unfinished"])
+def test_unfinished_tile_search_cannot_be_accepted_even_with_stale_success(termination):
+    report = build_end_to_end_validation_report(
+        dungeon_grid=_valid_grid(),
+        graph_validation={"solvable": True, "all_rooms_reachable": True,
+                          "termination_status": "solved", "route_replay_status": "verified"},
+        spatial_validation={"final_spatial_edge_records_broken": 0},
+        tile_validation={"solvable": True, "is_exact": True, "termination_status": termination,
+                         "route_replay_status": "verified", "graph_tile_context_applied": True},
+    )
+    assert report.accepted is False
+    assert report.tile_solvability.passed is None
+
+
 def test_end_to_end_contract_rejects_typed_graph_without_tile_mapping():
     report = build_end_to_end_validation_report(
         dungeon_grid=_valid_grid(),
@@ -63,6 +78,52 @@ def test_end_to_end_contract_rejects_typed_graph_without_tile_mapping():
 
     assert report.accepted is False
     assert report.failed_stages == ["graph_tile_semantics"]
+
+
+@pytest.mark.parametrize("constraints", [["switch"], ["multi_lock"], ["key_locked", "item_locked"]])
+def test_separate_graph_and_grid_witnesses_cannot_certify_unimplemented_rule_bridge(constraints):
+    graph = nx.DiGraph()
+    graph.add_edge(0, 1, edge_type="open", edge_constraints=constraints)
+    issues = graph_tile_projection_issues(graph)
+    assert issues
+    report = build_end_to_end_validation_report(
+        dungeon_grid=_valid_grid(),
+        graph_validation={"solvable": True, "all_rooms_reachable": True,
+                          "termination_status": "solved", "route_replay_status": "verified"},
+        spatial_validation={"final_spatial_edge_records_broken": 0},
+        tile_validation={"solvable": True, "is_exact": True, "termination_status": "solved",
+                         "route_replay_status": "verified", "graph_tile_context_applied": True,
+                         "graph_tile_projection_issues": issues},
+    )
+    assert not report.accepted
+    assert report.graph_tile_semantics.passed is None
+    assert not report.graph_tile_semantics.exact
+
+
+def test_single_key_gate_has_no_known_projection_gap():
+    graph = nx.DiGraph()
+    graph.add_edge(0, 1, edge_type="key_locked")
+    assert graph_tile_projection_issues(graph) == []
+
+
+def test_named_key_projection_requires_matching_provider_and_physical_bridge():
+    graph = nx.DiGraph()
+    graph.add_node(0, type="KEY", key_id=7, has_key=True)
+    graph.add_node(1, type="LOCK")
+    graph.add_node(2, type="BIG_KEY", key_id=2, has_boss_key=True)
+    graph.add_node(3, type="BOSS")
+    graph.add_edge(0, 1, edge_type="KEY_LOCKED", key_required=7)
+    graph.add_edge(2, 3, edge_type="BOSS_LOCKED", key_required=2)
+
+    # Without physical bridge, named keys remain uncertified
+    assert len(graph_tile_projection_issues(graph, physical_bridge=False)) == 2
+    # With physical bridge and matching provider nodes, no projection gap
+    assert graph_tile_projection_issues(graph, physical_bridge=True) == []
+
+    # Unmatched key_required still fails closed even with physical_bridge=True
+    graph.add_edge(1, 2, edge_type="KEY_LOCKED", key_required="specific_key")
+    issues = graph_tile_projection_issues(graph, physical_bridge=True)
+    assert len(issues) == 1 and "named key identity" in issues[0]
 
 
 def test_end_to_end_contract_rejects_invalid_representation_and_indeterminate_oracle():

@@ -16,6 +16,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
+from numbers import Integral
 from typing import Any, Dict, Iterable, Mapping, Sequence, Tuple
 
 from src.zelda_data.splits import (
@@ -27,7 +28,8 @@ from src.zelda_data.splits import (
 )
 
 
-PROTOCOL_SCHEMA_VERSION = "2.0"
+PROTOCOL_SCHEMA_VERSION = "4.0"
+CONTROL_MODELS = ("retrieval_training", "wfc_training", "pod_training", "ar_markov_training")
 _MODEL_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
 
@@ -38,6 +40,7 @@ def canonical_json(payload: Mapping[str, Any]) -> str:
         ensure_ascii=False,
         separators=(",", ":"),
         sort_keys=True,
+        allow_nan=False,
     )
 
 
@@ -207,6 +210,7 @@ class ModelVariant:
             "diffusion.logic_topology_anchor_weight": (
                 0.25 if self.local_logic_loss else 0.0
             ),
+            "diffusion.logic_lock_weight": 0.5 if self.global_logic_loss else 0.0,
             "diffusion.logic_global_reach_weight": (
                 1.0 if self.global_logic_loss else 0.0
             ),
@@ -229,6 +233,43 @@ class ModelVariant:
             "diffusion.puzzle_stage_conditioning_enabled": False,
             "diffusion.puzzle_stage_topology_enabled": False,
             "diffusion.puzzle_stage_semantics_loss_weight": 0.0,
+        }
+
+    def masked_room_training_overrides(self) -> Dict[str, Any]:
+        """Return causal settings for the primary discrete G-LMDM masked_room branch."""
+        return {
+            "generation.room_generator_mode": "discrete_masked",
+            "masked_room.condition_gnn_type": "gps" if self.global_graph_conditioning else "gcn",
+            "masked_room.graph_conditioning_mode": (
+                "node_sequence" if self.global_graph_conditioning else "pooled"
+            ),
+            "masked_room.condition_use_reference_room_maps": bool(self.global_graph_conditioning),
+            "masked_room.condition_use_rrwp_edge_features": bool(self.global_graph_conditioning),
+            "masked_room.logic_net_enabled": bool(self.logic_net_enabled),
+            "masked_room.logic_net_trainable": False,
+            "masked_room.alpha_logic": (
+                0.1 if self.local_logic_loss or self.global_logic_loss else 0.0
+            ),
+            "masked_room.logic_topology_trace_weight": (
+                0.25 if self.local_logic_loss else 0.0
+            ),
+            "masked_room.logic_topology_anchor_weight": (
+                0.25 if self.local_logic_loss else 0.0
+            ),
+            "masked_room.logic_global_reach_weight": (
+                1.0 if self.global_logic_loss else 0.0
+            ),
+            "masked_room.logic_global_room_weight": (
+                0.25 if self.global_logic_loss else 0.0
+            ),
+            "generation.logic_guidance_scale": 0.0,
+            "generation.enable_map_elites": False,
+            "generation.use_neural_guided_repair": False,
+            "generation.use_neural_repair_feedback": False,
+            "generation.end_to_end_validation_mode": "report",
+            "masked_room.puzzle_stage_conditioning_enabled": False,
+            "masked_room.puzzle_stage_topology_enabled": False,
+            "masked_room.puzzle_stage_semantics_loss_weight": 0.0,
         }
 
     def to_dict(self) -> Dict[str, Any]:
@@ -289,8 +330,8 @@ def apply_publication_variant(
     output_root: str = "outputs/paper_v1",
 ) -> Dict[str, Any]:
     """Return a complete config for one independently trained run."""
-    if int(training_seed) < 0:
-        raise ValueError("training_seed must be non-negative.")
+    if isinstance(training_seed, bool) or not isinstance(training_seed, Integral) or training_seed < 0:
+        raise ValueError("training_seed must be a non-negative integer.")
     config = copy.deepcopy(dict(base_config))
     run_id = f"{fold.fold_id}__{variant.model_id}__seed_{int(training_seed)}"
     run_output_dir = f"{output_root.rstrip('/')}/{run_id}"
@@ -329,7 +370,10 @@ def build_protocol_manifest(
     variants: Sequence[ModelVariant] = PUBLICATION_VARIANTS,
 ) -> Dict[str, Any]:
     """Build a deterministic manifest for the full confirmatory run matrix."""
-    normalized_seeds = tuple(int(seed) for seed in training_seeds)
+    raw_seeds = tuple(training_seeds)
+    if any(isinstance(seed, bool) or not isinstance(seed, Integral) for seed in raw_seeds):
+        raise ValueError("training_seeds must be integers without coercion.")
+    normalized_seeds = tuple(int(seed) for seed in raw_seeds)
     if not normalized_seeds or len(set(normalized_seeds)) != len(normalized_seeds):
         raise ValueError("training_seeds must be non-empty and unique.")
     if any(seed < 0 for seed in normalized_seeds):
@@ -403,6 +447,32 @@ def build_protocol_manifest(
                 "sampled inference variant"
             ),
         },
+        "confirmatory_analysis": {
+            "primary_endpoint": "compiled_stage_exact_validity_over_all_requested_attempts",
+            "primary_stage": "compiled",
+            "primary_interpretation": (
+                "Exact validity of the complete hybrid pipeline under identical repair "
+                "and compilation settings across trained model arms. This does not "
+                "estimate unaided neural generation of mission entities: source room "
+                "targets do not contain START, TRIFORCE, or key classes."
+            ),
+            "primary_contrast_family": [
+                {"baseline": "n_local", "comparison": "g_graph"},
+                {"baseline": "g_graph", "comparison": "g_l_local_logic"},
+                {"baseline": "g_l_local_logic", "comparison": "g_lg_full_logic"},
+            ],
+            "aggregation_unit": "outer_held_out_dungeon_identity",
+            "fold_dependence_policy": "withhold_confirmatory_inference_when_training_sets_overlap",
+            "within_unit_aggregation": "mean_over_matched_training_and_sampling_repeats",
+            "test": "two_sided_exact_random_sign_test_over_fold_differences",
+            "familywise_alpha": 0.05,
+            "multiplicity_correction": "holm_step_down_over_three_primary_contrasts",
+            "confidence_interval": "outer_fold_bootstrap_10000_resamples",
+            "missing_pair_policy": "abort_confirmatory_inference",
+            "secondary_stages": ["raw", "constrained", "repaired"],
+            "secondary_intervention_metrics": ["raw_to_constrained", "constrained_to_repaired", "repaired_to_compiled", "raw_to_compiled"],
+            "secondary_stage_policy": "label_exploratory_unless_sealed_in_a_separate_family",
+        },
         "training_seeds": list(normalized_seeds),
         "folds": [fold.to_dict() for fold in resolved_folds],
         "model_variants": [variant.to_dict() for variant in resolved_variants],
@@ -410,6 +480,7 @@ def build_protocol_manifest(
             len(resolved_folds) * len(resolved_variants) * len(normalized_seeds)
         ),
         "evidence_policy": {
+            "repair_rules": "fixed_canonical_adjacency_no_online_learning",
             "allow_existing_checkpoints": False,
             "allow_existing_artifacts": False,
             "require_raw_stage": True,

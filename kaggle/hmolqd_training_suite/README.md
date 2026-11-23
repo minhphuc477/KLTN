@@ -31,7 +31,7 @@ Default behavior:
 - stages: VQ-VAE/VQ-VAE-2, diffusion, fast-sampler, masked-room
 - output root: `/kaggle/working/kaggle_outputs/hmolqd_training_suite`
 
-To train and then run the full thesis evidence suite:
+To train and then run the full publication evaluation suite:
 
 ```bash
 %%bash
@@ -210,8 +210,9 @@ When telemetry calibration is enabled it also writes
 `research/pcbs_telemetry_calibration/pcbs_persona_overrides.json` and a compact
 calibration report.
 
-See [`../../docs/KAGGLE_RESEARCH_EVIDENCE_RUNBOOK.md`](../../docs/KAGGLE_RESEARCH_EVIDENCE_RUNBOOK.md)
-for the full experiment matrix and artifact checklist.
+See [`../../docs/LOCAL_RESEARCH_EVIDENCE_RUNBOOK.md`](../../docs/LOCAL_RESEARCH_EVIDENCE_RUNBOOK.md)
+and [`../../refine-logs/EXPERIMENT_PLAN.md`](../../refine-logs/EXPERIMENT_PLAN.md)
+for the active experiment matrix and artifact checklist.
 
 ## Notes
 

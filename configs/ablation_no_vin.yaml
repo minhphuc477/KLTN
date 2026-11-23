@@ -6,3 +6,6 @@ training:
 
 diffusion:
   logic_grid_pathfinder: cnn
+
+masked_room:
+  logic_grid_pathfinder: cnn

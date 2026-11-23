@@ -26,6 +26,7 @@ from src.publication.records import (
 )
 from src.publication.analysis import (
     aggregate_publication_records,
+    holm_adjust_pvalues,
     paired_exact_validity_by_fold,
     paired_guidance_validity_by_fold,
 )
@@ -43,6 +44,18 @@ from experiments.paper_v1.run_protocol import (
 )
 from src.config_system import merge_config
 from src.pipeline.generation.room_processing import _compute_room_condition
+
+
+def test_holm_adjustment_controls_preregistered_contrast_family() -> None:
+    adjusted = holm_adjust_pvalues(
+        {"N_vs_G": 0.01, "G_vs_GL": 0.03, "GL_vs_GLG": 0.04}
+    )
+
+    assert adjusted["N_vs_G"]["holm_adjusted_p_value"] == pytest.approx(0.03)
+    assert adjusted["G_vs_GL"]["holm_adjusted_p_value"] == pytest.approx(0.06)
+    assert adjusted["GL_vs_GLG"]["holm_adjusted_p_value"] == pytest.approx(0.06)
+    assert adjusted["N_vs_G"]["reject_familywise_null"] is True
+    assert adjusted["G_vs_GL"]["reject_familywise_null"] is False
 
 
 def test_lodo_folds_hold_out_complete_dungeon_identities() -> None:
@@ -72,8 +85,14 @@ def test_publication_variants_are_separately_trainable_conditions() -> None:
     assert variants["g_l_local_logic"].training_overrides()[
         "diffusion.logic_global_reach_weight"
     ] == 0.0
+    assert variants["g_l_local_logic"].training_overrides()[
+        "diffusion.logic_lock_weight"
+    ] == 0.0
     assert variants["g_lg_full_logic"].training_overrides()[
         "diffusion.logic_global_reach_weight"
+    ] > 0.0
+    assert variants["g_lg_full_logic"].training_overrides()[
+        "diffusion.logic_lock_weight"
     ] > 0.0
     assert variants["g_l_local_logic"].tile_auxiliary_loss is False
     assert variants["g_lg_full_logic"].tile_auxiliary_loss is False
@@ -87,6 +106,45 @@ def test_publication_variants_are_separately_trainable_conditions() -> None:
         assert overrides["generation.use_neural_guided_repair"] is False
         assert overrides["generation.use_neural_repair_feedback"] is False
         assert overrides["generation.end_to_end_validation_mode"] == "report"
+
+
+def test_masked_room_training_overrides_mirror_causal_factors() -> None:
+    variants = {variant.model_id: variant for variant in PUBLICATION_VARIANTS}
+    n_over = variants["n_local"].masked_room_training_overrides()
+    g_over = variants["g_graph"].masked_room_training_overrides()
+    gl_over = variants["g_l_local_logic"].masked_room_training_overrides()
+    glg_over = variants["g_lg_full_logic"].masked_room_training_overrides()
+
+    assert n_over["masked_room.condition_gnn_type"] == "gcn"
+    assert n_over["masked_room.graph_conditioning_mode"] == "pooled"
+    assert g_over["masked_room.condition_gnn_type"] == "gps"
+    assert g_over["masked_room.logic_net_enabled"] is False
+    assert gl_over["masked_room.logic_net_enabled"] is True
+    assert gl_over["masked_room.alpha_logic"] == pytest.approx(0.1)
+    assert gl_over["masked_room.logic_global_reach_weight"] == 0.0
+    assert glg_over["masked_room.logic_global_reach_weight"] == pytest.approx(1.0)
+    for over in (n_over, g_over, gl_over, glg_over):
+        assert over["masked_room.puzzle_stage_semantics_loss_weight"] == 0.0
+        assert over["generation.end_to_end_validation_mode"] == "report"
+
+
+def test_build_run_plan_supports_masked_room_branch_without_vqvae_jobs(tmp_path: Path) -> None:
+    manifest, configs = build_run_plan(
+        base_config=merge_config(),
+        output_root=tmp_path / "glmdm_plan",
+        folds=(build_leave_one_dungeon_out_folds()[0],),
+        training_seeds=(42,),
+        model_branch="masked_room",
+    )
+
+    assert manifest["model_branch"] == "masked_room"
+    assert manifest["tokenizer_run_count"] == 0
+    assert manifest["diffusion_run_count"] == 4
+    assert len(configs) == 4
+    for job in manifest["jobs"]["diffusion"]:
+        assert job["model_branch"] == "masked_room"
+        assert job["depends_on"] == []
+        assert "checkpoints\\masked_room\\masked_room_best.pth" in job["expected_checkpoint"] or "checkpoints/masked_room/masked_room_best.pth" in job["expected_checkpoint"]
 
 
 def test_global_logic_variant_requires_graph_conditioning() -> None:
@@ -160,6 +218,13 @@ def test_protocol_manifest_is_deterministic_and_complete() -> None:
     primary = first["inference_factors"]["primary_model_ablation"]
     secondary = first["inference_factors"]["secondary_logic_guidance"]
     assert primary["condition"] == "unguided"
+    analysis = first["confirmatory_analysis"]
+    assert analysis["primary_endpoint"] == "compiled_stage_exact_validity_over_all_requested_attempts"
+    assert analysis["primary_stage"] == "compiled"
+    assert "raw" in analysis["secondary_stages"]
+    assert analysis["multiplicity_correction"].startswith("holm_step_down")
+    assert analysis["familywise_alpha"] == pytest.approx(0.05)
+    assert len(analysis["primary_contrast_family"]) == 3
     assert set(primary["eligible_model_ids"]) == {
         "n_local",
         "g_graph",
@@ -503,6 +568,32 @@ def test_materializer_writes_safe_plan_and_refuses_nonempty_destination(
         )
 
 
+def test_command_plan_stops_after_native_preflight_failure(tmp_path: Path) -> None:
+    import shutil
+    import subprocess
+
+    shell = shutil.which("pwsh") or shutil.which("powershell")
+    if shell is None:
+        pytest.skip("PowerShell is required for the native exit-code regression")
+    result = materialize_protocol(
+        base_config_path="configs/zelda_hmolqd.yaml", output_root=tmp_path / "fresh",
+        training_seeds=(42,), folds=(build_leave_one_dungeon_out_folds()[0],),
+        variants=(PUBLICATION_VARIANTS[0],),
+    )
+    from experiments.paper_v1.run_protocol import _powershell_quote
+    probe = tmp_path / "probe.ps1"
+    probe.write_text(
+        "$global:invocations = 0\n"
+        "function python { $global:invocations += 1; $global:LASTEXITCODE = 7 }\n"
+        f"try {{ . {_powershell_quote(result.command_plan_path)}; exit 3 }}\n"
+        "catch { if ($global:invocations -eq 1 -and $_.Exception.Message -like '*preflight failed*') { exit 0 }; exit 4 }\n",
+        encoding="utf-8",
+    )
+    completed = subprocess.run([shell, "-NoProfile", "-NonInteractive", "-File", str(probe)],
+                               capture_output=True, text=True, timeout=30, check=False)
+    assert completed.returncode == 0, completed.stderr + completed.stdout
+
+
 def test_stage_bridge_retains_and_validates_all_generation_stages(tmp_path: Path) -> None:
     rooms = {
         0: SimpleNamespace(
@@ -599,6 +690,7 @@ def test_paired_validity_aggregates_repeats_within_outer_fold() -> None:
                 sampling_seed=sample_seed,
                 mission_graph_id=f"graph_{fold_index}",
                 model_id="n_local",
+                inference_variant="unguided",
             )
             comparison = replace(
                 baseline,
@@ -683,3 +775,85 @@ def test_dataset_manifest_verification_is_content_addressed(tmp_path: Path) -> N
     source.write_text("changed\n", encoding="utf-8")
     with pytest.raises(ValueError, match="mismatched"):
         verify_dataset_manifest(data_root)
+
+
+def test_publication_guidance_card_and_validator_enforce_gap_traceability() -> None:
+    from scripts.validate_publication_readiness import publication_card_template, validate_card
+
+    card_path = Path(__file__).resolve().parents[1] / "docs" / "publication_guidance_card.json"
+    card = json.loads(card_path.read_text(encoding="utf-8"))
+
+    assert validate_card(card) == []
+    assert {"RG1", "RG2", "RG3", "RG4"}.issubset(set(card["research_gaps"].keys()))
+
+    missing_gaps = publication_card_template()
+    missing_gaps.pop("research_gaps")
+    assert any("research_gaps" in msg for msg in validate_card(missing_gaps))
+
+    dangling_ref = publication_card_template()
+    dangling_ref["problem_statements"]["PS1"]["research_gap"] = ["RG999"]
+    assert any("unknown research_gap" in msg for msg in validate_card(dangling_ref))
+
+
+def test_plan_attempts_supports_masked_room_branch_without_tokenizer_dependency(tmp_path: Path, monkeypatch) -> None:
+    import yaml
+    from experiments.paper_v1.plan_attempts import build_sampling_plan
+    from src.publication.evaluation_design import seal_evaluation_design
+    from src.publication.protocol import seal_protocol_manifest
+
+    fold = build_leave_one_dungeon_out_folds()[0]
+    output_root = tmp_path / "masked_plan"
+    mission_path = tmp_path / "mission_0.json"
+    mission_graph = nx.DiGraph()
+    mission_graph.add_node(0, is_start=True)
+    mission_graph.add_node(1, is_triforce=True)
+    mission_graph.add_edge(0, 1)
+    mission_path.write_text(json.dumps(nx.node_link_data(mission_graph, edges="links")), encoding="utf-8")
+
+    manifest, configs = build_run_plan(
+        base_config=merge_config(),
+        output_root=output_root,
+        folds=(fold,),
+        training_seeds=(42,),
+        model_branch="masked_room",
+    )
+    for path, config in configs:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+    for job in manifest["jobs"]["diffusion"]:
+        ckpt = Path(job["expected_checkpoint"])
+        ckpt.parent.mkdir(parents=True, exist_ok=True)
+        ckpt.write_text("synthetic masked_room checkpoint", encoding="utf-8")
+
+    mission_bank = {fold.fold_id: {"m0": str(mission_path)}}
+    gen_kwargs = {"num_diffusion_steps": 4, "logic_guidance_scale": 0.0}
+    manifest["dataset_provenance"] = {"verification_status": "verified", "content_sha256": "a" * 64}
+    manifest["execution_provenance"] = {"git_commit": "deadbeef"}
+    manifest["evaluation_design"] = seal_evaluation_design(
+        mission_bank=mission_bank,
+        sampling_seeds=(11,),
+        generation_kwargs=gen_kwargs,
+        fold_ids=(fold.fold_id,),
+    )
+    manifest = seal_protocol_manifest(manifest)
+
+    monkeypatch.setattr("experiments.paper_v1.plan_attempts.verify_execution_provenance", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "experiments.paper_v1.plan_attempts.verify_dataset_manifest",
+        lambda *a, **k: {"verification_status": "verified", "content_sha256": "a" * 64},
+    )
+
+    plan = build_sampling_plan(
+        training_manifest=manifest,
+        protocol_sha256=manifest["protocol_sha256"],
+        mission_bank=mission_bank,
+        sampling_seeds=(11,),
+        generation_kwargs=gen_kwargs,
+        git_commit="deadbeef",
+    )
+    neural_attempts = [a for a in plan["attempts"] if a["metadata"]["model_id"] in {v.model_id for v in PUBLICATION_VARIANTS}]
+    assert len(neural_attempts) == 4
+    for attempt in neural_attempts:
+        assert "masked_room_checkpoint" in attempt["artifacts"]
+        assert "vqvae_checkpoint" not in attempt["artifacts"]
+        assert "diffusion_checkpoint" not in attempt["artifacts"]

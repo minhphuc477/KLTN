@@ -8,3 +8,6 @@ training:
 
 diffusion:
   logic_grid_pathfinder: vin
+
+masked_room:
+  logic_grid_pathfinder: vin

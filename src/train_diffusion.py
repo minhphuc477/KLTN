@@ -102,6 +102,10 @@ from src.utils.model_capacity import (
 )
 from src.utils.data_loading import dataloader_runtime_kwargs
 from src.utils.frozen_latent_cache import FrozenLatentCache
+from src.utils.loss_utils import (
+    spatial_classification_accuracy,
+    spatial_cross_entropy,
+)
 from src.training import diffusion_checkpoint_io as _checkpoint_io
 from src.training.diffusion_checkpoint_contracts import (
     resolve_vqvae_architecture as _resolve_vqvae_architecture,
@@ -111,6 +115,23 @@ from src.training.diffusion_checkpoint_contracts import (
 logger = logging.getLogger(__name__)
 CARDINAL_DIRECTIONS = ("N", "S", "E", "W")
 VALIDATION_SEED_OFFSET = 1_000_003
+
+
+@contextmanager
+def evaluation_module_modes(*roots):
+    """Restore every original module mode, including frozen children, on exit."""
+    modes = {}
+    for root in roots:
+        if isinstance(root, nn.Module):
+            for module in root.modules():
+                modes.setdefault(module, module.training)
+    try:
+        for module in modes:
+            module.training = False
+        yield
+    finally:
+        for module, training in modes.items():
+            module.training = training
 
 
 @contextmanager
@@ -469,6 +490,7 @@ class DiffusionTrainer:
         for param in self.ema_diffusion.parameters():
             param.requires_grad = False
         self.ema_decay = float(config.ema_decay)
+        self._ema_step = 0
         self._latent_cache = FrozenLatentCache(
             enabled=bool(getattr(config, "latent_cache_enabled", True)),
             max_items=int(getattr(config, "latent_cache_max_items", 4096)),
@@ -554,6 +576,7 @@ class DiffusionTrainer:
         return create_latent_diffusion(
             latent_dim=self.config.latent_dim,
             latent_scale_factor=self.config.latent_scale_factor,
+            latent_clip_bound=getattr(self.config, "latent_clip_bound", 5.0),
             model_channels=self.config.model_channels,
             context_dim=self.config.context_dim,
             denoiser_backbone=self.config.denoiser_backbone,
@@ -650,6 +673,7 @@ class DiffusionTrainer:
             final_temperature=self.config.logic_final_temperature,
             topology_trace_weight=self.config.logic_topology_trace_weight,
             topology_anchor_weight=self.config.logic_topology_anchor_weight,
+            lock_weight=self.config.logic_lock_weight,
             global_reach_weight=self.config.logic_global_reach_weight,
             global_room_weight=self.config.logic_global_room_weight,
         )
@@ -1358,6 +1382,47 @@ class DiffusionTrainer:
                 "Rebuild graph conditioning from the authoritative mission graph; "
                 "LogicNet will not infer ambiguous provider-to-lock assignments."
             )
+
+    def _validate_joint_dungeon_logic_contract(
+        self,
+        graph_data: Optional[Dict[str, Any]],
+        *,
+        batch_size: int,
+        phase: str,
+    ) -> None:
+        """Require the joint mission-graph estimand when global logic is enabled."""
+        if not (
+            bool(getattr(self.config, "logic_net_enabled", True))
+            and float(getattr(self.config, "alpha_logic", 0.0)) > 0.0
+            and bool(getattr(self.config, "room_level", True))
+            and bool(getattr(self.config, "dungeon_batch_mode", False))
+        ):
+            return
+        if not isinstance(graph_data, dict) or graph_data.get("graph_scope") != "dungeon":
+            raise RuntimeError(
+                f"{phase}: expected one complete dungeon graph for {batch_size} rendered rooms; "
+                "refusing to substitute independent per-room graph proxies."
+            )
+
+    @staticmethod
+    def _validate_joint_dungeon_logic_execution(
+        graph_data: Optional[Dict[str, Any]],
+        logic_info: Dict[str, Any],
+        *,
+        phase: str,
+    ) -> None:
+        """Prove that LogicNet executed, rather than skipped, its global branch."""
+        if not isinstance(graph_data, dict) or graph_data.get("graph_scope") != "dungeon":
+            return
+        if "global_graph_skipped" in logic_info:
+            raise RuntimeError(
+                f"{phase}: global LogicNet branch was skipped: {logic_info['global_graph_skipped']}."
+            )
+        if float(logic_info.get("global_graph_count", 0.0)) != 1.0:
+            raise RuntimeError(
+                f"{phase}: expected exactly one joint dungeon graph loss, got "
+                f"{logic_info.get('global_graph_count', 0.0)!r}."
+            )
     
     def _encode_local_conditioning(self, graph_dict: dict) -> torch.Tensor:
         """Encode only neighbor, boundary, and position context.
@@ -1741,6 +1806,25 @@ class DiffusionTrainer:
             ),
         )
 
+        node_passability_parent_idx = graph_dict.get("node_passability_parent_idx")
+        if node_passability_parent_idx is None:
+            node_passability_parent_idx = torch.arange(num_nodes, device=self.device, dtype=torch.long)
+        else:
+            node_passability_parent_idx = torch.as_tensor(
+                node_passability_parent_idx,
+                device=self.device,
+                dtype=torch.long,
+            ).flatten()
+        if int(node_passability_parent_idx.numel()) != num_nodes:
+            raise ValueError(
+                "node_passability_parent_idx must contain one parent index per graph node; "
+                f"got {int(node_passability_parent_idx.numel())} values for N={num_nodes}."
+            )
+        if bool(((node_passability_parent_idx < -1) | (node_passability_parent_idx >= num_nodes)).any()):
+            raise ValueError(
+                "node_passability_parent_idx entries must be -1 or valid graph-node indices."
+            )
+
         node_mask = graph_dict.get("node_mask")
         if not isinstance(node_mask, torch.Tensor):
             node_mask = torch.ones(num_nodes, dtype=torch.float32)
@@ -1822,6 +1906,7 @@ class DiffusionTrainer:
             "tpe": tpe,
             "current_node_distance": current_node_distance,
             "node_positions": node_positions,
+            "node_passability_parent_idx": node_passability_parent_idx,
             "node_mask": node_mask,
             "current_node_idx": int(current_node_idx) if current_node_idx is not None else 0,
             "start_node_id": int(start_node_id),
@@ -1987,9 +2072,6 @@ class DiffusionTrainer:
         if not node_counts or min(node_counts) <= 0 or len(set(node_counts)) != 1:
             return None
         num_nodes = node_counts[0]
-        if len(graph_list) != num_nodes:
-            return None
-
         first = graph_list[0]
         first_node_map = dict(first.get("node_to_idx", {}))
         current_indices: List[int] = []
@@ -2004,10 +2086,20 @@ class DiffusionTrainer:
             else:
                 current = int(current)
             current_indices.append(current)
-        if sorted(current_indices) != list(range(num_nodes)):
+        if len(set(current_indices)) != len(current_indices):
             return None
 
         sample = self._normalize_diffusion_graph_sample(first)
+        parent_indices = sample["node_passability_parent_idx"]
+        observed_indices = set(current_indices)
+        if any(
+            int(parent_idx) not in observed_indices
+            for parent_idx in parent_indices.detach().cpu().tolist()
+        ):
+            # A physical graph node has no rendered-room prediction, or a
+            # virtual node has no valid physical parent.  Such a batch cannot
+            # support the claimed joint dungeon-level LogicNet objective.
+            return None
         topo_maps: List[torch.Tensor] = []
         boundary_rows: List[torch.Tensor] = []
         logic_mask_rows: Dict[str, List[torch.Tensor]] = {
@@ -2016,6 +2108,11 @@ class DiffusionTrainer:
         }
         for graph in graph_list:
             normalized = self._normalize_diffusion_graph_sample(graph)
+            if not torch.equal(normalized["node_passability_parent_idx"], parent_indices):
+                raise ValueError(
+                    "node_passability_parent_idx must be identical for every room "
+                    "sample from one dungeon variant."
+                )
             topo = normalized.get("room_topology_map")
             boundary = normalized.get("boundary_constraints")
             if isinstance(topo, torch.Tensor):
@@ -2039,6 +2136,7 @@ class DiffusionTrainer:
             "tpe": sample["tpe"],
             "current_node_distance": sample["current_node_distance"],
             "node_positions": sample["node_positions"],
+            "node_passability_parent_idx": parent_indices,
             "node_mask": node_mask,
             "current_node_idx": torch.tensor(current_indices, device=self.device, dtype=torch.long),
             "start_node_id": torch.tensor(int(sample.get("start_node_id", -1)), device=self.device, dtype=torch.long),
@@ -2153,8 +2251,8 @@ class DiffusionTrainer:
             dtype=torch.long,
         )
         logits = pred_tile_logits.index_select(0, selected)
-        repaired_mean = F.cross_entropy(logits, target_batch, reduction="mean")
-        full_batch_loss = F.cross_entropy(logits, target_batch, reduction="sum") / float(
+        repaired_mean = spatial_cross_entropy(logits, target_batch, reduction="mean")
+        full_batch_loss = spatial_cross_entropy(logits, target_batch, reduction="sum") / float(
             max(1, int(pred_tile_logits.shape[0]) * int(pred_tile_logits.shape[2]) * int(pred_tile_logits.shape[3]))
         )
         return full_batch_loss, float(target_batch.shape[0]), repaired_mean
@@ -2166,10 +2264,26 @@ class DiffusionTrainer:
         EMA provides more stable weights for sampling/validation.
         Standard in all modern diffusion training (Nichol & Dhariwal, 2021).
         """
+        # Warm up EMA decay so short runs (~1.4k steps) do not retain epoch-0 random weights
+        # when ema_decay is close to 1.0, while preserving ema_decay=0.0 in unit tests.
+        ema_step = max(
+            int(getattr(self, "_ema_step", 0)) + 1,
+            int(getattr(self, "global_step", 0)) + 1,
+        )
+        self._ema_step = ema_step
+        target_decay = float(
+            getattr(
+                self,
+                "ema_decay",
+                getattr(getattr(self, "config", None), "ema_decay", 0.9999),
+            )
+        )
+        decay = min(target_decay, float(1 + ema_step) / float(10 + ema_step))
+        one_minus_decay = 1.0 - decay
         with torch.no_grad():
             for p_ema, p in zip(self.ema_diffusion.parameters(), self.diffusion.parameters()):
                 if torch.is_floating_point(p_ema) and torch.is_floating_point(p):
-                    p_ema.mul_(self.ema_decay).add_(p, alpha=1.0 - self.ema_decay)
+                    p_ema.mul_(decay).add_(p, alpha=one_minus_decay)
             average_module_parameters(
                 self.ema_diffusion,
                 context=getattr(self, "distributed_context", None),
@@ -2345,24 +2459,42 @@ class DiffusionTrainer:
         warmup_steps = max(1, int(total_steps * min(1.0, warmup_epochs / total_epochs)))
         return min(1.0, max(1, int(completed_steps) + 1) / float(warmup_steps))
 
+    def _step_scheduler_and_warmup(self) -> None:
+        """Advance LR scheduler once global warmup completes, then update warmup LRs."""
+        scheduler = getattr(self, "scheduler", None)
+        global_warmup_epochs = int(max(0, getattr(self.config, "global_lr_warmup_epochs", 0)))
+        global_warmup_active = (
+            global_warmup_epochs > 0
+            and self._warmup_scale(global_warmup_epochs, max(0, self.global_step - 1)) < 1.0
+        )
+        if scheduler is not None and not global_warmup_active:
+            scheduler.step()
+        self._apply_lr_warmup(completed_steps=self.global_step)
+
     def _apply_lr_warmup(self, *, completed_steps: Optional[int] = None) -> None:
         """Set optimizer-group learning rates for the next optimizer step."""
         step_index = int(self.global_step if completed_steps is None else completed_steps)
-        global_scale = self._warmup_scale(
-            int(max(0, getattr(self.config, "global_lr_warmup_epochs", 0))),
-            step_index,
-        )
+        global_warmup_epochs = int(max(0, getattr(self.config, "global_lr_warmup_epochs", 0)))
+        global_scale = self._warmup_scale(global_warmup_epochs, step_index)
         logic_scale = self._warmup_scale(
             int(max(0, getattr(self.config, "logic_lr_warmup_epochs", 0))),
             step_index,
         ) if bool(getattr(self.config, "logic_net_trainable", True)) else 1.0
+        just_finished_global_warmup = (
+            global_warmup_epochs > 0
+            and step_index > 0
+            and global_scale >= 1.0
+            and self._warmup_scale(global_warmup_epochs, step_index - 1) < 1.0
+        )
         for group in self.optimizer.param_groups:
             configured_lr = float(getattr(self.config, "learning_rate", group.get("lr", 1e-4)))
             base_lr = float(group.get("base_lr", group.get("lr", configured_lr)))
             scale = global_scale
             if group.get("name") == "logic_net":
                 scale = min(scale, logic_scale)
-            if scale < 1.0:
+            if scale < 1.0 or (
+                just_finished_global_warmup and (group.get("name") != "logic_net" or logic_scale >= 1.0)
+            ):
                 group["lr"] = base_lr * scale
 
     def _effective_logic_loss_weight(self, include_logic_loss: bool) -> float:
@@ -2524,13 +2656,26 @@ class DiffusionTrainer:
     ) -> Optional[torch.Tensor]:
         """Denoise one noisy latent so auxiliary room losses train the denoiser."""
         batch_size = int(z_0.shape[0])
+        num_timesteps = int(max(1, getattr(self.diffusion, "num_timesteps", 1)))
+        max_frac = float(getattr(getattr(self, "config", None), "aux_max_timestep_fraction", 0.5))
+        max_frac = min(1.0, max(0.05, max_frac))
+        aux_t_upper = max(1, min(num_timesteps, int(math.ceil(num_timesteps * max_frac))))
         timesteps = torch.randint(
             0,
-            self.diffusion.num_timesteps,
+            aux_t_upper,
             (batch_size,),
             device=self.device,
         )
-        x_t = self.diffusion.q_sample(z_0, timesteps, torch.randn_like(z_0))
+        objective = str(getattr(self.diffusion, "training_objective", "diffusion")).strip().lower()
+        noise = torch.randn_like(z_0)
+        if objective == "flow_matching":
+            t_cont = timesteps.to(device=self.device, dtype=z_0.dtype) / float(max(1, num_timesteps - 1))
+            t_view = t_cont.view((batch_size,) + (1,) * max(0, z_0.dim() - 1))
+            x_t = (1.0 - t_view) * z_0 + t_view * noise
+            model_t = (t_cont * float(max(1, num_timesteps - 1))).to(dtype=z_0.dtype)
+        else:
+            x_t = self.diffusion.q_sample(z_0, timesteps, noise)
+            model_t = timesteps
         topology_tensors = self.diffusion._extract_context_topology(
             conditioning,
             diffusion_graph_data,
@@ -2547,18 +2692,22 @@ class DiffusionTrainer:
         with self._autocast_context():
             prediction = self.diffusion.denoiser(
                 x_t,
-                timesteps,
+                model_t,
                 conditioning,
                 context_edge_index=context_edge_index,
                 context_edge_attr=context_edge_attr,
                 context_node_mask=context_node_mask,
                 spatial_graph_data=spatial_graph_data,
             )
-            predicted_x0 = torch.clamp(
-                self._prediction_to_x0(prediction, x_t, timesteps),
-                -1.0,
-                1.0,
-            )
+            if objective == "flow_matching":
+                predicted_x0 = x_t - t_view * prediction
+            else:
+                predicted_x0 = self._prediction_to_x0(prediction, x_t, timesteps)
+            clamp_fn = getattr(self.diffusion, "_clamp_clean_latent", None)
+            if callable(clamp_fn):
+                predicted_x0 = clamp_fn(predicted_x0)
+            else:
+                predicted_x0 = torch.clamp(predicted_x0, -5.0, 5.0)
         predicted_x0_is_finite = all_ranks_true(
             self._tensor_is_finite(predicted_x0),
             device=self.device,
@@ -2702,8 +2851,8 @@ class DiffusionTrainer:
             with self._autocast_context():
                 tile_logits = self.logic_net.tile_classifier(z_0.detach())
                 tile_logits = self.logic_net._project_tile_logits_to_room(tile_logits)
-                logic_tile_loss = F.cross_entropy(tile_logits, tile_targets)
-            logic_tile_accuracy = (tile_logits.argmax(dim=1) == tile_targets).float().mean()
+                logic_tile_loss = spatial_cross_entropy(tile_logits, tile_targets)
+            logic_tile_accuracy = spatial_classification_accuracy(tile_logits, tile_targets)
 
         if logic_enabled and logic_loss_weight > 0:
             if self.config.logic_loss_mode == "detached_real":
@@ -2730,6 +2879,11 @@ class DiffusionTrainer:
                         real_maps,
                     )
 
+            self._validate_joint_dungeon_logic_execution(
+                logic_graph_data,
+                logic_info,
+                phase="Diffusion training",
+            )
             logic_loss_is_finite = all_ranks_true(
                 self._tensor_is_finite(logic_loss),
                 device=self.device,
@@ -2907,10 +3061,7 @@ class DiffusionTrainer:
         self._accumulation_micro_steps = 0
 
         self.global_step += 1
-        scheduler = getattr(self, "scheduler", None)
-        if scheduler is not None:
-            scheduler.step()
-        self._apply_lr_warmup(completed_steps=self.global_step)
+        self._step_scheduler_and_warmup()
 
         # --- Phase 1D: Anneal LogicNet temperature ---
         # Use estimated total steps from config instead of hardcoded epochs*100
@@ -3055,10 +3206,7 @@ class DiffusionTrainer:
         self._update_ema()
         self._accumulation_micro_steps = 0
         self.global_step += 1
-        scheduler = getattr(self, "scheduler", None)
-        if scheduler is not None:
-            scheduler.step()
-        self._apply_lr_warmup(completed_steps=self.global_step)
+        self._step_scheduler_and_warmup()
 
         metrics["optimizer_step"] = 1.0
         metrics["gradient_accumulation_micro_steps"] = 0.0
@@ -3153,6 +3301,11 @@ class DiffusionTrainer:
                 
                 if include_logic:
                     logic_graph_data = diffusion_graph_data
+                    self._validate_joint_dungeon_logic_contract(
+                        logic_graph_data,
+                        batch_size=int(batch_size),
+                        phase="Diffusion training graph contract",
+                    )
                     self._validate_logic_resource_contract(
                         logic_graph_data,
                         batch_size=int(batch_size),
@@ -3229,6 +3382,21 @@ class DiffusionTrainer:
         num_samples: int = 4,
         num_diffusion_samples: Optional[int] = None,
     ) -> Dict[str, float]:
+        """Run repeatable evaluation without changing training RNG or modes."""
+        modules = [getattr(self, name, None) for name in (
+            "diffusion", "ema_diffusion", "condition_encoder", "logic_net", "puzzle_stage_semantics_head",
+        )]
+        evaluation_seed = int(getattr(self.config, "seed", 42)) + VALIDATION_SEED_OFFSET
+        with preserve_training_rng_state(evaluation_seed=evaluation_seed), evaluation_module_modes(*modules):
+            return self._validate_impl(dataloader, num_samples, num_diffusion_samples)
+
+    @torch.no_grad()
+    def _validate_impl(
+        self,
+        dataloader: DataLoader,
+        num_samples: int = 4,
+        num_diffusion_samples: Optional[int] = None,
+    ) -> Dict[str, float]:
         """Validate model using EMA weights and real graph conditioning."""
         eval_model = self.ema_diffusion if hasattr(self, 'ema_diffusion') else self.diffusion
         eval_model.eval()
@@ -3253,6 +3421,7 @@ class DiffusionTrainer:
         num_logic_metric_eval = 0
         num_hard_solvability_eval = 0
         num_repaired_solvability_eval = 0
+        hard_validation_failures = 0
         total_logic_tile_accuracy = 0.0
         total_logic_tile_loss = 0.0
         num_logic_tile_eval = 0
@@ -3296,6 +3465,11 @@ class DiffusionTrainer:
                 conditioning = self.get_dummy_conditioning(batch_size)
 
             if logic_eval_enabled:
+                self._validate_joint_dungeon_logic_contract(
+                    diffusion_graph_data,
+                    batch_size=int(batch_size),
+                    phase="Diffusion validation graph contract",
+                )
                 self._validate_logic_resource_contract(
                     diffusion_graph_data,
                     batch_size=int(batch_size),
@@ -3312,8 +3486,8 @@ class DiffusionTrainer:
                     tile_logits = self.logic_net.tile_classifier(z_0.detach())
                     if hasattr(self.logic_net, "_project_tile_logits_to_room"):
                         tile_logits = self.logic_net._project_tile_logits_to_room(tile_logits)
-                    tile_loss = F.cross_entropy(tile_logits, tile_targets)
-                    tile_accuracy = (tile_logits.argmax(dim=1) == tile_targets).float().mean()
+                    tile_loss = spatial_cross_entropy(tile_logits, tile_targets)
+                    tile_accuracy = spatial_classification_accuracy(tile_logits, tile_targets)
                     if self._tensor_is_finite(tile_accuracy) and self._tensor_is_finite(tile_loss):
                         batch_logic_tile_accuracy = float(tile_accuracy.detach().item())
                         total_logic_tile_accuracy += batch_logic_tile_accuracy * batch_size
@@ -3342,7 +3516,7 @@ class DiffusionTrainer:
                     num_diffusion_eval += diffusion_batch
                 else:
                     skipped_nonfinite += int(batch_size)
-                    self._warn_nonfinite(
+                    self._handle_nonfinite(
                         "validation_diffusion_loss",
                         "Diffusion validation: non-finite denoising loss detected; skipping this validation batch.",
                     )
@@ -3375,12 +3549,20 @@ class DiffusionTrainer:
                     guidance_module.guidance_scale = 0.0
                 try:
                     objective = str(getattr(self.config, "diffusion_training_objective", "diffusion")).strip().lower()
+                    val_num_steps = min(int(getattr(self.config, "num_timesteps", 50)), 50)
                     if objective == "flow_matching" and hasattr(eval_model, "flow_ode_sample"):
                         z_gen = eval_model.flow_ode_sample(
                             conditioning,
                             shape=z_0.shape,
                             graph_data=diffusion_graph_data,
-                            num_steps=min(int(getattr(self.config, "num_timesteps", 50)), 50),
+                            num_steps=val_num_steps,
+                        )
+                    elif hasattr(eval_model, "ddim_sample") and int(getattr(eval_model, "num_timesteps", getattr(self.config, "num_timesteps", 50))) > 50:
+                        z_gen = eval_model.ddim_sample(
+                            conditioning,
+                            shape=z_0.shape,
+                            num_steps=val_num_steps,
+                            graph_data=diffusion_graph_data,
                         )
                     else:
                         z_gen = eval_model.sample(conditioning, shape=z_0.shape, graph_data=diffusion_graph_data)
@@ -3389,7 +3571,7 @@ class DiffusionTrainer:
                         guidance_module.guidance_scale = old_guidance_scale
                 if not self._tensor_is_finite(z_gen):
                     skipped_nonfinite += int(batch_size)
-                    self._warn_nonfinite(
+                    self._handle_nonfinite(
                         "validation_sample",
                         "Diffusion validation: generated non-finite latent sample; skipping this validation batch.",
                     )
@@ -3402,9 +3584,14 @@ class DiffusionTrainer:
                     # LogicNet: evaluate with graph topology
                     decoded_for_logic = self._decode_latent_for_logic(z_gen)
                     logic_loss, _logic_info = self.logic_net(decoded_for_logic, graph_data=logic_graph_data)
+                    self._validate_joint_dungeon_logic_execution(
+                        logic_graph_data,
+                        _logic_info,
+                        phase="Diffusion validation",
+                    )
                     if not self._tensor_is_finite(logic_loss):
                         skipped_nonfinite += int(batch_size)
-                        self._warn_nonfinite(
+                        self._handle_nonfinite(
                             "validation_logic_loss",
                             "Diffusion validation: non-finite logic loss detected on sampled latent; skipping this validation batch.",
                         )
@@ -3426,6 +3613,10 @@ class DiffusionTrainer:
                                 total_graph_reach_loss += float(torch.as_tensor(graph_loss).detach().mean().item()) * generated_batch
                             num_logic_metric_eval += generated_batch
                         if hasattr(self, "vqvae") and hasattr(self.vqvae, "decode"):
+                            # Count requests before running validators. Exceptions
+                            # must not inflate rates by removing failed samples.
+                            num_hard_solvability_eval += generated_batch
+                            num_repaired_solvability_eval += generated_batch
                             try:
                                 # Full room-aligned graph masks are an atomic
                                 # contract. Never truncate their decoded rooms
@@ -3444,7 +3635,6 @@ class DiffusionTrainer:
                                     total_wfc_pseudo_samples += float(wfc_samples)
                                 hard_solvability = self._compute_hard_solvability(decoded)
                                 total_hard_solvability += hard_solvability * generated_batch
-                                num_hard_solvability_eval += generated_batch
                                 repaired_decoded, repair_success_rate = self._repair_validation_decoded_logits(
                                     decoded,
                                     graph_data=logic_graph_data,
@@ -3470,9 +3660,14 @@ class DiffusionTrainer:
                                             self._logic_loss_to_solvability_proxy(repaired_logic_loss).item()
                                         )
                                         total_logicnet_score_after_repair += repaired_score * generated_batch
-                                    num_repaired_solvability_eval += generated_batch
+                                    else:
+                                        self._handle_nonfinite(
+                                            "validation_repaired_logic_loss",
+                                            "Diffusion validation: non-finite LogicNet score after repair.",
+                                        )
                             except (AttributeError, RuntimeError, ValueError, TypeError) as exc:
-                                logger.warning("Hard solvability validation failed; omitting metric: %s", exc, exc_info=True)
+                                hard_validation_failures += generated_batch
+                                logger.warning("Hard solvability validation failed; retaining failed attempts: %s", exc, exc_info=True)
                         num_generated_eval += generated_batch
 
             if num_generated_eval >= int(num_samples) and num_diffusion_eval >= int(num_diffusion_samples):
@@ -3494,6 +3689,8 @@ class DiffusionTrainer:
                 'val_neural_repair_success_rate': total_validation_repair_success / max(num_repaired_solvability_eval, 1),
                 'val_logic_guidance_suppressed_low_tile_accuracy': float(guidance_suppressed_low_tile_accuracy),
                 'val_skipped_nonfinite': float(skipped_nonfinite),
+                'val_hard_validation_failures': float(hard_validation_failures),
+                'val_hard_validation_attempts': float(num_hard_solvability_eval),
             }
 
         include_logic = (
@@ -3536,6 +3733,8 @@ class DiffusionTrainer:
             'val_neural_repair_success_rate': total_validation_repair_success / max(num_repaired_solvability_eval, 1),
             'val_logic_guidance_suppressed_low_tile_accuracy': float(guidance_suppressed_low_tile_accuracy),
             'val_skipped_nonfinite': float(skipped_nonfinite),
+            'val_hard_validation_failures': float(hard_validation_failures),
+            'val_hard_validation_attempts': float(num_hard_solvability_eval),
         }
     
 
@@ -3671,7 +3870,7 @@ def train_diffusion(config: DiffusionTrainingConfig) -> DiffusionTrainer:
                 train_dataset,
                 batch_sampler=train_sampler,
                 collate_fn=graph_collate_fn,
-                **dataloader_runtime_kwargs(num_workers=config.num_workers, pin_memory=config.pin_memory),
+                **dataloader_runtime_kwargs(num_workers=config.num_workers, pin_memory=config.pin_memory, persistent_workers=False),
             )
         else:
             train_sampler = make_distributed_sampler(
@@ -3688,7 +3887,7 @@ def train_diffusion(config: DiffusionTrainingConfig) -> DiffusionTrainer:
                 sampler=train_sampler,
                 drop_last=config.drop_last,
                 collate_fn=graph_collate_fn,
-                **dataloader_runtime_kwargs(num_workers=config.num_workers, pin_memory=config.pin_memory),
+                **dataloader_runtime_kwargs(num_workers=config.num_workers, pin_memory=config.pin_memory, persistent_workers=False),
             )
 
         val_loader = None
@@ -3705,7 +3904,7 @@ def train_diffusion(config: DiffusionTrainingConfig) -> DiffusionTrainer:
                     eval_source,
                     batch_sampler=val_batch_sampler,
                     collate_fn=graph_collate_fn,
-                    **dataloader_runtime_kwargs(num_workers=config.num_workers, pin_memory=config.pin_memory),
+                    **dataloader_runtime_kwargs(num_workers=config.num_workers, pin_memory=config.pin_memory, persistent_workers=False),
                 )
             else:
                 val_loader = DataLoader(
@@ -3714,7 +3913,7 @@ def train_diffusion(config: DiffusionTrainingConfig) -> DiffusionTrainer:
                     shuffle=bool(config.shuffle_val),
                     drop_last=False,
                     collate_fn=graph_collate_fn,
-                    **dataloader_runtime_kwargs(num_workers=config.num_workers, pin_memory=config.pin_memory),
+                    **dataloader_runtime_kwargs(num_workers=config.num_workers, pin_memory=config.pin_memory, persistent_workers=False),
                 )
 
         sample_kind = "rooms" if config.room_level else "dungeons"
@@ -3733,6 +3932,7 @@ def train_diffusion(config: DiffusionTrainingConfig) -> DiffusionTrainer:
         )
 
         trainer = DiffusionTrainer(config, distributed_context=distributed_context)
+        trainer._training_sampler = train_sampler
         if getattr(trainer, "_accelerator", None) is not None:
             if val_loader is not None:
                 train_loader, val_loader = trainer._accelerator.prepare(train_loader, val_loader)
@@ -3796,19 +3996,8 @@ def train_diffusion(config: DiffusionTrainingConfig) -> DiffusionTrainer:
             latest_filename=LATEST_RESUME_FILENAME,
         )
         if resume_path is not None:
-            try:
-                trainer.load_checkpoint(str(resume_path))
-                logger.info("Auto-resumed diffusion training from %s", resume_path)
-            except ValueError as exc:
-                explicit_resume = bool(getattr(config, "resume_checkpoint", None))
-                if explicit_resume:
-                    raise
-                logger.warning(
-                    "Ignoring auto-resume diffusion checkpoint %s because it is not safe to resume: %s",
-                    resume_path,
-                    exc,
-                )
-                resume_path = None
+            trainer.load_checkpoint(str(resume_path))
+            logger.info("Resumed diffusion training from %s", resume_path)
 
         metrics_logger = (
             MetricsLogger(
@@ -4160,6 +4349,7 @@ def main():
     parser.add_argument('--logic-final-temperature', type=float, default=None)
     parser.add_argument('--logic-topology-trace-weight', type=float, default=None)
     parser.add_argument('--logic-topology-anchor-weight', type=float, default=None)
+    parser.add_argument('--logic-lock-weight', type=float, default=None)
     parser.add_argument('--logic-global-reach-weight', type=float, default=None)
     parser.add_argument('--logic-global-room-weight', type=float, default=None)
     parser.add_argument(

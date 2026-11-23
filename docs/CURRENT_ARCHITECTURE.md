@@ -1,26 +1,25 @@
 # Current Architecture
 
-Last updated: 2026-05-24
+Last updated: 2026-11-12
 
 This is the concise, code-aligned description of the current stack. Use this
-file as the canonical architecture reference. Older deep-dive notes remain in
-`docs/` and `docs/archive/`, but this file owns the "what exists now" answer.
+file as the canonical architecture reference for what exists in code now.
 
 ## System Summary
 
-The project is a `graph-first hybrid neural-symbolic Zelda dungeon generator`.
-The current thesis-safe path is:
+The project centers on **`G-LMDM` (`Graph-Conditioned Logic-Regularized Masked Discrete Model`)**, a repair-aware neuro-symbolic Zelda dungeon generator evaluated against continuous latent diffusion comparators and external symbolic baselines under the locked 1-to-1 protocol (`RG1(FG1)–RG4(FG4) -> PS1–PS4 -> RO1–RO4 -> RQ1–RQ4 -> H1–H4` in [`publication_guidance_card.json`](publication_guidance_card.json)):
 
-1. build or accept a mission graph
-2. generate room layouts with the diffusion branch under graph conditioning
-3. enforce mission-critical semantics with constrained decode, overlay, repair,
-   and hybrid stateful puzzle grammar
-4. stitch the rooms into a full dungeon
-5. run the hybrid mechanical contract
-6. run `P-CBS` as the bounded-rational behavioral probe
-7. export metrics/artifacts
+1. build or accept a mission graph (`Block I`)
+2. condition via causal `Block III GraphGPS + RRWP + neighbor/boundary` encoder
+3. generate $16\times 11$ rooms directly in discrete token space with **`G-LMDM`** (`masked_room`, `3.58M` train / `3.36M` infer; `84.8K` denoiser) + direct $16\times 11$ Soft Bellman-Ford `LogicNet`, or compare against continuous `VQ-VAE` (`17.37M`) + `UNet[1,2]` (`47.13M` total) / `DiT+Flow` (`22.44M` total) (`Block II / IV / V`, `RQ2 / H2`)
+4. enforce mission-critical semantics and attribute every step across `raw -> constrained -> repaired -> compiled` (`Block VI`)
+5. stitch the rooms into a full dungeon
+6. run independent formal verification (`StateSpaceAStar` solution witnesses vs. finite-frontier proofs vs. indeterminate cutoffs)
+7. run `P-CBS` strictly as a bounded-rational proxy probe (`proxy_only`) and export Schema 2.0 artifacts
 
-Fast sampler and masked-room still exist, but they remain research branches.
+VGLC empirical corpus ground truth (`Data/The Legend of Zelda`): `450` room instances across `9` dungeons (`Quests 1–2`); held-out split allocates Dungeons `1–8` to training (`349` room instances, `217` unique $16\times 11$ grids, **`43` unique $12\times 7$ structural interiors**, `8` active tile IDs of `44` with `88.60%` `WALL+FLOOR` vs `0.68%` `ENEMY` and `0.05%` `STAIR`) and unseen Dungeon `9` (`101` room instances) strictly to testing.
+
+Fast sampler remains a distilled efficiency extension, whereas continuous `VQ-VAE + UNet[1,2]` and `DiT+Flow` serve as matched-data comparators against primary discrete `G-LMDM` under `RO2`/`RQ2`/`H2`.
 
 ## Canonical Entry Points
 
@@ -32,44 +31,50 @@ Fast sampler and masked-room still exist, but they remain research branches.
 
 ## Block Map
 
-| Block | Role | Main code |
+| Block | Role | Architectural Status | Main code |
+|---|---|---|---|
+| Block 0 | data parsing, room/graph alignment, stitching utilities | Active (Common) | [`src/data_processing/data_adapter.py`](../src/data_processing/data_adapter.py), [`src/zelda_data/zelda_core.py`](../src/zelda_data/zelda_core.py) |
+| Block I | mission/topology graph generation and validation | Active (Stage 1) | `src/generation/*`, `src/evaluation/benchmark_suite.py` |
+| Block II | continuous room tokenizer (`SemanticVQVAE` / `SemanticVQVAE2`) | **Eliminated in G-LMDM** (Retained strictly as continuous baseline comparator for $H_2$) | [`src/core/vqvae.py`](../src/core/vqvae.py) |
+| Block III | local + global graph conditioning (GraphGPS + RRWP + Boundary Clamping) | Active (Stage 2) | [`src/core/condition_encoder.py`](../src/core/condition_encoder.py), [`src/pipeline/room_topology_conditioning.py`](../src/pipeline/room_topology_conditioning.py) |
+| Block IV | discrete masked room generator (**G-LMDM**, primary) vs. latent diffusion (`UNet [1, 2]` / `DiT`, comparator) | Active (Stage 3) | [`src/core/discrete_masked_model.py`](../src/core/discrete_masked_model.py), [`src/train_masked_room.py`](../src/train_masked_room.py) |
+| Block V | direct $16\times 11$ Soft Bellman-Ford `LogicNet` regularization | Active (Stage 4) | [`src/core/logic_net.py`](../src/core/logic_net.py) |
+| Block VI | symbolic repair (`WaveFunctionCollapse` / `PathAnalyzer`), constructive stateful puzzle compiler (`PuzzleGenerator`), graph marker overlay, physical topology enforcement, stitching | Active (Stage 5) | [`src/pipeline/dungeon_pipeline.py`](../src/pipeline/dungeon_pipeline.py), [`src/generation/puzzle_generator.py`](../src/generation/puzzle_generator.py), [`src/core/symbolic_refiner.py`](../src/core/symbolic_refiner.py), [`src/generation/graph_constraint_enforcer.py`](../src/generation/graph_constraint_enforcer.py) |
+| Block VII | dual-tier evaluation: exact `StateSpaceAStar` oracle vs. bounded `P-CBS` proxy diagnostics | Active (Stage 6) | `src/evaluation/*`, `src/simulation/*` |
+
+## Core Module Classification & Pruning Policy (`src/core/`)
+
+To prevent cargo-cult feature bloat on VGLC's small-data regime (`349` training rooms / `43` unique $12\times 7$ interiors), `src/core/` explicitly partitions modules into three tiers (enforced via `CANONICAL_GLMDM_MODULES`, `CONTINUOUS_COMPARATOR_MODULES`, and `DEPRECATED_ABLATION_ONLY_MODULES` in [`src/core/__init__.py`](../src/core/__init__.py)):
+
+| Tier | Status in Canonical `G-LMDM` | Modules |
 |---|---|---|
-| Block 0 | data parsing, room/graph alignment, stitching utilities | [`src/data_processing/data_adapter.py`](../src/data_processing/data_adapter.py), [`src/zelda_data/zelda_core.py`](../src/zelda_data/zelda_core.py) |
-| Block I | mission/topology graph generation and validation | `src/generation/*`, `src/evaluation/benchmark_suite.py` |
-| Block II | semantic room tokenizer (VQ-VAE) | [`src/core/vqvae.py`](../src/core/vqvae.py) |
-| Block III | local + global graph conditioning | [`src/core/condition_encoder.py`](../src/core/condition_encoder.py), [`src/pipeline/room_topology_conditioning.py`](../src/pipeline/room_topology_conditioning.py) |
-| Block IV | latent diffusion teacher | [`src/core/latent_diffusion.py`](../src/core/latent_diffusion.py) |
-| Block V | LogicNet guidance | [`src/core/logic_net.py`](../src/core/logic_net.py), [`src/core/latent_diffusion.py`](../src/core/latent_diffusion.py) |
-| Block VI | symbolic repair, graph marker overlay, puzzle scaffolds, stitching | [`src/pipeline/dungeon_pipeline.py`](../src/pipeline/dungeon_pipeline.py), [`src/core/symbolic_refiner.py`](../src/core/symbolic_refiner.py) |
-| Block VII | metrics, validation, QD / MAP-Elites hooks | `src/evaluation/*`, `src/simulation/*` |
-
-Auxiliary branches:
-
-- fast sampler distillation: [`src/train_lcm.py`](../src/train_lcm.py)
-- masked-room branch: [`src/core/discrete_masked_model.py`](../src/core/discrete_masked_model.py), [`src/train_masked_room.py`](../src/train_masked_room.py)
-
-Auxiliary-branch training now also includes `topology-focused supervision`
-that upweights sparse anchors, doors, typed gates, and traversability traces.
-This is the current path toward stronger neural semantics without dropping the
-hybrid runtime safeguards prematurely.
+| **Tier 1 — Canonical `G-LMDM` Active Stack** | Active (5-Block Core) | `definitions.py`, `adapter.py`, `stitcher.py`, `condition_encoder.py` (GraphGPS+RRWP), `discrete_masked_model.py` (84.8K Transformer denoiser), `logic_net.py` (Direct Soft Bellman-Ford, `alpha_logic=0.1`), `symbolic_refiner.py`, `neural_guided_repair.py` (paired with [`src/generation/puzzle_generator.py`](../src/generation/puzzle_generator.py)) |
+| **Tier 2 — Continuous Latent Comparators** | Comparator-Only (`H1`/`H2`) | `vqvae.py`, `latent_diffusion.py` (`UNet[1,2]`, `DiT+Flow`) |
+| **Tier 3 — Deprecated / Ablation-Only** | Inactive (`loss_weight=0.0` / Excluded) | `gaussian_vae.py`, `perturb_and_map.py`, `puzzle_stage_semantics.py`, `attention_kernels.py` |
 
 ## Runtime Flow
 
+### 1. Primary Proposed Pipeline: G-LMDM (Zero VQ-VAE)
 ```text
-Mission graph
-  -> room order + graph features + topology maps
-  -> condition encoder
-  -> diffusion / fast sampler / masked-room branch
-  -> VQ-VAE decode to semantic room grid
-  -> structural cleanup + semantic constrained decode
-  -> hybrid stateful puzzle grammar / interaction-sequence enforcement
-  -> deterministic graph-marker overlay
-  -> symbolic repair / fallback
-  -> stitched dungeon
-  -> validation handoff contract
-  -> hybrid mechanical contract
-  -> P-CBS
-  -> reports
+Mission graph G = (V, E, X_V, X_E) [Block I]
+  -> Causal GraphGPS + RRWP topological encodings + t=0 hard boundary clamping [Block III]
+  -> Direct 16x11 absorbing-state discrete masked diffusion Q_t [G-LMDM / Block IV]
+  -> Direct 16x11 Soft Bellman-Ford LogicNet regularization [Block V]
+  -> Direct discrete token output (Zero VQ-VAE decode)
+  -> Structural cleanup + semantic constrained decode [Schema 2.0 Stage 2]
+  -> Stateful puzzle grammar & deterministic graph-marker overlay [Schema 2.0 Stage 3]
+  -> Symbolic WFC / boundary passage repair [Block VI]
+  -> Stitched complete dungeon grid [Schema 2.0 Stage 4]
+  -> Dual-tier verification: Formal StateSpaceAStar proofs vs. Bounded P-CBS diagnostics [Block VII]
+```
+
+### 2. Comparative Baseline Pipeline: H-MOLQD (Continuous Comparator)
+```text
+Mission graph G [Block I]
+  -> Condition encoder [Block III]
+  -> Continuous latent diffusion / flow matching [Block IV: UNet/DiT]
+  -> Continuous latent decode z_q -> 16x11 [Block II: SemanticVQVAE]
+  -> Symbolic repair & evaluation [Blocks VI - VII]
 ```
 
 ## Current Canonical Config
@@ -84,24 +89,14 @@ Current important defaults:
 | Dataset schema | `zelda_v1`, `44` classes, `16x11` rooms |
 | Topology anchor policy | `2026-04-11.semantic_anchor_v8_puzzle_subtype_channels` |
 | Room-topology channels | `54` |
-| Canonical VQ-VAE YAML default | `hidden_dim=96`, `codebook_size=256`, `latent_dim=64` |
-| Best-tested tokenizer by held-out VQ-VAE validation loss | `codebook256` |
-| Canonical diffusion config | `model_channels=96`, `condition_hidden_dim=192`, `condition_gnn_type=gps` |
-| Canonical masked-room config | `hidden_dim=48`, `condition_gnn_type=gcn`, `room_topology_channels=54` |
+| Canonical VQ-VAE YAML default | `architecture=vqvae` (`vqvae2` optional), `hidden_dim=96`, `codebook_size=256`, `latent_dim=64`, VQ or FSQ |
+| Canonical diffusion comparator (`UNet` / `DiT`) | `denoiser_backbone=unet` (`dit` optional), `unet_channel_mult=[1, 2]`, `unet_attention_resolutions=[0, 1]`, `model_channels=96`, `condition_hidden_dim=192`, `condition_gnn_type=gps`, `training_objective=diffusion` (`flow_matching` optional), `latent_clip_bound=5.0`, `scheduler_t0=100`, `use_amp=true` (`fp16`) |
+| Canonical **`G-LMDM`** discrete config (`masked_room`) | `hidden_dim=48`, `unet_num_heads=4`, `condition_hidden_dim=192`, `condition_gnn_type=gps`, `logic_net_enabled=true`, `alpha_logic=0.1`, `room_topology_channels=54` |
 | Graph node features | `14` baseline; optional `15`th normalized floor/z feature for labeled multi-floor ablations |
 | Generation defaults | constrained decode `on`, deterministic marker overlay `on`, repair `on`, puzzle scaffold `on`, puzzle novelty search `on` |
 | Diffusion/fast-sampler training efficiency | frozen VQ-VAE latent cache `on`, `4096` max entries |
 
-Important distinction:
-
-- the `canonical YAML` still uses a `256`-entry VQ-VAE
-- the latest verified downstream experimental branch used an explicit external
-  `codebook512` VQ-VAE checkpoint during downstream training/inference
-
-That distinction is intentional. The codebase supports both:
-
-- stable canonical defaults in `configs/zelda_hmolqd.yaml`
-- high-capacity downstream comparison branches via explicit checkpoint handoff
+Note: [`configs/zelda_hmolqd.yaml`](../configs/zelda_hmolqd.yaml) configures primary discrete **`G-LMDM`** (`masked_room`: `84,764` transformer denoiser + `3,272,497` GPS/RRWP+ref conditioner + `227,644` LogicNet = **`3,584,905` (`3.58M` train) / `3,357,261` (`3.36M` inference)**, paired with [`configs/zelda_hmolqd_masked_small.yaml`](../configs/zelda_hmolqd_masked_small.yaml) for the `G`-only `logic_net_enabled=false` ablation) alongside continuous comparators (`VQ-VAE` `17,365,900` + `UNet[1,2]` `26,332,390` + `ConditionEncoder` `3,200,113` + `LogicNet` `227,644` = **`47,126,047` (`47.13M`)**, or `DiT+Flow` `1,642,694` denoiser = **`22,436,351` (`22.44M`)**).
 
 ## Conditioned Semantics
 
@@ -138,14 +133,14 @@ using one generic obstacle template.
 - deterministic overlay
 - symbolic repair
 
-### Research branches
+### Active Primary Architecture & Comparative Branches
 
-- `fast sampler`
-- `masked room`
-- pure-neural / reduced-fallback ablations
+- **Primary Discrete Architecture (`G-LMDM`)**: [`DiscreteMaskedRoomModel`](../src/core/discrete_masked_model.py) (`condition_gnn_type=gps`, `logic_net_enabled=true`, `alpha_logic=0.1`; `3.58M` train / `3.36M` infer), paired with [`configs/zelda_hmolqd_masked_small.yaml`](../configs/zelda_hmolqd_masked_small.yaml) (`G` without LogicNet)
+- **Continuous Comparators (`RQ2 / H2`)**: `SemanticVQVAE` + `UNet[1,2]` (`47.13M` total) and `DiT + Flow Matching` (`22.44M` total)
+- `fast sampler`: distilled research extension ([`src/train_lcm.py`](../src/train_lcm.py))
+- attributed 4-stage ablation runs (`raw -> constrained -> repaired -> compiled`)
 
-Current evidence still says diffusion is the only branch that should be treated
-as the production baseline.
+Until full multi-seed comparative runs on Dungeon 9 complete (`refine-logs/EXPERIMENT_PLAN.md`), both the discrete `G-LMDM` stack and the continuous `VQ-VAE + UNet[1,2]` stack remain supported in the canonical pipeline without premature performance claims.
 
 ## Model-Block Efficiency Boundary
 
@@ -271,18 +266,15 @@ not by private hardcoded script defaults.
 
 ## Where To Read Next
 
-- High-level rationale and report-writing detail:
+- High-level rationale, live parameter counts, and ablations:
   [`CANONICAL_MODEL_RATIONALE_ABLATION_AND_COMPLEXITY_GUIDE.md`](CANONICAL_MODEL_RATIONALE_ABLATION_AND_COMPLEXITY_GUIDE.md)
+- Block I/O tensor and contract specifications:
+  [`BLOCK_IO_REFERENCE.md`](BLOCK_IO_REFERENCE.md)
+- Grammar rules, progression constraints, and constraint enforcement:
+  [`GRAMMAR_REFERENCE.md`](GRAMMAR_REFERENCE.md)
+- Search algorithms, strict admissibility, and GUI reference:
+  [`SOLVERS_AND_GUI_REFERENCE.md`](SOLVERS_AND_GUI_REFERENCE.md)
 - Topology commands and manual graph workflows:
   [`TOPOLOGY_COMMANDS.md`](TOPOLOGY_COMMANDS.md)
-- Current VQ-VAE-2, LogicNet, repair, and ablation protocol:
-  [`VQVAE2_LOGICNET_REPAIR_ABLATION_PROTOCOL_2026_05_23.md`](VQVAE2_LOGICNET_REPAIR_ABLATION_PROTOCOL_2026_05_23.md)
-- Current artifact / checkpoint status and retraining alerts:
-  [`ARTIFACT_AND_CHECKPOINT_STATUS_2026_04_18.md`](ARTIFACT_AND_CHECKPOINT_STATUS_2026_04_18.md)
-- Current audit ledger and remaining required evidence:
+- Current non-GUI audit ledger and claim boundary:
   [`architecture_audit_research_notes.md`](architecture_audit_research_notes.md)
-- Archived auxiliary/neural-semantics and playability provenance notes:
-  [`archive/2026-q2/AUXILIARY_BRANCH_AND_NEURAL_SEMANTICS_AUDIT_2026_04_15.md`](archive/2026-q2/AUXILIARY_BRANCH_AND_NEURAL_SEMANTICS_AUDIT_2026_04_15.md),
-  [`archive/2026-q2/PLAYABILITY_EVALUATION_AND_CBS_RESEARCH_2026_04_16.md`](archive/2026-q2/PLAYABILITY_EVALUATION_AND_CBS_RESEARCH_2026_04_16.md)
-- Latest VQ-VAE audit:
-  [`VQVAE_RESEARCH_AUDIT_2026_04_10.md`](VQVAE_RESEARCH_AUDIT_2026_04_10.md)

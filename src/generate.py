@@ -1,4 +1,4 @@
-﻿"""
+"""
 Generation and Evaluation Pipeline for KLTN PCG
 ===============================================
 
@@ -40,7 +40,7 @@ from src.core.definitions import (
     SEMANTIC_TO_CHAR,
     semantic_grid_to_vglc_lines,
 )
-from src.gui.ai.generation_pipeline import (
+from src.pipeline.canonical_helpers import (
     generate_dungeon_with_pipeline,
     generate_mission_graph,
     load_canonical_generation_pipeline,

@@ -46,6 +46,7 @@ def build_stitched_validation_context(
         "room_to_node": room_to_node,
         "room_positions": room_positions,
         "node_to_room": node_to_room,
+        "connection_realizations": getattr(stitched_layout, "connection_realizations", None),
     }
 
 
@@ -58,6 +59,7 @@ def has_complete_stitched_validation_context(
         and context.get("room_to_node")
         and context.get("room_positions")
         and context.get("node_to_room")
+        and context.get("connection_realizations") is not None
     )
 
 

@@ -1,4 +1,9 @@
 """
+[STATUS: DEPRECATED / ABLATION-ONLY COMPARATOR — INACTIVE IN CANONICAL G-LMDM]
+Excluded from the primary 5-block G-LMDM stack under the small-data minimalist
+budget rules (AGENTS.md, N=349 VGLC rooms). Retained strictly for legacy test
+and continuous-latent ablation compatibility.
+
 H-MOLQD Block II: Semantic Gaussian VAE
 =======================================
 
@@ -140,7 +145,7 @@ class SemanticGaussianVAE(nn.Module):
         if target.shape[1] == self.num_classes:
             target_idx = target.argmax(dim=1)
         else:
-            target_idx = target.squeeze(1)
+            target_idx = target.squeeze(1).long()
 
         weights = self.tile_weights[target_idx]
         loss = F.cross_entropy(recon, target_idx, reduction="none")
@@ -211,15 +216,23 @@ class SemanticGaussianVAE(nn.Module):
         device: Optional[torch.device] = None,
     ) -> Tensor:
         """Sample from the standard Gaussian prior and decode it."""
+        param = next(self.parameters())
         if device is None:
-            device = next(self.parameters()).device
+            device = param.device
 
         if spatial_size is None:
             latent_height, latent_width = self.latent_spatial_shape
         else:
             latent_height, latent_width = normalize_room_shape(spatial_size)
 
-        latent = torch.randn(batch_size, self.latent_dim, latent_height, latent_width, device=device)
+        latent = torch.randn(
+            batch_size,
+            self.latent_dim,
+            latent_height,
+            latent_width,
+            device=device,
+            dtype=param.dtype,
+        )
         return self.decode(latent)
 
 

@@ -238,11 +238,181 @@ class GraphGrammarExecutor:
 
         return mask
 
+    @staticmethod
+    def _edge_prune_priority(item: Tuple[int, MissionEdge]) -> Tuple[int, int, int]:
+        """Sort key preferring non-progression soft/path edges when pruning."""
+        idx, edge = item
+        edge_type_name = str(getattr(edge.edge_type, "name", edge.edge_type)).upper()
+        is_soft_edge = int(edge_type_name not in {"PATH", "SHORTCUT", "HIDDEN", "WARP", "STAIRS"})
+        is_progression_edge = int(
+            edge_type_name in {
+                "LOCKED",
+                "BOSS_LOCKED",
+                "ITEM_GATE",
+                "ON_OFF_GATE",
+                "STATE_BLOCK",
+                "MULTI_LOCK",
+                "SHUTTER",
+                "HAZARD",
+                "ONE_WAY",
+            }
+        )
+        return (is_progression_edge, is_soft_edge, -int(idx))
+
+    @staticmethod
+    def _edge_removal_preserves_connectivity(graph: MissionGraph, edge: MissionEdge) -> bool:
+        """Return True iff endpoints remain connected in the undirected graph without ``edge``."""
+        src, dst = edge.source, edge.target
+        if src == dst:
+            return True
+        adj: Dict[Any, List[Any]] = defaultdict(list)
+        for cur in graph.edges:
+            if cur is edge:
+                continue
+            adj[cur.source].append(cur.target)
+            adj[cur.target].append(cur.source)
+        visited = {src}
+        q: deque[Any] = deque([src])
+        while q:
+            u = q.popleft()
+            if u == dst:
+                return True
+            for v in adj.get(u, ()):
+                if v not in visited:
+                    visited.add(v)
+                    q.append(v)
+        return False
+
     def _enforce_max_degree(self, graph: MissionGraph, max_degree: int = 4) -> int:
         """Deterministically prune excess incident edges to keep degree <= max_degree."""
         removed = 0
         if max_degree < 1 or not graph.edges:
             return removed
+
+        changed = True
+        while changed:
+            changed = False
+            deg = self._compute_node_degrees(graph)
+            offenders = {nid for nid, d in deg.items() if int(d) > int(max_degree)}
+            if not offenders:
+                break
+
+            ordered_edges = [
+                edge
+                for _, edge in sorted(enumerate(list(graph.edges)), key=self._edge_prune_priority)
+                if edge.source in offenders or edge.target in offenders
+            ]
+            ordered_edges.sort(
+                key=lambda e: int(not self._edge_removal_preserves_connectivity(graph, e))
+            )
+            for e in ordered_edges:
+                try:
+                    graph.edges.remove(e)
+                    removed += 1
+                    changed = True
+                    break
+                except ValueError:
+                    continue
+            if changed:
+                graph.sanitize()
+
+        return removed
+
+    def _enforce_bipartite_cycles(self, graph: MissionGraph) -> int:
+        """Prune non-bridge odd-cycle edges so the graph is 2-colorable for 2D grid embedding."""
+        removed = 0
+        if not graph.edges:
+            return removed
+
+        max_iters = len(graph.edges) + 1
+        for _ in range(max_iters):
+            adj: Dict[Any, List[Tuple[Any, MissionEdge]]] = defaultdict(list)
+            nodes_set: Set[Any] = set(graph.nodes.keys())
+            for edge in graph.edges:
+                nodes_set.add(edge.source)
+                nodes_set.add(edge.target)
+                if edge.source != edge.target:
+                    adj[edge.source].append((edge.target, edge))
+                    adj[edge.target].append((edge.source, edge))
+
+            color: Dict[Any, int] = {}
+            depth: Dict[Any, int] = {}
+            parent: Dict[Any, Optional[Any]] = {}
+            parent_edge: Dict[Any, Optional[MissionEdge]] = {}
+            conflict: Optional[Tuple[Any, Any, MissionEdge]] = None
+
+            for root in sorted(nodes_set, key=lambda n: str(n)):
+                if root in color:
+                    continue
+                color[root] = 0
+                depth[root] = 0
+                parent[root] = None
+                parent_edge[root] = None
+                q: deque[Any] = deque([root])
+                while q and conflict is None:
+                    u = q.popleft()
+                    for v, edge in adj.get(u, ()):
+                        if v not in color:
+                            color[v] = 1 - color[u]
+                            depth[v] = depth[u] + 1
+                            parent[v] = u
+                            parent_edge[v] = edge
+                            q.append(v)
+                        elif color[v] == color[u]:
+                            conflict = (u, v, edge)
+                            break
+                if conflict is not None:
+                    break
+
+            if conflict is None:
+                break
+
+            u, v, cross_edge = conflict
+            cycle_edges: List[MissionEdge] = [cross_edge]
+            cu, cv = u, v
+            while depth.get(cu, 0) > depth.get(cv, 0):
+                pe = parent_edge.get(cu)
+                if pe is not None:
+                    cycle_edges.append(pe)
+                cu = parent.get(cu)
+            while depth.get(cv, 0) > depth.get(cu, 0):
+                pe = parent_edge.get(cv)
+                if pe is not None:
+                    cycle_edges.append(pe)
+                cv = parent.get(cv)
+            while cu is not None and cv is not None and cu != cv:
+                pe_u = parent_edge.get(cu)
+                pe_v = parent_edge.get(cv)
+                if pe_u is not None:
+                    cycle_edges.append(pe_u)
+                if pe_v is not None:
+                    cycle_edges.append(pe_v)
+                cu = parent.get(cu)
+                cv = parent.get(cv)
+
+            edge_index = {id(edge): idx for idx, edge in enumerate(graph.edges)}
+            candidates = sorted(
+                (
+                    (self._edge_prune_priority((edge_index.get(id(e), 0), e)), e)
+                    for e in cycle_edges
+                ),
+                key=lambda item: item[0],
+            )
+            pruned = False
+            for _prio, cand in candidates:
+                if self._edge_removal_preserves_connectivity(graph, cand):
+                    try:
+                        graph.edges.remove(cand)
+                        removed += 1
+                        pruned = True
+                        graph.sanitize()
+                        break
+                    except ValueError:
+                        continue
+            if not pruned:
+                break
+
+        return removed
 
         # Stable pruning order: prefer pruning later-added soft/path edges first
         # and preserve progression-defining gates until there is no safer option.
@@ -452,6 +622,7 @@ class GraphGrammarExecutor:
 
                 # Degree cap projection (keeps graph realizable without copy+reject churn).
                 pruned_edges = self._enforce_max_degree(candidate, max_degree=4)
+                pruned_edges += self._enforce_bipartite_cycles(candidate)
 
                 # Optional strict progression enforcement in-place.
                 if self._constraint_grammar is not None:

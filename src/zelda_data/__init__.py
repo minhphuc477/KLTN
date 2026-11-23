@@ -10,7 +10,14 @@ from src.zelda_data.zelda_core import (
     ValidationMode,
     ZeldaDungeonAdapter,
 )
-from src.zelda_data.zelda_loader import TILE_MAPPING, ZeldaDungeonDataset, create_dataloader
+from src.zelda_data.zelda_loader import (
+    TILE_MAPPING,
+    ZeldaDungeonDataset,
+    ZeldaRoomDataset,
+    apply_room_symmetry_transform,
+    compute_room_tile_frequencies,
+    create_dataloader,
+)
 
 __all__ = [
     "Dungeon",
@@ -23,5 +30,8 @@ __all__ = [
     "ZeldaDungeonAdapter",
     "TILE_MAPPING",
     "ZeldaDungeonDataset",
+    "ZeldaRoomDataset",
+    "apply_room_symmetry_transform",
+    "compute_room_tile_frequencies",
     "create_dataloader",
 ]

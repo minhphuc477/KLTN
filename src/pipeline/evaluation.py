@@ -14,7 +14,7 @@ from src.evaluation.tile_distribution import compare_tile_pattern_distributions
 from src.pipeline.spatial_utils import coerce_bool, fit_room_grid
 from src.pipeline.types import DungeonGenerationResult, MissingPipelineComponentError, RoomGenerationResult
 from src.pipeline.validation_context import build_stitched_validation_context
-from src.validation.end_to_end import build_end_to_end_validation_report
+from src.validation.end_to_end import build_end_to_end_validation_report, graph_tile_projection_issues
 from src.validation.global_state import validate_attached_global_state_contract
 from src.validation.pacing import evaluate_solution_path_pacing
 from src.validation.topology import evaluate_graph_topology_characteristics
@@ -418,6 +418,7 @@ def repair_and_stitch_dungeon(
     mission_graph: nx.Graph,
     apply_repair: bool = True,
     enable_map_elites: bool = False,
+    seed: Optional[int] = None,
 ) -> DungeonGenerationResult:
     """
     Public symbolic-only dungeon assembly entry point.
@@ -437,7 +438,8 @@ def repair_and_stitch_dungeon(
         )
 
     normalized_rooms: Dict[Any, RoomGenerationResult] = {}
-    for room_id, room_value in rooms.items():
+    repair_seeds = np.random.SeedSequence(seed).spawn(len(rooms)) if seed is not None else [None] * len(rooms)
+    for (room_id, room_value), repair_seed in zip(rooms.items(), repair_seeds):
         if isinstance(room_value, RoomGenerationResult):
             room_grid = fit_room_grid(room_value.room_grid)
             neural_grid = fit_room_grid(room_value.neural_grid)
@@ -467,7 +469,7 @@ def repair_and_stitch_dungeon(
                 start=start_goal[0],
                 goal=start_goal[1],
                 required_floor_mask=room_plan_mask,
-                seed=None,
+                seed=int(repair_seed.generate_state(1)[0]) if repair_seed is not None else None,
             )
 
         normalized_rooms[room_id] = RoomGenerationResult(
@@ -496,6 +498,10 @@ def repair_and_stitch_dungeon(
 
     stitched_layout = pipeline.stitch_room_layout(normalized_rooms, mission_graph)
     dungeon_grid = np.asarray(stitched_layout.dungeon_grid, dtype=np.int32)
+    from src.pipeline.stitching.dungeon_assembler import compile_stitched_graph
+    dungeon_grid, entities, compilation_applied, _ = compile_stitched_graph(
+        dungeon_grid, mission_graph, stitched_layout, seed=seed,
+    )
     puzzle_metadata = pipeline._globalize_room_puzzle_metadata(
         rooms=normalized_rooms,
         stitched_layout=stitched_layout,
@@ -588,6 +594,8 @@ def repair_and_stitch_dungeon(
         ),
         "dungeon_shape": dungeon_grid.shape,
         "symbolic_only": True,
+        "materialized_entity_count": len(entities),
+        "graph_semantic_compilation_applied": compilation_applied,
         "puzzle_plan_count": int(len(dict(puzzle_metadata.get("plans", {}) or {}))),
         **puzzle_stage_semantics_metrics,
         "logicnet_dungeon_solvability": float(logic_solvability.get("solvability_score", 0.0)),
@@ -615,6 +623,7 @@ def repair_and_stitch_dungeon(
         dungeon_grid=dungeon_grid,
         rooms=normalized_rooms,
         mission_graph=mission_graph,
+        physical_mission_graph=mission_graph,
         metrics=metrics,
         map_elites_score=map_elites_score,
         generation_time=0.0,
@@ -632,6 +641,7 @@ def _validate_dungeon(
     room_to_node: Optional[Dict[Any, Any]] = None,
     room_positions: Optional[Dict[Any, Tuple[int, int]]] = None,
     node_to_room: Optional[Dict[Any, Any]] = None,
+    connection_realizations: Optional[Dict[Any, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Validate dungeon solvability and compute MAP-Elites descriptors.
@@ -644,6 +654,10 @@ def _validate_dungeon(
         and room_to_node
         and room_positions
         and node_to_room
+        and connection_realizations is not None
+    )
+    projection_issues = graph_tile_projection_issues(
+        graph, physical_bridge=connection_realizations is not None,
     )
     floor_id = int(SEMANTIC_PALETTE.get('FLOOR', 1))
     enemy_id = int(SEMANTIC_PALETTE.get('ENEMY', 7))
@@ -672,6 +686,7 @@ def _validate_dungeon(
             room_to_node=room_to_node,
             room_positions=room_positions,
             node_to_room=node_to_room,
+            connection_realizations=connection_realizations,
             solver_timeout=int(max(1, int(getattr(pipeline, "tile_oracle_max_states", 200_000)))),
             room_puzzle_metadata=room_puzzle_metadata,
             verify_dijkstra_consistency=bool(
@@ -763,6 +778,7 @@ def _validate_dungeon(
                 getattr(result, 'solver_consistency_states_explored', 0) or 0
             ),
             'graph_tile_context_applied': graph_tile_context_applied,
+            'graph_tile_projection_issues': projection_issues,
             'is_exact': True,
         }
     except (AttributeError, RuntimeError, ValueError, TypeError) as e:
@@ -798,6 +814,7 @@ def _validate_dungeon(
             'solver_consistency_path_cost': None,
             'solver_consistency_states_explored': 0,
             'graph_tile_context_applied': graph_tile_context_applied,
+            'graph_tile_projection_issues': projection_issues,
             'is_exact': False,
         }
 

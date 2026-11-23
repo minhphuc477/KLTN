@@ -484,3 +484,36 @@ def test_fallback_corridor_does_not_claim_a_blocked_connection():
 
     assert mode is None
     np.testing.assert_array_equal(grid, original)
+
+
+def test_strict_adjacency_rejects_odd_cycle_immediately():
+    from src.pipeline.room_stitching import solve_component_strict_adjacency
+
+    adjacency = {0: {1, 2}, 1: {0, 2}, 2: {0, 1}}
+    with pytest.raises(ValueError, match="non-bipartite odd cycle"):
+        solve_component_strict_adjacency([0, 1, 2], adjacency, {}, search_budget=50000)
+
+
+def test_executor_enforce_bipartite_cycles_and_degree_cap():
+    from src.generation.evolutionary_director.executor import GraphGrammarExecutor
+    from src.generation.grammar import EdgeType, MissionGraph, MissionNode, NodeType
+
+    graph = MissionGraph()
+    for nid in range(4):
+        graph.add_node(MissionNode(id=nid, node_type=NodeType.EMPTY))
+    # Triangle (0-1-2) with a LOCKED progression edge (0->1) and a PATH shortcut (1->2)
+    graph.add_edge(0, 1, edge_type=EdgeType.LOCKED)
+    graph.add_edge(0, 2, edge_type=EdgeType.PATH)
+    graph.add_edge(1, 2, edge_type=EdgeType.PATH)
+    graph.add_edge(2, 3, edge_type=EdgeType.PATH)
+
+    executor = GraphGrammarExecutor(seed=42)
+    removed = executor._enforce_bipartite_cycles(graph)
+    assert removed == 1
+    assert any(e.edge_type == EdgeType.LOCKED for e in graph.edges)
+
+    nx_graph = nx.Graph()
+    nx_graph.add_nodes_from(graph.nodes.keys())
+    nx_graph.add_edges_from((e.source, e.target) for e in graph.edges)
+    assert nx.is_connected(nx_graph)
+    assert nx.is_bipartite(nx_graph)

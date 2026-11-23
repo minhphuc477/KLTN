@@ -202,13 +202,19 @@ class SinusoidalPositionEncoding2D(nn.Module):
         
         # Vectorized broadcast into [H, W, D] -- no Python loops
         pe = torch.zeros(max_h, max_w, dim)
-        pe[:, :, :half] = row_sin.unsqueeze(1).expand(max_h, max_w, half)
-        pe[:, :, half:half*2] = row_cos.unsqueeze(1).expand(max_h, max_w, half)
-        pe[:, :, half*2:half*3] = col_sin.unsqueeze(0).expand(max_h, max_w, half)
-        remaining = dim - half * 3
-        if remaining > 0:
-            fill = min(remaining, half)
-            pe[:, :, half*3:half*3 + fill] = col_cos[:, :fill].unsqueeze(0).expand(max_h, max_w, fill)
+        segments = (
+            row_sin.unsqueeze(1).expand(max_h, max_w, half),
+            row_cos.unsqueeze(1).expand(max_h, max_w, half),
+            col_sin.unsqueeze(0).expand(max_h, max_w, half),
+            col_cos.unsqueeze(0).expand(max_h, max_w, half),
+        )
+        offset = 0
+        for seg in segments:
+            if offset >= dim:
+                break
+            width = min(half, dim - offset)
+            pe[:, :, offset:offset + width] = seg[:, :, :width]
+            offset += width
         
         return pe
     
@@ -307,7 +313,10 @@ class GraphNodePositionEncoding(nn.Module):
         Returns:
             [B, N, D] with position encoding added
         """
-        output = self.feature_norm(node_features)
+        norm_weight = self.feature_norm.weight
+        output = self.feature_norm(
+            node_features.to(device=norm_weight.device, dtype=norm_weight.dtype)
+        )
         target_dtype = output.dtype
         
         if node_positions is not None:
@@ -1372,6 +1381,7 @@ class EnhancedAttentionBlock(nn.Module):
         context: Optional[Tensor] = None,
         graph_nodes: Optional[Tensor] = None,
         edge_index: Optional[Tensor] = None,
+        edge_attr: Optional[Tensor] = None,
         node_positions: Optional[Tensor] = None,
         node_tpe: Optional[Tensor] = None,
         current_node_distance: Optional[Tensor] = None,
@@ -1410,11 +1420,12 @@ class EnhancedAttentionBlock(nn.Module):
             x = self.graph_cross_attn(
                 x,
                 graph_nodes,
-                edge_index,
-                node_positions,
-                node_tpe,
-                current_node_distance,
-                node_mask,
+                edge_index=edge_index,
+                edge_attr=edge_attr,
+                node_positions=node_positions,
+                node_tpe=node_tpe,
+                current_node_distance=current_node_distance,
+                node_mask=node_mask,
             )
         
         # Context cross-attention (backward compat)

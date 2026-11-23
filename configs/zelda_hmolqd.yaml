@@ -76,15 +76,15 @@ vqvae:
   top_codebook_size: null  # type=int|null, default=null, valid>=8; only active for architecture=vqvae2
   top_latent_dim: null  # type=int|null, default=null, valid>=1; only active for architecture=vqvae2
   commitment_cost: 0.25  # type=float, default=0.25, valid>=0
-  rare_tile_weight: 5.0  # type=float, default=5.0, valid>=1
+  rare_tile_weight: 10.0  # type=float, default=10.0, valid>=1; Schrum et al. AIIDE 2025 shows Key/Door/Player tiles (<0.6% of tokens) are erased by argmax projection unless upweighted 10–50x in reconstruction loss
   use_ema: true  # type=bool, default=true, valid={true,false}
   use_coordconv: true  # type=bool, default=true, valid={true,false}
   mrf_penalty_weight: 0.05  # type=float, default=0.05, valid>=0
-  dead_code_reset_interval: 100  # type=int, default=100, valid>=1
+  dead_code_reset_interval: 25  # type=int, default=25, valid>=1
   dead_code_threshold: 0.05  # type=float, default=0.05, valid>=0; batch-scale-aware dead-code threshold for small Zelda datasets
-  dead_code_warmup_steps: 500  # type=int, default=500, valid>=0; delay resets until the codebook has seen enough assignments
+  dead_code_warmup_steps: 50  # type=int, default=50, valid>=0; begin reviving dead codes early (~3 epochs on Zelda rooms) before CoordConv collapse locks in
   protect_active_codes_during_reset: true  # type=bool, default=true, valid={true,false}; do not reset codes that are active in the current batch
-  max_dead_code_resets_per_event: 16  # type=int, default=16, valid>=0; cap maintenance churn on small-data runs
+  max_dead_code_resets_per_event: 64  # type=int, default=64, valid>=0; allow resetting up to 25% of a 256-code codebook per event
   validation_fraction: 0.1  # type=float, default=0.1, valid=0..0.5; held-out fraction for real Block II model selection instead of choosing checkpoints on training loss alone
   validation_max_batches: 16  # type=int, default=16, valid>=1; keep per-epoch validation cheap on the tiny Zelda corpus while still checking more than a token 5-batch slice
   best_checkpoint_metric: val_loss  # type=str, default=val_loss, valid={val_loss,train_loss}; use held-out validation when available, fall back to train_loss only for ablations/smokes
@@ -100,7 +100,7 @@ diffusion:
   grad_clip_norm: 1.0  # type=float, default=1.0, valid>=0
   gradient_accumulation_steps: 1  # type=int, default=1, valid>=1; accumulate N micro-batches before each optimizer/EMA/scheduler step
   gradient_checkpointing: false  # type=bool, default=false, valid={true,false}; enable activation recomputation to reduce VRAM (slower training)
-  use_amp: false  # type=bool, default=false, valid={true,false}; enable autocast during diffusion training
+  use_amp: true  # type=bool, default=false, valid={true,false}; enable CUDA autocast during diffusion training (no-op on CPU)
   amp_mixed_precision: fp16  # type=str, default=fp16, valid={fp16,bf16,auto}; autocast dtype when use_amp=true
   use_accelerate: false  # type=bool, default=false, valid={true,false}; prepare modules with HuggingFace Accelerate when not using torchrun/DDP
   save_every: 10  # type=int, default=10, valid>=1
@@ -110,12 +110,14 @@ diffusion:
   nonfinite_policy: skip  # type=str, default=skip, valid={skip,error}; publication materialization overrides to error so unequal skipped updates cannot confound arms
   latent_dim: 64  # type=int, default=64, valid>=1
   latent_scale_factor: 1.0  # type=float, default=1.0, valid>0; checkpointed ablation, set from corpus calibration rather than a single batch
+  latent_clip_bound: 5.0  # type=float, default=5.0, valid>0 or null; symmetric clean-latent clamp matching unit-scaled Gaussian diffusion space
+  aux_max_timestep_fraction: 0.5  # type=float, default=0.5, valid=(0,1]; cap auxiliary one-step x0 timestep fraction to avoid near-T variance blowup
   model_channels: 96  # type=int, default=128, valid>=8; recommended small-data-balanced setting for the current Zelda corpus
   context_dim: 256  # type=int, default=256, valid>=8
   denoiser_backbone: unet  # type=str, default=unet, valid={unet,dit}; DiT is a controlled ablation for flow-matching/backbone studies
-  unet_channel_mult: [1, 2, 4]  # type=list[int], default=[1,2,4], valid=positive ints; per-level U-Net channel multipliers
+  unet_channel_mult: [1, 2]  # type=list[int], default=[1,2], valid=positive ints; avoid 1x1 spatial collapse on 4x3 latents
   unet_num_res_blocks: 2  # type=int, default=2, valid>=1
-  unet_attention_resolutions: [1, 2]  # type=list[int], default=[1,2], valid=level indices into unet_channel_mult
+  unet_attention_resolutions: [0, 1]  # type=list[int], default=[0,1], valid=level indices into unet_channel_mult (4x3 and 2x1 spatial levels)
   unet_num_heads: 8  # type=int, default=8, valid>=1; each model_channels*mult must be divisible by this
   unet_dropout: 0.1  # type=float, default=0.1, valid=0..1
   dit_depth: 4  # type=int, default=4, valid>=1
@@ -147,7 +149,7 @@ diffusion:
   graph_to_grid_edge_semantics: false  # type=bool, default=false, valid={true,false}; ablation for edge-label bias in spatial graph-to-grid attention
   spatial_graph_gate_init: -2.0  # type=float, default=-2.0
   spatial_topology_gate_init: -2.0  # type=float, default=-2.0
-  use_teacher_forced_neighbor_latents: true  # type=bool, default=true, valid={true,false}; enables real-neighbor local conditioning during room-level training
+  use_teacher_forced_neighbor_latents: true  # type=bool, default=true, valid={true,false}; teacher-forces only mission-graph neighbors available earlier in the canonical generation order
   puzzle_structure_dropout_prob: 0.0  # type=float, default=0.0, valid=0..1; disabled until a solver-validated counterfactual compiler rewrites both grid and stage plan consistently
   puzzle_stage_conditioning_enabled: false  # type=bool, default=false, valid={true,false}; enable only for the staged-puzzle retrain because it appends ordered multi-step puzzle tokens to conditioning
   puzzle_stage_token_scale: 0.20  # type=float, default=0.20, valid=0..2; deterministic token amplitude for ordered puzzle-stage conditioning
@@ -181,6 +183,7 @@ diffusion:
   logic_final_temperature: 0.05  # type=float, default=0.05, valid>0; sharp endpoint of the explicit annealing ablation
   logic_topology_trace_weight: 0.25  # type=float, default=0.25, valid>=0; extra LogicNet pressure on mission-conditioned traversability traces
   logic_topology_anchor_weight: 0.25  # type=float, default=0.25, valid>=0; extra LogicNet pressure on start/goal/door anchor walkability
+  logic_lock_weight: 0.5  # type=float, default=0.5, valid>=0; mission key/item/token-to-gate ordering pressure
   logic_global_reach_weight: 1.0  # type=float, default=1.0, valid>=0; dungeon-level LogicNet mission-graph reachability pressure
   logic_global_room_weight: 0.25  # type=float, default=0.25, valid>=0; room-passability-to-node-cost pressure for global LogicNet
   guidance_scale: 1.0  # type=float, default=1.0, valid>=0
@@ -203,8 +206,8 @@ diffusion:
   logic_loss_mode: predicted_latent  # type=str, default=predicted_latent, valid={predicted_latent,detached_real}
   warmup_epochs: 5  # type=int, default=5, valid>=0
   logic_loss_ramp_epochs: 2  # type=int, default=2, valid>=1; linearly ramps alpha_logic after warmup so LogicNet pressure does not destabilize early denoising
-  scheduler_t0: 10  # type=int, default=10, valid>=1
-  scheduler_t_mult: 2  # type=int, default=2, valid>=1
+  scheduler_t0: 100  # type=int, default=100, valid>=1; single full-horizon cosine cycle matching epochs=100 (avoids restarting mid-run)
+  scheduler_t_mult: 1  # type=int, default=1, valid>=1
   scheduler_eta_min: 0.000001  # type=float, default=1e-6, valid>=0
   ema_decay: 0.9999  # type=float, default=0.9999, valid=0..0.999999
   validation_num_samples: 8  # type=int, default=8, valid>=1; generated-sample validation budget for logic/solvability
@@ -342,7 +345,9 @@ masked_room:
   condition_num_gnn_layers: 2  # type=int, default=3, valid>=1
   condition_num_attention_heads: 8  # type=int, default=8, valid>=1
   condition_dropout: 0.1  # type=float, default=0.1, valid=0..1
-  condition_gnn_type: gcn  # type=str, default=gcn, valid={gcn,gat,sage,gps}
+  condition_gnn_type: gps  # type=str, default=gcn, valid={gcn,gat,sage,gps}; canonical G-LMDM uses GPS + RRWP graph conditioning
+  condition_use_rrwp_edge_features: true  # type=bool, default=true, valid={true,false}; inject RRWP edge encodings into GAT/GPS graph conditioning
+  condition_strict_schema: true  # type=bool, default=true, valid={true,false}; fail on graph-conditioning schema drift instead of silently padding/truncating
   condition_use_reference_room_maps: true  # type=bool, default=false, valid={true,false}; masked-room training should see neighboring room exemplars, not only null local anchors
   condition_reference_tile_vocab_size: 44  # type=int, default=44, valid>=2; must match dataset.num_classes when enabled
   condition_reference_embedding_dim: 32  # type=int, default=32, valid>=4
@@ -367,10 +372,12 @@ masked_room:
   unet_dropout: 0.1  # type=float, default=0.1, valid=0..1
   min_mask_ratio: 0.0  # type=float, default=0.0, valid=0..1
   max_mask_ratio: 1.0  # type=float, default=1.0, valid=0..1; must be >= min_mask_ratio
+  rare_tile_weight: 1.0  # type=float, default=1.0, valid>=1; extra masked CE weight for rare structural tiles (doors, keys, items, boss, triforce, stairs, switches)
+  focal_gamma: 0.0  # type=float, default=0.0, valid>=0; focal loss modulating gamma (0.0 disables focal down-weighting)
   topology_alignment_weight: 0.25  # type=float, default=0.25, valid>=0; extra masked-token CE pressure on topology-critical pixels so masked-room training learns anchors, doors, gates, and puzzle-route structure more explicitly
-  logic_net_enabled: false  # type=bool, default=false, valid={true,false}; opt-in ablation for LogicNet topological supervision on masked-room logits
-  logic_net_trainable: false  # type=bool, default=false, valid={true,false}; frozen LogicNet is the default for fair masked-room ablations
-  alpha_logic: 0.0  # type=float, default=0.0, valid>=0; set >0 only for the masked-room global-graph-supervision ablation
+  logic_net_enabled: true  # type=bool, default=false, valid={true,false}; canonical G-LMDM enables direct 16x11 LogicNet Soft Bellman-Ford supervision on masked-room logits
+  logic_net_trainable: false  # type=bool, default=false, valid={true,false}; frozen LogicNet is the default for stable masked-room training
+  alpha_logic: 0.1  # type=float, default=0.0, valid>=0; canonical G-LMDM weight for direct 16x11 Soft Bellman-Ford traversability loss
   logic_global_reach_weight: 1.0  # type=float, default=1.0, valid>=0
   logic_global_room_weight: 0.25  # type=float, default=0.25, valid>=0
   logic_topology_trace_weight: 0.25  # type=float, default=0.25, valid>=0

@@ -315,7 +315,7 @@ def load_condition_encoder(
         checkpoint, _metadata = pipeline._load_checkpoint_and_metadata(
             checkpoint_path,
             "condition_encoder",
-            accepted_model_types=("diffusion", "masked_room_model"),
+            accepted_model_types=("diffusion", "masked_room_model", "masked_room_resume"),
         )
         checkpoint_state = pipeline._extract_checkpoint_state_dict(
             checkpoint,
@@ -330,12 +330,18 @@ def load_condition_encoder(
             if isinstance(edge_weight, torch.Tensor) and edge_weight.dim() == 2:
                 edge_feature_dim = int(max(1, int(edge_weight.shape[1])))
 
+    effective_gnn_type = str(
+        checkpoint_config.get(
+            "condition_gnn_type",
+            fallback_config.get("condition_gnn_type", pipeline.condition_gnn_type),
+        )
+    ).strip().lower()
     if "condition_use_rrwp_edge_features" in checkpoint_config:
         use_rrwp_edge_features = bool(checkpoint_config["condition_use_rrwp_edge_features"])
     elif isinstance(checkpoint_state, dict):
         # Checkpoints created before RRWP edge conditioning existed have no
         # RRWP projection weights and must reconstruct the legacy architecture.
-        use_rrwp_edge_features = False
+        use_rrwp_edge_features = "global_encoder.edge_rrwp_proj.weight" in checkpoint_state
     else:
         use_rrwp_edge_features = bool(
             fallback_config.get(
@@ -343,6 +349,9 @@ def load_condition_encoder(
                 pipeline.condition_use_rrwp_edge_features,
             )
         )
+    use_rrwp_edge_features = bool(
+        use_rrwp_edge_features and effective_gnn_type in {"gat", "gat2", "gps"}
+    )
 
     model = DualStreamConditionEncoder(
         latent_dim=int(checkpoint_config.get("latent_dim", fallback_config.get("latent_dim", default_latent_dim))),
@@ -745,7 +754,7 @@ def load_logic_net(pipeline, checkpoint_path: Optional[str]) -> Optional[LogicNe
         checkpoint, metadata = pipeline._load_checkpoint_and_metadata(
             checkpoint_path,
             "logic_net",
-            accepted_model_types=("diffusion",),
+            accepted_model_types=("diffusion", "masked_room_model", "masked_room_resume"),
         )
         checkpoint_state = pipeline._extract_checkpoint_state_dict(
             checkpoint,
@@ -827,8 +836,12 @@ def load_logic_net(pipeline, checkpoint_path: Optional[str]) -> Optional[LogicNe
         setattr(model, "_hmolqd_checkpoint_loaded", True)
         pipeline.logic_net_checkpoint_loaded = True
         logger.info(f"Loaded LogicNet from {checkpoint_path}")
+        return model
     else:
-        if pipeline.strict_checkpoint_mode or bool(getattr(pipeline, "require_logic_net", False)):
+        logic_required = bool(getattr(pipeline, "require_logic_net", False)) or (
+            bool(getattr(pipeline, 'strict_checkpoint_mode', False)) and getattr(pipeline, 'logic_net_checkpoint', checkpoint_path) is not None
+        )
+        if logic_required:
             raise FileNotFoundError(
                 "LogicNet is required for this run but no loadable checkpoint was found "
                 f"at {checkpoint_path!r}. Enable a symbolic-only ablation explicitly by "
@@ -837,8 +850,6 @@ def load_logic_net(pipeline, checkpoint_path: Optional[str]) -> Optional[LogicNe
         pipeline.logic_net_checkpoint_loaded = False
         logger.warning("No LogicNet checkpoint; LogicNet-dependent guidance and evaluation are disabled.")
         return None
-
-    return model
 
 def load_masked_room_model(
     pipeline,
@@ -855,7 +866,11 @@ def load_masked_room_model(
     checkpoint: Optional[Dict[str, Any]] = None
     fallback_config = dict(pipeline.masked_room_fallback_config)
     if checkpoint_path and Path(checkpoint_path).exists():
-        checkpoint, _metadata = pipeline._load_checkpoint_and_metadata(checkpoint_path, "masked_room_model")
+        checkpoint, _metadata = pipeline._load_checkpoint_and_metadata(
+            checkpoint_path,
+            "masked_room_model",
+            accepted_model_types=("masked_room_model", "masked_room_resume"),
+        )
         checkpoint_config = pipeline._extract_checkpoint_config(checkpoint)
         if pipeline.strict_checkpoint_mode and "topology_conditioning_mode" not in checkpoint_config:
             raise ValueError(
@@ -921,6 +936,12 @@ def load_masked_room_model(
             checkpoint_config.get("room_topology_channels", fallback_config.get("room_topology_channels", ROOM_TOPOLOGY_CHANNEL_COUNT))
         ),
     ).to(pipeline.device)
+    ckpt_cond_mode = str(
+        checkpoint_config.get("graph_conditioning_mode", fallback_config.get("graph_conditioning_mode", "")) or ""
+    ).strip().lower()
+    if ckpt_cond_mode in {"node_sequence", "pooled"}:
+        pipeline.graph_conditioning_mode = ckpt_cond_mode
+        pipeline.use_graph_node_cross_attention = bool(ckpt_cond_mode == "node_sequence")
     if (
         model.topology_conditioning_mode == "graph_cross_attention"
         and not bool(getattr(pipeline, "use_graph_node_cross_attention", False))

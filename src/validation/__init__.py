@@ -32,7 +32,7 @@ def __getattr__(name: str) -> Any:
     if name not in _VISUALIZATION_EXPORTS:
         raise AttributeError(name)
     module = import_module(
-        "src.visualization.validation.collision_alignment_validator"
+        "src.validation.collision_alignment_validator"
     )
     value = getattr(module, name)
     globals()[name] = value

@@ -1,4 +1,4 @@
-﻿"""Matched-budget Block-I topology benchmark."""
+"""Matched-budget Block-I topology benchmark."""
 from __future__ import annotations
 
 import argparse
@@ -257,6 +257,7 @@ def _run_evolution(
         target_curve=scenario.target_curve,
         population_size=pop,
         generations=gens,
+        evaluation_budget=eval_budget,
         mutation_rate=float(mutation_rate),
         crossover_rate=float(crossover_rate),
         genome_length=int(max(8, min(28, scenario.room_count + 4))),
@@ -274,9 +275,9 @@ def _run_evolution(
     ev = evaluator.evaluate_graph(mission)
 
     stats = generator.get_statistics()
-    generations_run = int(max(0, stats.get("generations_run", gens)))
-    converged = bool(stats.get("converged", False))
-    evaluations_used = int(pop * max(1, generations_run)) if converged else int(pop * (max(1, generations_run) + 1))
+    evaluations_used = int(stats["candidate_evaluations"])
+    if evaluations_used != eval_budget:
+        raise RuntimeError("Evolution did not consume the declared matched candidate budget.")
 
     return SearchResult(
         graph=graph,
@@ -305,6 +306,7 @@ def _run_map_elites(
         target_curve=scenario.target_curve,
         population_size=pop,
         generations=gens,
+        evaluation_budget=eval_budget,
         mutation_rate=float(np.clip(mutation_rate, 0.01, 0.95)),
         crossover_rate=0.68,
         genome_length=int(max(8, min(28, scenario.room_count + 4))),
@@ -325,8 +327,9 @@ def _run_map_elites(
     evaluator = TensionCurveEvaluator(scenario.target_curve, descriptor_targets=descriptor_targets)
     ev = evaluator.evaluate_graph(mission)
     stats = generator.get_statistics()
-    generations_run = int(max(0, stats.get("generations_run", gens)))
-    evaluations_used = int(pop * max(1, generations_run))
+    evaluations_used = int(stats["candidate_evaluations"])
+    if evaluations_used != eval_budget:
+        raise RuntimeError("CVT search did not consume the declared matched candidate budget.")
     qd_stats = dict(stats.get("qd_final_archive_stats", {}))
 
     return SearchResult(

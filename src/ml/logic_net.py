@@ -10,6 +10,14 @@ Research:
 - Poganvcic et al. (2019) "Differentiation of Blackbox Combinatorial Solvers"
 - Berthet et al. (2020) "Learning with Differentiable Perturbed Optimizers"
 
+Objective Scope (Literature-Grounded):
+    LogicNet optimizes soft reachability in expectation during training
+    (Tamar et al., 2016; Xu et al., ICML 2018 "Semantic Loss Function") to
+    reduce downstream symbolic repair edit distance (`repair_rate`,
+    `tiles_repaired_mean`). Because of the continuous-to-discrete argmax gap,
+    soft differentiable supervision cannot replace post-hoc symbolic repair
+    (Zhang et al., AIIDE 2020) for guaranteed discrete solvability.
+
 Algorithm:
     The Soft-Bellman-Ford algorithm computes reachability by iteratively
     propagating probability mass through the grid:

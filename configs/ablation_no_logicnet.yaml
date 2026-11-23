@@ -13,3 +13,12 @@ diffusion:
   logic_global_reach_weight: 0.0
   logic_global_room_weight: 0.0
   guidance_scale: 0.0
+
+masked_room:
+  logic_net_enabled: false
+  logic_net_trainable: false
+  alpha_logic: 0.0
+  logic_topology_trace_weight: 0.0
+  logic_topology_anchor_weight: 0.0
+  logic_global_reach_weight: 0.0
+  logic_global_room_weight: 0.0

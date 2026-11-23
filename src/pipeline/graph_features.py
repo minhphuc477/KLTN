@@ -16,6 +16,9 @@ from src.core.definitions import (
     GRAPH_NODE_FLOOR_NORMALIZATION_SCALE,
     GRAPH_NODE_FEATURE_DIM,
     GRAPH_TPE_DIM,
+    ROOM_HEIGHT,
+    ROOM_TOPOLOGY_CHANNEL_COUNT,
+    ROOM_WIDTH,
     parse_edge_type_tokens,
 )
 
@@ -66,7 +69,7 @@ def build_key_lock_pairs(
     boss_keys: List[Any] = []
     item_providers: List[Any] = []
     token_providers: List[Any] = []
-    provider_ids: Dict[Any, Optional[str]] = {}
+    provider_ids: Dict[Tuple[Any, str], Optional[str]] = {}
     for node_id, attrs in graph.nodes(data=True):
         attrs_dict = dict(attrs)
         raw_type = str(
@@ -106,9 +109,7 @@ def build_key_lock_pairs(
             )
         )
         is_item_provider = (
-            not is_small_key
-            and not is_boss_key
-            and (
+            (
                 raw_type in {"ITEM", "KEY_ITEM", "MACRO_ITEM", "PROTECTION_ITEM"}
                 or bool(attrs_dict.get("has_item", False))
                 or bool(attrs_dict.get("has_macro_item", False))
@@ -116,10 +117,7 @@ def build_key_lock_pairs(
             )
         )
         is_token_provider = (
-            not is_small_key
-            and not is_boss_key
-            and not is_item_provider
-            and (
+            (
                 raw_type == "TOKEN"
                 or bool(attrs_dict.get("has_token", False))
                 or bool(label_tokens & {"TOKEN", "token"})
@@ -127,28 +125,17 @@ def build_key_lock_pairs(
         )
         if not (is_small_key or is_boss_key or is_item_provider or is_token_provider):
             continue
-        raw_key_id = (
-            attrs_dict.get("token_id")
-            if is_token_provider
-            else (
-                attrs_dict.get("item_type", attrs_dict.get("required_item"))
-                if is_item_provider
-                else attrs_dict.get("key_id")
-            )
-        )
-        provider_ids[node_id] = (
-            str(raw_key_id).strip()
-            if raw_key_id is not None and str(raw_key_id).strip()
-            else None
-        )
-        if is_boss_key:
-            boss_keys.append(node_id)
-        elif is_small_key:
-            small_keys.append(node_id)
-        elif is_token_provider:
-            token_providers.append(node_id)
-        else:
-            item_providers.append(node_id)
+        # A room can provide several resources. Keep each role and identity;
+        # selecting one mutually exclusive type silently drops mixed k,I rooms.
+        for kind, enabled, providers, raw_id in (
+            ('boss', is_boss_key, boss_keys, attrs_dict.get('key_id')),
+            ('small', is_small_key, small_keys, attrs_dict.get('key_id')),
+            ('token', is_token_provider, token_providers, attrs_dict.get('token_id')),
+            ('item', is_item_provider, item_providers, attrs_dict.get('item_type', attrs_dict.get('protection_item_id'))),
+        ):
+            if enabled:
+                providers.append(node_id)
+                provider_ids[node_id, kind] = str(raw_id).strip() if raw_id is not None and str(raw_id).strip() else None
 
     if not small_keys and not boss_keys and not item_providers and not token_providers:
         return []
@@ -279,7 +266,7 @@ def build_key_lock_pairs(
             provider
             for provider in providers
             if provider in node_to_idx
-            and (required_id is None or provider_ids.get(provider) == required_id)
+            and (required_id is None or provider_ids.get((provider, key_kind)) == required_id)
             and (key_kind != "small" or provider not in used_small_key_providers)
             and (key_kind != "token" or provider not in used_token_providers)
         ]
@@ -910,3 +897,180 @@ def compute_tpe_features(
         tpe[idx, 7] = float(attrs.get("key_id") is not None or coerce_bool(attrs.get("requires_key")))
 
     return tpe
+
+
+def validate_graph_conditioning_payload(
+    graph_dict: Mapping[str, Any],
+    *,
+    node_feature_dim: int = GRAPH_NODE_FEATURE_DIM,
+    edge_feature_dim: int = GRAPH_EDGE_FEATURE_DIM,
+    tpe_dim: int = GRAPH_TPE_DIM,
+    room_topology_channels: int = ROOM_TOPOLOGY_CHANNEL_COUNT,
+    room_height: int = ROOM_HEIGHT,
+    room_width: int = ROOM_WIDTH,
+    strict: bool = True,
+) -> List[str]:
+    """Validate a graph conditioning payload against expected shapes, bounds, and dtypes.
+
+    Parameters
+    ----------
+    graph_dict : Mapping[str, Any]
+        Dictionary of graph tensors or arrays (e.g. from dataset or graph encoder).
+    node_feature_dim : int
+        Expected dimensionality of node feature vectors.
+    edge_feature_dim : int
+        Expected dimensionality of edge feature vectors.
+    tpe_dim : int
+        Expected dimensionality of topological positional encodings.
+    room_topology_channels : int
+        Expected number of spatial topology channels.
+    room_height : int
+        Expected room height in tiles.
+    room_width : int
+        Expected room width in tiles.
+    strict : bool
+        If True, raises ValueError if any validation errors are found.
+
+    Returns
+    -------
+    List[str]
+        List of validation error messages (empty if valid).
+    """
+    errors: List[str] = []
+
+    if not isinstance(graph_dict, Mapping):
+        msg = f"graph_dict must be a Mapping, got {type(graph_dict).__name__}"
+        if strict:
+            raise ValueError(msg)
+        return [msg]
+
+    def _to_numpy(val: Any) -> Optional[np.ndarray]:
+        if val is None:
+            return None
+        if hasattr(val, "detach"):
+            val = val.detach()
+        if hasattr(val, "cpu"):
+            val = val.cpu()
+        if hasattr(val, "numpy"):
+            return np.asarray(val.numpy())
+        return np.asarray(val)
+
+    # 1. Required: node_features [N, node_feature_dim]
+    node_feats = _to_numpy(graph_dict.get("node_features"))
+    num_nodes: Optional[int] = None
+    if node_feats is None:
+        errors.append("Missing required field 'node_features'")
+    else:
+        if node_feats.ndim != 2:
+            errors.append(f"'node_features' must have 2 dimensions [N, F], got shape {node_feats.shape}")
+        else:
+            num_nodes = int(node_feats.shape[0])
+            if node_feats.shape[1] != node_feature_dim:
+                errors.append(
+                    f"'node_features' feature dimension mismatch: expected {node_feature_dim}, got {node_feats.shape[1]}"
+                )
+            if not np.all(np.isfinite(node_feats)):
+                errors.append("'node_features' contains non-finite (NaN or Inf) values")
+
+    # 2. Required: edge_index [2, E]
+    edge_idx = _to_numpy(graph_dict.get("edge_index"))
+    num_edges: Optional[int] = None
+    if edge_idx is None:
+        errors.append("Missing required field 'edge_index'")
+    else:
+        if edge_idx.ndim != 2 or edge_idx.shape[0] != 2:
+            errors.append(f"'edge_index' must have shape [2, E], got shape {edge_idx.shape}")
+        else:
+            num_edges = int(edge_idx.shape[1])
+            if num_edges > 0 and num_nodes is not None and num_nodes > 0:
+                min_idx = int(np.min(edge_idx))
+                max_idx = int(np.max(edge_idx))
+                if min_idx < 0 or max_idx >= num_nodes:
+                    errors.append(
+                        f"'edge_index' references out-of-bounds node indices: min={min_idx}, max={max_idx}, num_nodes={num_nodes}"
+                    )
+
+    # 3. Optional node-indexed: tpe [N, tpe_dim]
+    tpe = _to_numpy(graph_dict.get("tpe"))
+    if tpe is not None and num_nodes is not None:
+        if tpe.ndim != 2:
+            errors.append(f"'tpe' must have shape [N, {tpe_dim}], got {tpe.shape}")
+        elif tpe.shape[0] != num_nodes or tpe.shape[1] != tpe_dim:
+            errors.append(f"'tpe' shape mismatch: expected [{num_nodes}, {tpe_dim}], got {tpe.shape}")
+        elif not np.all(np.isfinite(tpe)):
+            errors.append("'tpe' contains non-finite (NaN or Inf) values")
+
+    # 4. Optional node-indexed: node_positions [N, 2] or [N, 3]
+    node_positions = _to_numpy(graph_dict.get("node_positions"))
+    if node_positions is not None and num_nodes is not None:
+        if node_positions.ndim != 2 or node_positions.shape[0] != num_nodes:
+            errors.append(
+                f"'node_positions' shape mismatch: expected [{num_nodes}, 2 or 3], got {node_positions.shape}"
+            )
+
+    # 5. Optional node-indexed: node_passability_parent_idx [N]
+    passability_parents = _to_numpy(graph_dict.get("node_passability_parent_idx"))
+    if passability_parents is not None and num_nodes is not None:
+        if passability_parents.ndim != 1 or passability_parents.shape[0] != num_nodes:
+            errors.append(
+                f"'node_passability_parent_idx' shape mismatch: expected [{num_nodes}], got {passability_parents.shape}"
+            )
+        elif num_nodes > 0:
+            min_parent = int(np.min(passability_parents))
+            max_parent = int(np.max(passability_parents))
+            if min_parent < -1 or max_parent >= num_nodes:
+                errors.append(
+                    f"'node_passability_parent_idx' out of bounds [-1, {num_nodes - 1}]: min={min_parent}, max={max_parent}"
+                )
+
+    # 6. Optional edge-indexed: edge_features or edge_attr [E, edge_feature_dim]
+    edge_feats = _to_numpy(graph_dict.get("edge_features", graph_dict.get("edge_attr")))
+    if edge_feats is not None and num_edges is not None:
+        if edge_feats.ndim != 2:
+            errors.append(
+                f"'edge_features' must have shape [E, {edge_feature_dim}], got {edge_feats.shape}"
+            )
+        elif edge_feats.shape[0] != num_edges or edge_feats.shape[1] != edge_feature_dim:
+            errors.append(
+                f"'edge_features' shape mismatch: expected [{num_edges}, {edge_feature_dim}], got {edge_feats.shape}"
+            )
+        elif not np.all(np.isfinite(edge_feats)):
+            errors.append("'edge_features' contains non-finite values")
+
+    # 7. Spatial maps
+    topo_map = _to_numpy(graph_dict.get("room_topology_map"))
+    if topo_map is not None:
+        if topo_map.ndim < 3 or topo_map.shape[-3:] != (room_topology_channels, room_height, room_width):
+            errors.append(
+                f"'room_topology_map' spatial shape mismatch: expected [..., {room_topology_channels}, {room_height}, {room_width}], got {topo_map.shape}"
+            )
+
+    for mask_key in ("logic_source_mask", "logic_target_mask"):
+        mask_val = _to_numpy(graph_dict.get(mask_key))
+        if mask_val is not None:
+            if mask_val.ndim < 2 or mask_val.shape[-2:] != (room_height, room_width):
+                errors.append(
+                    f"'{mask_key}' spatial shape mismatch: expected [..., {room_height}, {room_width}], got {mask_val.shape}"
+                )
+
+    # 8. Boundary constraints [..., 8]
+    b_const = _to_numpy(graph_dict.get("boundary_constraints"))
+    if b_const is not None:
+        if b_const.shape[-1] != 8:
+            errors.append(f"'boundary_constraints' last dimension must be 8, got {b_const.shape}")
+
+    # 9. current_node_idx
+    curr_node = graph_dict.get("current_node_idx")
+    if curr_node is not None:
+        try:
+            curr_idx = int(curr_node.item() if hasattr(curr_node, "item") else curr_node)
+            if num_nodes is not None and num_nodes > 0:
+                if curr_idx < 0 or curr_idx >= num_nodes:
+                    errors.append(f"'current_node_idx' ({curr_idx}) out of bounds [0, {num_nodes - 1}]")
+        except (TypeError, ValueError):
+            errors.append(f"'current_node_idx' must be integer, got {type(curr_node).__name__}")
+
+    if strict and errors:
+        raise ValueError("Graph conditioning payload validation failed:\n  " + "\n  ".join(errors))
+
+    return errors

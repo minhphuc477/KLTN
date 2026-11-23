@@ -93,6 +93,15 @@ class PipelineComponentFactory:
             room_mode != "discrete_masked" and sampler_mode != "categorical"
         )
         needs_condition_encoder = room_mode == "discrete_masked" or needs_diffusion
+        masked_ckpt = (
+            getattr(pipeline, "masked_room_checkpoint", None)
+            if room_mode == "discrete_masked"
+            else None
+        )
+        cond_ckpt = self.condition_encoder_checkpoint or masked_ckpt
+        logic_ckpt = self.logic_net_checkpoint or (
+            masked_ckpt if bool(getattr(pipeline, "require_logic_net", False)) else None
+        )
         return PipelineComponents(
             neural=NeuralGenerationComponents(
                 vqvae=(
@@ -101,7 +110,7 @@ class PipelineComponentFactory:
                     else None
                 ),
                 condition_encoder=(
-                    pipeline._load_condition_encoder(self.condition_encoder_checkpoint)
+                    pipeline._load_condition_encoder(cond_ckpt)
                     if needs_condition_encoder
                     else None
                 ),
@@ -110,7 +119,7 @@ class PipelineComponentFactory:
                     if needs_diffusion
                     else None
                 ),
-                logic_net=pipeline._load_logic_net(self.logic_net_checkpoint),
+                logic_net=pipeline._load_logic_net(logic_ckpt),
             ),
             symbolic=SymbolicGenerationComponents(
                 refiner=pipeline._create_refiner(
@@ -163,6 +172,7 @@ class DungeonGenerationResult:
     generation_time: float = 0.0
     stitched_layout: Optional[StitchedRoomLayout] = None
     puzzle_metadata: Dict[str, Any] = field(default_factory=dict)
+    compiled_tile_validation: Optional[Dict[str, Any]] = None
 
 
 @dataclass

@@ -1,4 +1,4 @@
-﻿"""
+"""
 Experimental Neural-Symbolic Integration Pipeline
 =================================================
 End-to-end integration of graph generation, neural room generation, symbolic
@@ -650,6 +650,10 @@ class AdvancedNeuralSymbolicPipeline:
         from src.simulation.validator import ZeldaValidator
 
         context = dict(graph_validation_context or {})
+        from src.validation.end_to_end import graph_tile_projection_issues
+        projection_issues = graph_tile_projection_issues(
+            context.get('graph'), physical_bridge=context.get('connection_realizations') is not None,
+        )
 
         result = ZeldaValidator().validate_single(
             np.asarray(dungeon_grid).copy(),
@@ -721,8 +725,10 @@ class AdvancedNeuralSymbolicPipeline:
                 and context.get('room_to_node')
                 and context.get('room_positions')
                 and context.get('node_to_room')
+                and context.get('connection_realizations') is not None
             ),
-            'is_exact': True,
+            'graph_tile_projection_issues': projection_issues,
+            'is_exact': not projection_issues,
         }
 
     @staticmethod

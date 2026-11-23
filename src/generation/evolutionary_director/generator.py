@@ -7,6 +7,7 @@ import logging
 import math
 import pickle
 import random
+from numbers import Integral
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
@@ -85,6 +86,7 @@ class EvolutionaryTopologyGenerator:
         enforce_generation_constraints: bool = True,
         allow_candidate_repairs: bool = False,
         graph_oracle_max_states: int = 15_000,
+        evaluation_budget: Optional[int] = None,
     ):
         """
         Initialize evolutionary generator.
@@ -133,12 +135,23 @@ class EvolutionaryTopologyGenerator:
                 when generation constraints fail.
             graph_oracle_max_states: State-expansion budget for exact
                 consumable-resource validation of the final exported graph.
+            evaluation_budget: Exact number of candidate fitness evaluations per
+                evolve call, including initialization. Overrides generations and
+                disables early stopping. Final export validation is separate.
         """
         self.target_curve = target_curve
         self.transition_matrix = zelda_transition_matrix or DEFAULT_ZELDA_TRANSITIONS
         self._has_custom_transition_matrix = zelda_transition_matrix is not None
         self.population_size = population_size
         self.generations = generations
+        if evaluation_budget is not None:
+            if (isinstance(evaluation_budget, bool) or not isinstance(evaluation_budget, Integral)
+                    or evaluation_budget <= 0):
+                raise ValueError("evaluation_budget must be a positive integer.")
+            if enable_rule_credit_assignment:
+                raise ValueError("A fixed candidate budget cannot include uncounted rule-credit probes.")
+        self.evaluation_budget = int(evaluation_budget) if evaluation_budget is not None else None
+        self.candidate_evaluations = 0
         self.mutation_rate = mutation_rate
         self.crossover_rate = crossover_rate
         self.genome_length = genome_length
@@ -502,6 +515,7 @@ class EvolutionaryTopologyGenerator:
         Returns:
             NetworkX Graph with node attributes (type, difficulty) and valid topology
         """
+        self.candidate_evaluations = 0
         if self.search_strategy == "cvt_emitter":
             return self._evolve_cvt_emitter(directed_output=directed_output)
 
@@ -509,9 +523,13 @@ class EvolutionaryTopologyGenerator:
         
         # Initialize population
         population = self._generate_initial_population()
+        if self.evaluation_budget is not None:
+            population = population[:self.evaluation_budget]
         
         # Evolutionary loop
-        for gen in range(self.generations):
+        iteration_limit = (self.generations if self.evaluation_budget is None else
+                           math.ceil(self.evaluation_budget / max(1, self.population_size)))
+        for gen in range(iteration_limit):
             # Evaluate population
             population = self._evaluate_population(population, gen)
             
@@ -548,8 +566,11 @@ class EvolutionaryTopologyGenerator:
                 )
             
             # Check for convergence
-            if best_fitness >= 0.95:
+            if self.evaluation_budget is None and best_fitness >= 0.95:
                 logger.info("Converged at generation %d with fitness %.4f", gen, best_fitness)
+                break
+            if (self.evaluation_budget is not None
+                    and self.candidate_evaluations >= self.evaluation_budget):
                 break
 
             # Generation-level descriptor pressure update to reduce
@@ -558,6 +579,8 @@ class EvolutionaryTopologyGenerator:
             
             # Generate offspring
             offspring = self._generate_offspring(population)
+            if self.evaluation_budget is not None:
+                offspring = offspring[:self.evaluation_budget - self.candidate_evaluations]
             # Critical: offspring must be evaluated before survivor selection.
             # Otherwise all new individuals keep default fitness=0.0 and
             # the search degenerates into selecting only previous parents.
@@ -654,6 +677,12 @@ class EvolutionaryTopologyGenerator:
                 repair_name="gate economy",
             )
             graph = constraint_grammar.ensure_anchor_nodes(graph)
+            graph.sanitize()
+
+        executor = getattr(self, "executor", None)
+        if executor is not None:
+            executor._enforce_max_degree(graph, max_degree=4)
+            executor._enforce_bipartite_cycles(graph)
             graph.sanitize()
 
         try:
@@ -1611,6 +1640,10 @@ class EvolutionaryTopologyGenerator:
 
     def _evaluate_individual(self, individual: Individual, generation: int) -> Individual:
         """Evaluate one individual in-place."""
+        if (self.evaluation_budget is not None
+                and self.candidate_evaluations >= self.evaluation_budget):
+            raise RuntimeError("Candidate evaluation budget exhausted.")
+        self.candidate_evaluations += 1
         individual.phenotype = self.executor.execute(
             individual.genome,
             difficulty=0.5,
@@ -2921,6 +2954,7 @@ class EvolutionaryTopologyGenerator:
                 "realism_tuning": copy.deepcopy(self.realism_tuning),
             },
             "search_contract": {
+                "evaluation_budget": self.evaluation_budget,
                 "population_size": int(self.population_size),
                 "mutation_rate": float(self.mutation_rate),
                 "crossover_rate": float(self.crossover_rate),
@@ -2942,6 +2976,7 @@ class EvolutionaryTopologyGenerator:
                 ),
             },
             "generator_kwargs": {
+                "evaluation_budget": self.evaluation_budget,
                 "target_curve": [float(value) for value in self.target_curve],
                 "zelda_transition_matrix": copy.deepcopy(self.transition_matrix),
                 "population_size": int(self.population_size),
@@ -3194,7 +3229,8 @@ class EvolutionaryTopologyGenerator:
             return self.evolve(directed_output=directed_output)
 
         logger.info("Starting CVT-emitter search...")
-        total_evaluations = max(1, int(self.population_size) * max(1, int(self.generations)))
+        total_evaluations = (self.evaluation_budget if self.evaluation_budget is not None else
+                             max(1, int(self.population_size) * max(1, int(self.generations))))
         init_random = max(8, int(round(self.qd_init_random_fraction * float(total_evaluations))))
         archive = self._load_qd_archive_or_new()
 
@@ -3625,6 +3661,8 @@ class EvolutionaryTopologyGenerator:
         """
         return {
             'best_fitness_history': self.best_fitness_history,
+            'candidate_evaluations': self.candidate_evaluations,
+            'evaluation_budget': self.evaluation_budget,
             'avg_fitness_history': self.avg_fitness_history,
             'diversity_history': self.diversity_history,
             'feasible_ratio_history': self.feasible_ratio_history,

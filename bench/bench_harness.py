@@ -67,14 +67,15 @@ def main():
     args = p.parse_args()
 
     writer = csv.writer(open('bench_results.csv', 'w'))
-    writer.writerow(['solver','map_family','size','seed','repeat','runtime_ms','nodes_expanded','path_len'])
+    writer.writerow(['solver','algorithm','map_family','size','seed','repeat','runtime_ms','nodes_expanded','path_len'])
 
     for r in range(args.repeats):
         grid = generate_map(args.map, args.size, args.seed + r)
         start = (0,0)
         goal = (args.size-1, args.size-1)
         t, nodes, plen = run_once(args.solver, grid, start, goal, allow_diagonal=args.allow_diagonal, allow_corner_cutting=args.allow_corner_cutting)
-        writer.writerow([args.solver, args.map, args.size, args.seed, r, t, nodes, plen])
+        algorithm = 'jump_augmented_astar' if args.solver == 'jps' else 'astar'
+        writer.writerow([args.solver, algorithm, args.map, args.size, args.seed, r, t, nodes, plen])
 
 
 if __name__ == '__main__':

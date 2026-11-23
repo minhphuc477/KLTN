@@ -1,4 +1,4 @@
-﻿"""
+"""
 Test data integrity for Zelda dungeon datasets.
 
 This test suite verifies that dungeon data is consistent:

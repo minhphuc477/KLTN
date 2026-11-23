@@ -1,4 +1,4 @@
-﻿"""
+"""
 Controllability Test
 Measures system responsiveness to user-specified tension curves.
 

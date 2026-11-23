@@ -47,3 +47,33 @@ def test_training_hyperparameter_check_catches_zero_batches_with_drop_last() -> 
 
     assert report["summary"]["status"] == "fail"
     assert "zero_train_batches" in _issues_by_id(report)
+
+
+def test_glmdm_yaml_presets_pass_training_hyperparameter_check() -> None:
+    preset_paths = (
+        "configs/glmdm_canonical.yaml",
+        "configs/glmdm_g_l_local_logic.yaml",
+        "configs/glmdm_g_graph.yaml",
+        "configs/glmdm_n_local.yaml",
+        "configs/zelda_hmolqd_masked_small.yaml",
+    )
+    for preset in preset_paths:
+        config = merge_config(yaml_path=preset, cli_overrides=None)
+        report = build_training_hyperparameter_report(config)
+        assert report["summary"]["issue_counts"]["ERROR"] == 0, preset
+
+
+def test_training_hyperparameter_check_catches_masked_heads_and_rrwp_mismatch() -> None:
+    config = merge_config(yaml_path=None, cli_overrides=None)
+    bad_config = copy.deepcopy(config)
+    bad_config["masked_room"]["hidden_dim"] = 50
+    bad_config["masked_room"]["unet_num_heads"] = 4
+    bad_config["diffusion"]["condition_gnn_type"] = "gcn"
+    bad_config["diffusion"]["condition_use_rrwp_edge_features"] = True
+
+    report = build_training_hyperparameter_report(bad_config)
+    issue_ids = _issues_by_id(report)
+
+    assert report["summary"]["status"] == "fail"
+    assert "masked_room_hidden_heads_not_divisible" in issue_ids
+    assert "rrwp_incompatible_gnn_type" in issue_ids

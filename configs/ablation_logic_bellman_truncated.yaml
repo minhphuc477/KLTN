@@ -8,3 +8,7 @@ training:
 diffusion:
   logic_grid_pathfinder: bellman_ford
   logic_full_coverage: false
+
+masked_room:
+  logic_grid_pathfinder: bellman_ford
+  logic_full_coverage: false

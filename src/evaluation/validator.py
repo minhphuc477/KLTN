@@ -13,7 +13,7 @@ Components:
 3. Path Verifier: Validates key collection sequences
 
 Integration with existing KLTN pathfinding:
-    Uses ZeldaPathfinder from zelda_pathfinder.py for state-space search.
+    Uses canonical state-space search from src/simulation/validator.py.
 
 """
 
@@ -47,6 +47,7 @@ def _is_start_node(data: Dict[str, Any], label_parts: List[str]) -> bool:
     return (
         bool({"s", "start"} & lowered_parts)
         or bool(data.get("is_start", False))
+        or bool(data.get("is_entry", False))
         or node_type in {"start", "start_pointer"}
     )
 
@@ -69,6 +70,7 @@ class ValidationState:
     """State for validation pathfinding."""
     position: Any                   # Current graph node
     keys_held: int = 0              # Number of keys in inventory
+    bomb_count: int = 0             # Finite bombs in an explicit mission inventory
     keys_collected: Set[Any] = field(default_factory=set)  # Node IDs where keys collected
     key_ids_held: Set[Any] = field(default_factory=set)  # Specific consumable key identities
     boss_key_ids: Set[Any] = field(default_factory=set)  # Permanent boss-key identities
@@ -89,6 +91,7 @@ class ValidationState:
         return ValidationState(
             position=self.position,
             keys_held=self.keys_held,
+            bomb_count=self.bomb_count,
             keys_collected=self.keys_collected.copy(),
             key_ids_held=self.key_ids_held.copy(),
             boss_key_ids=self.boss_key_ids.copy(),
@@ -110,6 +113,7 @@ class ValidationState:
         return hash((
             self.position,
             self.keys_held,
+            self.bomb_count,
             frozenset(self.keys_collected),
             frozenset(self.key_ids_held),
             frozenset(self.boss_key_ids),
@@ -131,6 +135,7 @@ class ValidationState:
             return False
         return (self.position == other.position and
                 self.keys_held == other.keys_held and
+                self.bomb_count == other.bomb_count and
                 self.keys_collected == other.keys_collected and
                 self.key_ids_held == other.key_ids_held and
                 self.boss_key_ids == other.boss_key_ids and
@@ -326,12 +331,18 @@ class AgentSimulator:
             if _is_goal_node(data, label_parts):
                 self.goal_node = node_id
 
+        from src.simulation.graph_progression import required_switch_ids
+        relevant = required_switch_ids(graph)
+        if relevant is not None:
+            self.switch_nodes = {node: ids for node, ids in self.switch_nodes.items() if ids & relevant}
+
     @staticmethod
     def _state_key(state: ValidationState) -> Tuple[Any, ...]:
         """Immutable search key; set/dict equality now handles hash collisions."""
         return (
             state.position,
             state.keys_held,
+            state.bomb_count,
             frozenset(state.keys_collected),
             frozenset(state.key_ids_held),
             frozenset(state.boss_key_ids),
@@ -361,6 +372,8 @@ class AgentSimulator:
         if state_a.keys_collected != state_b.keys_collected:
             return False
         if state_a.keys_held < state_b.keys_held:
+            return False
+        if state_a.bomb_count < state_b.bomb_count:
             return False
         if not state_a.key_ids_held.issuperset(state_b.key_ids_held):
             return False
@@ -425,6 +438,10 @@ class AgentSimulator:
             for existing, existing_cost in frontier
         )
     
+    def initial_state(self, node):
+        from src.simulation.graph_progression import starting_bomb_count
+        return ValidationState(position=node, bomb_count=starting_bomb_count(self.graph, 0))
+
     def can_traverse(
         self,
         from_node: Any,
@@ -453,6 +470,28 @@ class AgentSimulator:
         if edge_data is None:
             return False, state, 'none'
         edge_data = self._edge_data_with_endpoint_requirements(to_node, dict(edge_data))
+        if 'initial_inventory' in self.graph.graph and not self.strict_mode:
+            from types import SimpleNamespace
+            from src.simulation.graph_progression import apply_graph_gate
+            from src.simulation.state import GameState
+            tile_state = GameState(
+                position=(0, 0), keys=state.keys_held, bomb_count=state.bomb_count,
+                has_boss_key=state.has_boss_key, has_item=state.has_item,
+                item_names=set(state.item_names), switches_activated=set(state.switches_activated),
+                opened_graph_edges=set(state.doors_opened),
+            )
+            # Graph rooms abstract away internal combat; the physical oracle
+            # must separately establish room clearing on actual enemy tiles.
+            gate_env = SimpleNamespace(graph=self.graph, node_to_room={from_node: from_node},
+                                       _is_room_cleared=lambda _room, _state: True)
+            allowed, candidate = apply_graph_gate(gate_env, tile_state, from_node, to_node,
+                                                 edge_data_override=edge_data)
+            if not allowed:
+                return False, state, str(edge_data.get('edge_type', 'open'))
+            result = state.copy()
+            result.keys_held, result.bomb_count = candidate.keys, candidate.bomb_count
+            result.doors_opened = set(candidate.opened_graph_edges)
+            return True, result, str(edge_data.get('edge_type', 'open'))
         
         edge_label = edge_data.get('label', '')
         raw_edge_type = edge_data.get(
@@ -629,7 +668,7 @@ class AgentSimulator:
         if edge_type in ('one_way',):
             return True, new_state, 'one_way'
         
-        if edge_type in ('stair', 'stairs', 'warp', 's'):
+        if edge_type in ('stair', 'stairs', 'warp'):
             # Teleport/stair, always traversable
             return True, new_state, 'stair'
 
@@ -747,7 +786,7 @@ class AgentSimulator:
         state = (
             start_state.copy()
             if start_state is not None
-            else ValidationState(position=path[0])
+            else self.initial_state(path[0])
         )
         state.position = path[0]
         state = self.collect_items(path[0], state)
@@ -844,7 +883,7 @@ class AgentSimulator:
             )
         
         # Initialize
-        initial_state = ValidationState(position=start)
+        initial_state = self.initial_state(start)
         initial_state = self.collect_items(start, initial_state)
         initial_key = self._state_key(initial_state)
         
@@ -924,7 +963,11 @@ class AgentSimulator:
                             sum(self.key_nodes[node_id][0] for node_id in replay_state.keys_collected)
                             - replay_state.keys_held
                         ),
-                        'doors_opened': len(replay_state.doors_opened) // 2,
+                        'doors_opened': (
+                            len(replay_state.doors_opened)
+                            if self.graph.graph.get('initial_inventory') is not None
+                            else len(replay_state.doors_opened) // 2
+                        ),
                         'states_pruned_dominated': dominated_states_pruned,
                     }
                 )
@@ -1007,7 +1050,7 @@ class AgentSimulator:
         *,
         max_states: int = 100000,
     ) -> Dict[str, Any]:
-        """Exhaust the resource-state space once and report reachable graph nodes."""
+        """Prove node coverage, stopping once every graph node has a witness."""
         start = self.start_node if start_node is None else start_node
         if start is None:
             return {
@@ -1018,7 +1061,7 @@ class AgentSimulator:
                 "failure_reason": "No start node defined",
             }
 
-        initial = self.collect_items(start, ValidationState(position=start))
+        initial = self.collect_items(start, self.initial_state(start))
         queue = deque([initial])
         visited: Set[Tuple[Any, ...]] = set()
         reachable_nodes: Set[Any] = set()
@@ -1044,6 +1087,15 @@ class AgentSimulator:
             visited.add(state_key)
             states_explored += 1
             reachable_nodes.add(current.position)
+            if len(reachable_nodes) == self.graph.number_of_nodes():
+                return {
+                    'reachable_nodes': reachable_nodes,
+                    'states_explored': states_explored,
+                    'termination_status': 'all_nodes_reached',
+                    'complete': True,
+                    'states_pruned_dominated': dominated_states_pruned,
+                    'failure_reason': '',
+                }
 
             for neighbor in self.graph.neighbors(current.position):
                 can_go, new_state, _edge_type = self.can_traverse(

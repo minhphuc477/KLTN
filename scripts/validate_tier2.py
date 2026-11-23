@@ -1,4 +1,4 @@
-﻿"""
+"""
 Quick Validation Script for TIER 2 & 3 Features
 ===============================================
 

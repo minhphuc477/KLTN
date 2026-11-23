@@ -2,6 +2,3 @@
 opencv-python>=4.5.5.64
 Pillow>=9.0.0
 numpy>=1.19
-
-# Optional (faster image IO / plotting in CI)
-imageio

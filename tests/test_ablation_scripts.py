@@ -123,3 +123,13 @@ def test_model_architecture_manifest_includes_masked_graph_attention_ablations(t
         "masked_graph_cross_attention_linear",
     }
     assert all(run["required_metrics"] == ["epoch", "loss", "val_loss"] for run in masked_runs)
+
+
+def test_extended_experiment_set_includes_discrete_masked() -> None:
+    from scripts.run_ablation_study import build_experiment_set
+
+    configs = build_experiment_set(include_extended=True)
+    by_name = {cfg.name: cfg for cfg in configs}
+
+    assert "DISCRETE_MASKED" in by_name
+    assert by_name["DISCRETE_MASKED"].room_generator_mode == "discrete_masked"

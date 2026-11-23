@@ -51,6 +51,15 @@ def graph_edge_state_key(graph: Any, source: Any, target: Any) -> Tuple[Any, Any
         forward = graph.get_edge_data(source, target, {}) or {}
         reverse = graph.get_edge_data(target, source, {}) or {}
         shares_reverse_identity = _has_implied_reverse(forward) or _has_implied_reverse(reverse)
+        forward_meta = forward.get('metadata', {})
+        reverse_meta = reverse.get('metadata', {})
+        if isinstance(forward_meta, Mapping) and isinstance(reverse_meta, Mapping):
+            shares_reverse_identity |= bool(
+                forward_meta.get('shared_physical_door')
+                and reverse_meta.get('shared_physical_door')
+                and forward_meta.get('physical_door_owner') in (source, target)
+                and forward_meta.get('physical_door_owner') == reverse_meta.get('physical_door_owner')
+            )
     if not shares_reverse_identity:
         return ordered
     return tuple(sorted(ordered, key=lambda value: (type(value).__name__, str(value))))
@@ -60,10 +69,18 @@ def edge_constraints_from_data(edge_data: Optional[Dict[str, Any]]) -> List[str]
     """Return canonical edge constraints from edge attributes."""
     if not edge_data:
         return ["open"]
-    return parse_edge_type_tokens(
+    constraints = parse_edge_type_tokens(
         label=edge_data.get("label", ""),
         edge_type=edge_data.get("edge_type", edge_data.get("type", "")),
     )
+    explicit = edge_data.get("edge_constraints", ())
+    if isinstance(explicit, str):
+        explicit = [explicit]
+    if isinstance(explicit, (list, tuple, set, frozenset)):
+        for value in explicit:
+            constraints.extend(parse_edge_type_tokens(edge_type=str(value)))
+    constraints = list(dict.fromkeys(constraints))
+    return [value for value in constraints if value != "open"] or ["open"]
 
 
 def edge_type_from_data(edge_data: Optional[Dict[str, Any]]) -> str:

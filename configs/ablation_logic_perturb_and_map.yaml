@@ -6,3 +6,6 @@ training:
 
 diffusion:
   logic_grid_pathfinder: perturb_and_map
+
+masked_room:
+  logic_grid_pathfinder: perturb_and_map

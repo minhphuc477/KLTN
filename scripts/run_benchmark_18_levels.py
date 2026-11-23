@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 Full 18-Level Nintendo Zelda CBS+ Benchmark
 ============================================

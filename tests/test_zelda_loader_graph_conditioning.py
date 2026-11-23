@@ -15,8 +15,9 @@ from src.core.definitions import (
     SEMANTIC_PALETTE,
 )
 from src.generation.grammar import EdgeType
+from src.pipeline.generation.room_processing import _topological_generation_layers
 from src.pipeline.graph_features import compute_rrwp_edge_features
-from src.pipeline.spatial_utils import fit_room_grid
+from src.pipeline.spatial_utils import causal_generation_layers, fit_room_grid
 from src.pipeline.room_topology_conditioning import (
     ROOM_TOPOLOGY_CHANNELS,
     _state_key,
@@ -239,6 +240,71 @@ def test_room_graph_sample_builds_room_topology_from_dataset_graph():
     assert float(sample["logic_target_mask"].sum()) > 0.0
 
 
+def test_room_neighbor_maps_match_causal_generation_availability():
+    graph = nx.DiGraph()
+    graph.add_nodes_from((10, 20, 30))
+    graph.add_edges_from(((10, 20), (20, 30), (30, 10)))
+
+    rooms = {}
+    for column, node_id in enumerate((10, 20, 30)):
+        rooms[(0, column)] = SimpleNamespace(
+            semantic_grid=np.full((ROOM_HEIGHT, ROOM_WIDTH), node_id, dtype=np.int32),
+            doors={"N": False, "S": False, "E": column < 2, "W": column > 0},
+            has_boss=False,
+            has_triforce=node_id == 30,
+            is_start=node_id == 10,
+            graph_node_id=node_id,
+            node_label="",
+        )
+    dungeon = SimpleNamespace(graph=graph, rooms=rooms)
+    base_graph = _extract_graph_from_dungeon(dungeon)
+
+    first = _build_room_graph_sample(dungeon, (0, 0), rooms[(0, 0)], base_graph)
+    middle = _build_room_graph_sample(dungeon, (0, 1), rooms[(0, 1)], base_graph)
+
+    assert all(room_map is None for room_map in first["neighbor_maps"].values())
+    assert middle["neighbor_maps"]["W"] is not None
+    assert np.all(middle["neighbor_maps"]["W"] == 10)
+    assert middle["neighbor_maps"]["E"] is None
+
+
+def test_cyclic_generation_fallback_uses_singleton_causal_layers():
+    graph = nx.DiGraph()
+    graph.add_edges_from(((30, 10), (10, 20), (20, 30)))
+
+    assert causal_generation_layers(graph) == [[10], [20], [30]]
+    assert _topological_generation_layers(None, graph) == [[10], [20], [30]]
+
+
+def test_room_boundary_uses_mission_edges_not_layout_adjacency():
+    graph = nx.DiGraph()
+    graph.add_nodes_from((10, 20))
+    graph.add_edge(10, 10)
+    rooms = {
+        (0, 0): SimpleNamespace(
+            semantic_grid=np.zeros((ROOM_HEIGHT, ROOM_WIDTH), dtype=np.int32),
+            doors={"N": False, "S": False, "E": True, "W": False},
+            graph_node_id=10,
+            node_label="",
+        ),
+        (0, 1): SimpleNamespace(
+            semantic_grid=np.ones((ROOM_HEIGHT, ROOM_WIDTH), dtype=np.int32),
+            doors={"N": False, "S": False, "E": False, "W": True},
+            graph_node_id=20,
+            node_label="",
+        ),
+    }
+    dungeon = SimpleNamespace(graph=graph, rooms=rooms)
+    base_graph = _extract_graph_from_dungeon(dungeon)
+
+    sample = _build_room_graph_sample(dungeon, (0, 0), rooms[(0, 0)], base_graph)
+
+    assert np.count_nonzero(sample["boundary_constraints"]) == 0
+    assert all(room_map is None for room_map in sample["neighbor_maps"].values())
+    assert float(sample["logic_source_mask"].sum()) == 0.0
+    assert float(sample["logic_target_mask"].sum()) == 0.0
+
+
 def test_dataset_graph_extraction_pairs_identified_key_with_locked_gate():
     graph = nx.DiGraph()
     graph.add_node(10, label="s", type="START", is_start=True)
@@ -287,6 +353,60 @@ def test_dataset_graph_extraction_stably_indexes_mixed_node_id_types():
     assert extracted["edge_index"].tolist() == [[0], [1]]
     assert extracted["start_node_id"] == 0
     assert extracted["target_idx"] == 1
+
+
+def test_graph_extraction_maps_virtual_nodes_to_physical_room_passability():
+    graph = nx.DiGraph()
+    graph.add_node(10, label="s", is_start=True)
+    graph.add_node(20, label="e,i", is_virtual=True, virtual_parent=10)
+    graph.add_node(30, label="t", is_triforce=True)
+    graph.add_edge(10, 20, edge_type="PATH")
+    graph.add_edge(20, 30, edge_type="PATH")
+    dungeon = SimpleNamespace(
+        graph=graph,
+        rooms={
+            (2, 3): SimpleNamespace(graph_node_id=10),
+            (2, 4): SimpleNamespace(graph_node_id=30),
+        },
+    )
+
+    extracted = _extract_graph_from_dungeon(dungeon)
+    physical_idx = extracted["node_to_idx"][10]
+    virtual_idx = extracted["node_to_idx"][20]
+
+    assert extracted["node_passability_parent_idx"][physical_idx] == physical_idx
+    assert extracted["node_passability_parent_idx"][virtual_idx] == physical_idx
+    assert np.array_equal(
+        extracted["node_positions"][virtual_idx],
+        extracted["node_positions"][physical_idx],
+    )
+
+
+def test_graph_extraction_resolves_unmarked_semantic_nodes_by_topology():
+    graph = nx.DiGraph()
+    graph.add_node(0, label="s", is_start=True)
+    graph.add_node(1, label="e")  # no rendered room and no legacy virtual flag
+    graph.add_node(2, label="t", is_triforce=True)
+    graph.add_edge(0, 1, edge_type="PATH")
+    graph.add_edge(1, 2, edge_type="PATH")
+    dungeon = SimpleNamespace(
+        graph=graph,
+        rooms={
+            (0, 0): SimpleNamespace(graph_node_id=0),
+            (0, 2): SimpleNamespace(graph_node_id=2),
+        },
+    )
+
+    extracted = _extract_graph_from_dungeon(dungeon)
+    semantic_idx = extracted["node_to_idx"][1]
+    start_idx = extracted["node_to_idx"][0]
+
+    # Equal-distance ties are deterministic under canonical node order.
+    assert extracted["node_passability_parent_idx"][semantic_idx] == start_idx
+    assert np.array_equal(
+        extracted["node_positions"][semantic_idx],
+        extracted["node_positions"][start_idx],
+    )
 
 
 def test_room_graph_sample_resolves_symbolic_sector_theme_into_style_id():
@@ -1012,3 +1132,115 @@ def test_room_graph_sample_oracle_mode_uses_validator_plan_for_soft_locked_enemy
     traversability = sample["room_topology_map"][ROOM_TOPOLOGY_CHANNELS["traversability"]]
 
     assert traversability[6, 3] == 1.0
+
+
+def test_apply_room_symmetry_transform_v4_group_and_involution():
+    from src.zelda_data.zelda_loader import apply_room_symmetry_transform
+
+    h, w = ROOM_HEIGHT, ROOM_WIDTH  # 11, 16
+    raw_grid = torch.arange(h * w, dtype=torch.float32).reshape(1, h, w)
+
+    # Synthetic graph dict with all conditioning modalities
+    topo_map = torch.zeros(ROOM_TOPOLOGY_CHANNEL_COUNT, h, w, dtype=torch.float32)
+    # Put distinct directional markers
+    c_north = ROOM_TOPOLOGY_CHANNELS["door_n"]
+    c_south = ROOM_TOPOLOGY_CHANNELS["door_s"]
+    c_east = ROOM_TOPOLOGY_CHANNELS["door_e"]
+    c_west = ROOM_TOPOLOGY_CHANNELS["door_w"]
+    topo_map[c_north, 2, 4] = 1.0
+    topo_map[c_south, 8, 4] = 2.0
+    topo_map[c_east, 5, 2] = 3.0
+    topo_map[c_west, 5, 8] = 4.0
+
+    # Boundary constraints: [has_N, req_N, has_S, req_S, has_E, req_E, has_W, req_W]
+    b_const = torch.tensor([1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0], dtype=torch.float32)
+
+    puzzle_cond = {
+        "stage_trace_mask": np.zeros((h, w), dtype=np.float32),
+        "controlled_doors": ["door:N", "door:E"],
+        "stage_sequence": [
+            {"name": "puzzle_step", "local_anchor": [2, 4]},
+        ],
+    }
+    puzzle_cond["stage_trace_mask"][2, 4] = 5.0
+
+    graph_dict = {
+        "boundary_constraints": b_const.clone(),
+        "room_topology_map": topo_map.clone(),
+        "puzzle_stage_condition": puzzle_cond,
+        "node_features": torch.randn(3, GRAPH_NODE_FEATURE_DIM),
+        "edge_index": torch.tensor([[0, 1], [1, 2]], dtype=torch.long),
+    }
+
+    # 1. Identity transform
+    grid_none, gd_none = apply_room_symmetry_transform(raw_grid.clone(), graph_dict, flip_h=False, flip_v=False)
+    assert torch.equal(grid_none, raw_grid)
+    assert torch.equal(gd_none["boundary_constraints"], b_const)
+
+    # 2. Horizontal flip
+    grid_h, gd_h = apply_room_symmetry_transform(raw_grid.clone(), graph_dict, flip_h=True, flip_v=False)
+    assert grid_h.shape == (1, h, w)
+    assert torch.equal(grid_h, torch.flip(raw_grid, dims=[-1]))
+    # E and W swapped: [has_N, req_N, has_S, req_S, has_W, req_W, has_E, req_E]
+    expected_b_h = torch.tensor([1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0], dtype=torch.float32)
+    assert torch.equal(gd_h["boundary_constraints"], expected_b_h)
+    # Directional channels: east <-> west swapped, horizontal spatial flip
+    assert gd_h["room_topology_map"][c_east, 5, w - 1 - 8] == 4.0
+    assert gd_h["room_topology_map"][c_west, 5, w - 1 - 2] == 3.0
+    # Puzzle cond: door:E -> door:W
+    assert "door:W" in gd_h["puzzle_stage_condition"]["controlled_doors"]
+    assert "door:E" not in gd_h["puzzle_stage_condition"]["controlled_doors"]
+    assert gd_h["puzzle_stage_condition"]["stage_sequence"][0]["local_anchor"] == [2, w - 1 - 4]
+
+    # 3. Vertical flip
+    grid_v, gd_v = apply_room_symmetry_transform(raw_grid.clone(), graph_dict, flip_h=False, flip_v=True)
+    assert grid_v.shape == (1, h, w)
+    assert torch.equal(grid_v, torch.flip(raw_grid, dims=[-2]))
+    # N and S swapped: [has_S, req_S, has_N, req_N, has_E, req_E, has_W, req_W]
+    expected_b_v = torch.tensor([0.0, 1.0, 1.0, 0.0, 1.0, 1.0, 0.0, 0.0], dtype=torch.float32)
+    assert torch.equal(gd_v["boundary_constraints"], expected_b_v)
+    # Directional channels: north <-> south swapped, vertical spatial flip
+    assert gd_v["room_topology_map"][c_north, h - 1 - 8, 4] == 2.0
+    assert gd_v["room_topology_map"][c_south, h - 1 - 2, 4] == 1.0
+    # Puzzle cond: door:N -> door:S
+    assert "door:S" in gd_v["puzzle_stage_condition"]["controlled_doors"]
+    assert "door:N" not in gd_v["puzzle_stage_condition"]["controlled_doors"]
+    assert gd_v["puzzle_stage_condition"]["stage_sequence"][0]["local_anchor"] == [h - 1 - 2, 4]
+
+    # 4. Involution property: h(h(x)) == x, v(v(x)) == x, hv(hv(x)) == x
+    grid_hh, gd_hh = apply_room_symmetry_transform(grid_h, gd_h, flip_h=True, flip_v=False)
+    assert torch.equal(grid_hh, raw_grid)
+    assert torch.equal(gd_hh["boundary_constraints"], b_const)
+    assert torch.equal(gd_hh["room_topology_map"], topo_map)
+
+    grid_vv, gd_vv = apply_room_symmetry_transform(grid_v, gd_v, flip_h=False, flip_v=True)
+    assert torch.equal(grid_vv, raw_grid)
+    assert torch.equal(gd_vv["boundary_constraints"], b_const)
+    assert torch.equal(gd_vv["room_topology_map"], topo_map)
+
+    grid_hv, gd_hv = apply_room_symmetry_transform(raw_grid.clone(), graph_dict, flip_h=True, flip_v=True)
+    grid_hvhv, gd_hvhv = apply_room_symmetry_transform(grid_hv, gd_hv, flip_h=True, flip_v=True)
+    assert torch.equal(grid_hvhv, raw_grid)
+    assert torch.equal(gd_hvhv["boundary_constraints"], b_const)
+    assert torch.equal(gd_hvhv["room_topology_map"], topo_map)
+
+
+def test_compute_room_tile_frequencies():
+    from src.zelda_data.zelda_loader import compute_room_tile_frequencies
+
+    # Create dummy rooms with known distribution
+    room1 = np.zeros((11, 16), dtype=np.int64)  # 176 tile 0s
+    room2 = np.ones((11, 16), dtype=np.int64)   # 176 tile 1s
+    room2[0, 0] = 7                             # 1 tile 7
+
+    freqs = compute_room_tile_frequencies([room1, room2], num_classes=16)
+    assert isinstance(freqs, torch.Tensor)
+    assert freqs.shape == (16,)
+    assert torch.isfinite(freqs).all()
+    assert (freqs >= 0).all()
+    # tile 0 and 1 have substantial counts, tile 7 has 1, tile 5 has 0
+    assert freqs[0] > freqs[7]
+    assert freqs[1] > freqs[7]
+    assert freqs[7] > freqs[5]
+    assert freqs[5] == 0.0
+    assert freqs.sum().item() == pytest.approx(1.0, rel=1e-3)

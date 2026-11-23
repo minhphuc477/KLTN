@@ -170,10 +170,30 @@ class EntitySpawner:
             ))
         
         elif room_semantics.room_type == 'boss':
-            # Boss room: single powerful enemy in center
-            entities.extend(self._spawn_boss_room(
-                spawn_candidates, room_semantics, room_bounds
-            ))
+            existing_boss = (
+                np.argwhere(room_grid[1:-1, 1:-1] == int(SEMANTIC_PALETTE['BOSS']))
+                if room_grid.shape[0] > 2 and room_grid.shape[1] > 2
+                else np.empty((0, 2), dtype=np.int64)
+            )
+            if len(existing_boss) > 0:
+                by, bx = int(existing_boss[0][0]) + 1, int(existing_boss[0][1]) + 1
+                entities.append(Entity(
+                    EntityType.ENEMY_BOSS,
+                    bx + room_bounds[0],
+                    by + room_bounds[1],
+                    room_semantics.node_id,
+                    {
+                        'hp': 200,
+                        'damage': 30,
+                        'boss_id': room_semantics.node_id,
+                        'name': f'Boss_{room_semantics.node_id}',
+                    },
+                ))
+            else:
+                # Boss room: single powerful enemy in center
+                entities.extend(self._spawn_boss_room(
+                    spawn_candidates, room_semantics, room_bounds
+                ))
         
         elif room_semantics.room_type == 'treasure':
             # Treasure room: chest + maybe weak guard
@@ -207,11 +227,40 @@ class EntitySpawner:
             if chest is not None:
                 entities.append(chest)
         
-        # Step 3: Spawn key(s) using explicit hint when provided.
+        # Step 3: Spawn key(s) using explicit hint when provided, binding to
+        # already-materialized interior key tiles before adding new ones.
         key_spawn_count = int(max(0, room_semantics.key_count_hint))
         if key_spawn_count <= 0 and room_semantics.has_key:
             key_spawn_count = 1
-        for key_idx in range(key_spawn_count):
+        key_tile_id = int(
+            SEMANTIC_PALETTE['KEY_BOSS']
+            if room_semantics.key_kind == 'boss'
+            else SEMANTIC_PALETTE['KEY_SMALL']
+        )
+        existing_keys = (
+            np.argwhere(room_grid[1:-1, 1:-1] == key_tile_id)
+            if room_grid.shape[0] > 2 and room_grid.shape[1] > 2
+            else np.empty((0, 2), dtype=np.int64)
+        )
+        key_entity_type = (
+            EntityType.KEY_BOSS if room_semantics.key_kind == 'boss' else EntityType.KEY
+        )
+        reused_keys = min(len(existing_keys), key_spawn_count)
+        for key_idx in range(reused_keys):
+            ky, kx = int(existing_keys[key_idx][0]) + 1, int(existing_keys[key_idx][1]) + 1
+            entities.append(Entity(
+                key_entity_type,
+                kx + room_bounds[0],
+                ky + room_bounds[1],
+                room_semantics.node_id,
+                {
+                    'key_id': f"{room_semantics.node_id}:{int(key_idx)}" if key_spawn_count > 1 else room_semantics.node_id,
+                    'key_index': int(key_idx),
+                    'total_keys': int(max(1, key_spawn_count)),
+                    'unlocks': 'door',
+                },
+            ))
+        for key_idx in range(reused_keys, key_spawn_count):
             key_entity = self._spawn_key(
                 spawn_candidates,
                 entities,
@@ -224,15 +273,30 @@ class EntitySpawner:
                 break
             entities.append(key_entity)
 
-        if room_semantics.progression_item and room_semantics.key_kind == 'item':
-            item_entity = self._spawn_progression_item(
-                spawn_candidates,
-                entities,
-                room_semantics,
-                room_bounds,
+        if room_semantics.progression_item:
+            existing_items = (
+                np.argwhere(room_grid[1:-1, 1:-1] == int(SEMANTIC_PALETTE['KEY_ITEM']))
+                if room_grid.shape[0] > 2 and room_grid.shape[1] > 2
+                else np.empty((0, 2), dtype=np.int64)
             )
-            if item_entity is not None:
-                entities.append(item_entity)
+            if len(existing_items) > 0:
+                iy, ix = int(existing_items[0][0]) + 1, int(existing_items[0][1]) + 1
+                entities.append(Entity(
+                    EntityType.KEY_ITEM,
+                    ix + room_bounds[0],
+                    iy + room_bounds[1],
+                    room_semantics.node_id,
+                    {'item_type': str(room_semantics.progression_item or 'KEY_ITEM')},
+                ))
+            else:
+                item_entity = self._spawn_progression_item(
+                    spawn_candidates,
+                    entities,
+                    room_semantics,
+                    room_bounds,
+                )
+                if item_entity is not None:
+                    entities.append(item_entity)
         
         logger.info(f"Room {room_semantics.node_id}: Spawned {len(entities)} entities")
         
@@ -657,7 +721,7 @@ def create_room_semantics_from_graph(
         raw_type = str(attrs.get('type', '') or '').strip().lower()
         label_tokens = set(parse_node_label_tokens(str(attrs.get('label', '') or '')))
 
-        is_start = bool(attrs.get('is_start')) or ('s' in label_tokens) or ('start' in label_tokens) or nid == 0
+        is_start = bool(attrs.get('is_start')) or ('s' in label_tokens) or ('start' in label_tokens)
         if is_start:
             return 'start'
 
@@ -672,7 +736,7 @@ def create_room_semantics_from_graph(
         if raw_type in {'enemy', 'arena', 'mini_boss', 'miniboss'} or 'e' in label_tokens or 'enemy' in label_tokens:
             return 'combat'
 
-        if raw_type in {'puzzle', 'switch', 'tutorial_puzzle', 'combat_puzzle', 'complex_puzzle'} or 'p' in label_tokens:
+        if raw_type in {'puzzle', 'switch', 'tutorial_puzzle', 'combat_puzzle', 'complex_puzzle'} or label_tokens & {'p', 'switch', 'puzzle'}:
             return 'puzzle'
 
         if raw_type in {'item', 'treasure', 'key', 'big_key', 'boss_key'} or bool(attrs.get('has_treasure')):
@@ -700,19 +764,19 @@ def create_room_semantics_from_graph(
     has_key = bool(node_data.get('has_key', False))
     key_kind = 'small'
     progression_item: Optional[str] = None
-    if node_type in {'big_key', 'boss_key'}:
+    if node_type in {'big_key', 'boss_key'} or node_data.get('has_boss_key') or 'K' in label_tokens:
         has_key = True
         key_kind = 'boss'
-    elif node_type in {'item', 'key_item', 'macro_item', 'protection_item'}:
-        has_key = False
-        key_kind = 'item'
+    if node_type in {'item', 'key_item', 'macro_item', 'protection_item'} or node_data.get('has_item') or 'I' in label_tokens:
+        if key_kind != 'boss':
+            key_kind = 'item'
         progression_item = str(
             node_data.get('item_type')
             or node_data.get('required_item')
             or node_data.get('protection_item_id')
             or 'KEY_ITEM'
         )
-    elif ('k' in label_tokens) or ('key' in label_tokens) or node_type == 'key':
+    if ('k' in label_tokens) or ('key' in label_tokens) or node_type == 'key':
         has_key = True
     key_count_hint = _as_nonneg_int(
         node_data.get('key_count_hint', node_data.get('key_count', 0)),

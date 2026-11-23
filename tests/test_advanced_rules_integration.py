@@ -1011,6 +1011,170 @@ def test_quick_smoke_test():
     print("\nQuick smoke test passed")
 
 
+def test_progression_validation_and_repair_cover_on_off_gate_and_hazard_edges():
+    """Verify ON_OFF_GATE and HAZARD progression validation & repair handle pre-gate providers."""
+    grammar = MissionGrammar(seed=42)
+
+    # 1) ON_OFF_GATE with switch behind the gate must fail validation and repair cleanly.
+    gate_graph = MissionGraph()
+    gate_graph.add_node(MissionNode(id=0, node_type=NodeType.START))
+    gate_graph.add_node(MissionNode(id=1, node_type=NodeType.SWITCH, switch_id=7))
+    gate_graph.add_node(MissionNode(id=2, node_type=NodeType.GOAL))
+    gate_graph.edges.append(MissionEdge(0, 1, EdgeType.ON_OFF_GATE, switch_id=7))
+    gate_graph.add_edge(1, 2, EdgeType.PATH)
+    gate_graph.sanitize()
+
+    assert not grammar.validate_progression_constraints(gate_graph, log_failures=False)
+    repaired_gate = grammar._repair_progression_constraints(gate_graph)
+    assert repaired_gate.edges[0].edge_type == EdgeType.PATH
+    assert grammar.validate_progression_constraints(repaired_gate, log_failures=False)
+
+    # Placing matching switch pre-gate passes ON_OFF_GATE validation.
+    valid_gate = MissionGraph()
+    valid_gate.add_node(MissionNode(id=0, node_type=NodeType.START))
+    valid_gate.add_node(MissionNode(id=1, node_type=NodeType.SWITCH, switch_id=7))
+    valid_gate.add_node(MissionNode(id=2, node_type=NodeType.GOAL))
+    valid_gate.add_edge(0, 1, EdgeType.PATH)
+    valid_gate.edges.append(MissionEdge(1, 2, EdgeType.ON_OFF_GATE, switch_id=7))
+    valid_gate.sanitize()
+    assert grammar.validate_progression_constraints(valid_gate, log_failures=False)
+
+    # 2) HAZARD with post-gate PROTECTION_ITEM must fail validation and repair hazard_damage -> 0.
+    hazard_graph = MissionGraph()
+    hazard_graph.add_node(MissionNode(id=0, node_type=NodeType.START))
+    hazard_graph.add_node(MissionNode(id=1, node_type=NodeType.PROTECTION_ITEM, item_type="FLIPPERS"))
+    hazard_graph.add_node(MissionNode(id=2, node_type=NodeType.GOAL))
+    hazard_graph.edges.append(
+        MissionEdge(0, 1, EdgeType.HAZARD, protection_item_id="FLIPPERS", hazard_damage=2)
+    )
+    hazard_graph.add_edge(1, 2, EdgeType.PATH)
+    hazard_graph.sanitize()
+
+    assert not grammar.validate_progression_constraints(hazard_graph, log_failures=False)
+    repaired_hazard = grammar._repair_progression_constraints(hazard_graph)
+    assert repaired_hazard.edges[0].edge_type == EdgeType.PATH
+    assert repaired_hazard.edges[0].protection_item_id is None
+    assert repaired_hazard.edges[0].hazard_damage == 0
+    assert grammar.validate_progression_constraints(repaired_hazard, log_failures=False)
+
+    # Placing PROTECTION_ITEM pre-gate satisfies HAZARD validation.
+    valid_hazard = MissionGraph()
+    valid_hazard.add_node(MissionNode(id=0, node_type=NodeType.START))
+    valid_hazard.add_node(MissionNode(id=1, node_type=NodeType.PROTECTION_ITEM, item_type="FLIPPERS"))
+    valid_hazard.add_node(MissionNode(id=2, node_type=NodeType.GOAL))
+    valid_hazard.add_edge(0, 1, EdgeType.PATH)
+    valid_hazard.edges.append(
+        MissionEdge(1, 2, EdgeType.HAZARD, protection_item_id="FLIPPERS", hazard_damage=2)
+    )
+    valid_hazard.sanitize()
+    assert grammar.validate_progression_constraints(valid_hazard, log_failures=False)
+
+
+def test_branch_rule_skips_start_and_goal():
+    from src.generation.grammar.core_rules import BranchRule
+
+    rule = BranchRule()
+
+    # Graph with only START and GOAL
+    g = MissionGraph()
+    g.add_node(MissionNode(id=0, node_type=NodeType.START))
+    g.add_node(MissionNode(id=1, node_type=NodeType.GOAL))
+    g.add_edge(0, 1, EdgeType.PATH)
+    g.sanitize()
+
+    # Neither START nor GOAL can be branched from
+    assert not rule.can_apply(g, context={})
+
+    # Adding an EMPTY node allows branching
+    g.add_node(MissionNode(id=2, node_type=NodeType.EMPTY))
+    g.add_edge(0, 2, EdgeType.PATH)
+    g.sanitize()
+    assert rule.can_apply(g, context={})
+
+
+def test_branch_rule_and_insert_switch_rule_sanitize_graph():
+    from src.generation.grammar.core_rules import BranchRule
+    import random
+
+    rng = random.Random(42)
+
+    # Test BranchRule.apply sanitizes
+    g = MissionGraph()
+    g.add_node(MissionNode(id=0, node_type=NodeType.START, position=(0, 0, 0)))
+    g.add_node(MissionNode(id=1, node_type=NodeType.EMPTY, position=(0, 1, 0)))
+    g.add_node(MissionNode(id=2, node_type=NodeType.GOAL, position=(0, 2, 0)))
+    g.add_edge(0, 1, EdgeType.PATH)
+    g.add_edge(1, 2, EdgeType.PATH)
+    g.sanitize()
+
+    branch_rule = BranchRule()
+    assert branch_rule.can_apply(g, context={"rng": rng})
+    g_branched = branch_rule.apply(g, context={"rng": rng})
+    # Sanitization ensures node list is non-empty and edges are valid
+    assert len(g_branched.nodes) == 4
+    assert len(g_branched.edges) == 3
+
+    # Test InsertSwitchRule.apply sanitizes (needs >= 4 nodes)
+    g_switch = MissionGraph()
+    g_switch.add_node(MissionNode(id=0, node_type=NodeType.START, position=(0, 0, 0)))
+    g_switch.add_node(MissionNode(id=1, node_type=NodeType.EMPTY, position=(0, 1, 0)))
+    g_switch.add_node(MissionNode(id=2, node_type=NodeType.EMPTY, position=(0, 2, 0)))
+    g_switch.add_node(MissionNode(id=3, node_type=NodeType.GOAL, position=(0, 3, 0)))
+    g_switch.add_edge(0, 1, EdgeType.PATH)
+    g_switch.add_edge(1, 2, EdgeType.PATH)
+    g_switch.add_edge(2, 3, EdgeType.PATH)
+    g_switch.sanitize()
+
+    switch_rule = InsertSwitchRule()
+    assert switch_rule.can_apply(g_switch, context={"rng": rng})
+    g_switched = switch_rule.apply(g_switch, context={"rng": rng})
+    assert len(g_switched.nodes) == 5
+    # Gated edge should have edge_type EdgeType.ON_OFF_GATE
+    has_gated_edge = any(e.edge_type == EdgeType.ON_OFF_GATE for e in g_switched.edges)
+    assert has_gated_edge
+
+
+def test_validate_graph_conditioning_payload():
+    import numpy as np
+    import torch
+    import pytest
+    from src.pipeline.graph_features import validate_graph_conditioning_payload
+    from src.core.definitions import (
+        GRAPH_NODE_FEATURE_DIM,
+        GRAPH_EDGE_FEATURE_DIM,
+        GRAPH_TPE_DIM,
+        ROOM_HEIGHT,
+        ROOM_WIDTH,
+        ROOM_TOPOLOGY_CHANNEL_COUNT,
+    )
+
+    # 1. Valid payload
+    valid_payload = {
+        "node_features": torch.randn(4, GRAPH_NODE_FEATURE_DIM),
+        "edge_index": torch.tensor([[0, 1, 2], [1, 2, 3]], dtype=torch.long),
+        "tpe": torch.randn(4, GRAPH_TPE_DIM),
+        "edge_features": torch.randn(3, GRAPH_EDGE_FEATURE_DIM),
+        "room_topology_map": torch.zeros(ROOM_TOPOLOGY_CHANNEL_COUNT, ROOM_HEIGHT, ROOM_WIDTH),
+        "boundary_constraints": torch.zeros(8),
+        "current_node_idx": 2,
+    }
+    errors = validate_graph_conditioning_payload(valid_payload, strict=True)
+    assert errors == []
+
+    # 2. Malformed payloads with strict=False
+    malformed = {
+        "node_features": torch.randn(4, GRAPH_NODE_FEATURE_DIM - 1),  # wrong dim
+        "edge_index": torch.tensor([[0, 5], [1, 0]], dtype=torch.long),  # node 5 >= num_nodes 4
+        "current_node_idx": 10,  # out of bounds
+    }
+    errs = validate_graph_conditioning_payload(malformed, strict=False)
+    assert len(errs) >= 3
+
+    # 3. Malformed payload with strict=True raises ValueError
+    with pytest.raises(ValueError, match="Graph conditioning payload validation failed"):
+        validate_graph_conditioning_payload(malformed, strict=True)
+
+
 if __name__ == '__main__':
     print("="*70)
     print("ADVANCED RULES INTEGRATION TEST SUITE")

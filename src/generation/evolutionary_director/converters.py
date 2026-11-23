@@ -26,6 +26,7 @@ def mission_graph_to_networkx(
         NetworkX Graph/DiGraph with node attributes (may include VGLC virtual nodes)
     """
     G = nx.DiGraph() if directed else nx.Graph()
+    G.graph.setdefault("spatial_transition_policy", "recorded")
     if hasattr(graph, "generation_stats"):
         G.graph["generation_stats"] = copy.deepcopy(getattr(graph, "generation_stats", {}))
     
@@ -106,6 +107,7 @@ def mission_graph_to_networkx(
                 int(getattr(node, "key_count_hint", 0) or 0) > 0
                 or node.node_type in {NodeType.KEY, NodeType.BIG_KEY}
             ),
+            has_boss_key=bool(node.node_type == NodeType.BIG_KEY),
             has_puzzle=bool(
                 int(getattr(node, "puzzle_count_hint", 0) or 0) > 0
                 or node.node_type

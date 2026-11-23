@@ -317,6 +317,7 @@ def test_advanced_tile_oracle_receives_the_stitched_graph_contract():
         slot_positions={0: (0, 0), 1: (0, 1)},
         room_offsets={0: (0, 0), 1: (0, 11)},
         layout_map={0: (0, 0, 10, 15), 1: (11, 0, 21, 15)},
+        connection_realizations={(0, 1): {'cells': [(7, 10), (7, 11)]}},
     )
     pipeline = object.__new__(AdvancedNeuralSymbolicPipeline)
     pipeline.config = SimpleNamespace(

@@ -1,4 +1,4 @@
-﻿"""
+"""
 Test dungeon solvability for all Zelda dungeons.
 
 This test suite verifies that the solver can find valid paths through

@@ -7,6 +7,7 @@ Quest variants for the held-out evaluation protocol.
 
 from __future__ import annotations
 
+from numbers import Integral
 from typing import Iterable, Optional, Sequence, Tuple
 
 
@@ -20,9 +21,9 @@ def normalize_dungeon_ids(values: Optional[Iterable[int]]) -> Optional[Tuple[int
     """Return sorted unique dungeon ids, or ``None`` to mean all dungeons."""
     if values is None:
         return None
-    normalized = tuple(sorted({int(v) for v in values}))
+    normalized = _strict_ids(values)
     if not normalized:
-        return None
+        raise ValueError("Dungeon ids must be non-empty; use None for the default selection.")
     invalid = [v for v in normalized if v not in ALL_DUNGEONS]
     if invalid:
         raise ValueError(f"Unsupported Zelda dungeon ids {invalid}; expected ids in {ALL_DUNGEONS}.")
@@ -33,13 +34,21 @@ def normalize_variants(values: Optional[Iterable[int]]) -> Tuple[int, ...]:
     """Return sorted unique Quest variants."""
     if values is None:
         return DEFAULT_VARIANTS
-    normalized = tuple(sorted({int(v) for v in values}))
+    normalized = _strict_ids(values)
     if not normalized:
-        return DEFAULT_VARIANTS
+        raise ValueError("Quest variants must be non-empty; use None for the default selection.")
     invalid = [v for v in normalized if v not in DEFAULT_VARIANTS]
     if invalid:
         raise ValueError(f"Unsupported Zelda variants {invalid}; expected variants in {DEFAULT_VARIANTS}.")
     return normalized
+
+
+def _strict_ids(values: Iterable[int]) -> Tuple[int, ...]:
+    """Reject lossy casts that could silently change a held-out identity."""
+    ids = list(values)
+    if any(isinstance(value, bool) or not isinstance(value, Integral) for value in ids):
+        raise ValueError("Dataset identities must be integers, without coercion.")
+    return tuple(sorted({int(value) for value in ids}))
 
 
 def validate_disjoint_dungeon_splits(

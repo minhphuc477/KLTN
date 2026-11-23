@@ -9,8 +9,11 @@ __pycache__/
 *.py[cod]
 *.pyc
 
-# Pytest cache
+# Pytest / linter / agent local caches
 .pytest_cache/
+.ruff_cache/
+.qodo/
+.agents/
 .pytest_tmp_*/
 .pytest_tmp*/
 pytest_basetemp*/
@@ -51,7 +54,6 @@ graphify-out/*.lock
 graphify-out/????-??-??/
 
 # Artifacts - generated outputs, logs, and experiment checkpoints
-artifacts/
 .tmp/
 
 # Editor / OS

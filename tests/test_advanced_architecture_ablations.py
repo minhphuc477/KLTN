@@ -6,6 +6,8 @@ import torch
 
 import src.core.latent_diffusion as latent_diffusion_module
 from src.config_system import merge_config
+from src.core.condition_encoder import create_condition_encoder
+from src.core.definitions import ROOM_TOPOLOGY_CHANNEL_COUNT
 from src.core.latent_diffusion import create_latent_diffusion
 from src.evaluation.perturb_and_map import perturb_and_map_reachability
 from src.train_diffusion import (
@@ -34,6 +36,100 @@ def _enable_fresh_denoiser_signal(denoiser, *, self_gate: bool = False, cross_ga
                 bias[2 * hidden:3 * hidden].fill_(1.0)
             if cross_gate:
                 bias[5 * hidden:6 * hidden].fill_(1.0)
+
+
+def test_dual_stream_conditioning_is_live_through_diffusion_denoiser():
+    """Both conditioning streams must affect and receive gradients from Block III."""
+    torch.manual_seed(41)
+    encoder = create_condition_encoder(
+        latent_dim=4,
+        node_feature_dim=6,
+        edge_feature_dim=8,
+        hidden_dim=16,
+        output_dim=8,
+        num_gnn_layers=1,
+        num_attention_heads=2,
+        dropout=0.0,
+        use_current_node_distance_features=True,
+    ).eval()
+    diffusion = create_latent_diffusion(
+        latent_dim=4,
+        model_channels=8,
+        context_dim=8,
+        num_timesteps=8,
+        cfg_dropout_prob=0.0,
+        spatial_graph_gate_init=0.0,
+        spatial_topology_gate_init=0.0,
+        unet_channel_mult=(1,),
+        unet_num_res_blocks=1,
+        unet_attention_resolutions=(1,),
+        unet_num_heads=1,
+        unet_dropout=0.0,
+        room_topology_channels=ROOM_TOPOLOGY_CHANNEL_COUNT,
+    ).eval()
+    _enable_fresh_denoiser_signal(diffusion.denoiser)
+
+    north = torch.randn(1, 4, 3, 3, requires_grad=True)
+    node_features = torch.randn(3, 6, requires_grad=True)
+    edge_index = torch.tensor([[0, 1], [1, 2]], dtype=torch.long)
+    edge_features = torch.randn(2, 8)
+    tpe = torch.randn(3, 8)
+    distances = torch.randn(3, 4)
+    graph_data = {
+        "has_room_anchor": True,
+        "node_features": node_features,
+        "edge_index": edge_index,
+        "edge_features": edge_features,
+        "tpe": tpe,
+        "node_positions": torch.tensor([[0.0, 0.0], [0.0, 1.0], [1.0, 1.0]]),
+        "current_node_distance": distances,
+        "node_mask": torch.ones(3, dtype=torch.bool),
+        "room_topology_map": torch.randn(1, ROOM_TOPOLOGY_CHANNEL_COUNT, 4, 4),
+    }
+    fixed_x = torch.randn(1, 4, 4, 4)
+    fixed_t = torch.tensor([3], dtype=torch.long)
+
+    def _denoise(local_north: torch.Tensor, graph_nodes: torch.Tensor) -> torch.Tensor:
+        room_anchor, global_tokens = encoder(
+            neighbor_latents={"N": local_north, "S": None, "E": None, "W": None},
+            boundary_constraints=torch.zeros(1, 8),
+            position=torch.zeros(1, 2),
+            node_features=graph_nodes,
+            edge_index=edge_index,
+            edge_features=edge_features,
+            tpe=tpe,
+            current_node_distance=distances,
+            node_mask=torch.ones(3, dtype=torch.bool),
+            current_node_idx=1,
+            return_global_tokens=True,
+        )
+        context = torch.cat([room_anchor.unsqueeze(1), global_tokens], dim=1)
+        graph_payload = {**graph_data, "node_features": graph_nodes}
+        context_edge_index, context_edge_attr, context_node_mask = diffusion._extract_context_topology(
+            context,
+            graph_payload,
+        )
+        spatial = diffusion._extract_spatial_graph_context(context, graph_payload)
+        return diffusion.denoiser(
+            fixed_x,
+            fixed_t,
+            context,
+            context_edge_index=context_edge_index,
+            context_edge_attr=context_edge_attr,
+            context_node_mask=context_node_mask,
+            spatial_graph_data=spatial,
+        )
+
+    baseline = _denoise(north, node_features)
+    local_perturbed = _denoise(north + 3.0, node_features)
+    graph_perturbed = _denoise(north, node_features + 3.0)
+
+    assert float((baseline - local_perturbed).abs().max().item()) > 1e-8
+    assert float((baseline - graph_perturbed).abs().max().item()) > 1e-8
+
+    baseline.square().mean().backward()
+    assert north.grad is not None and float(north.grad.abs().sum().item()) > 1e-8
+    assert node_features.grad is not None and float(node_features.grad.abs().sum().item()) > 1e-8
 
 
 def test_flow_matching_loss_is_finite_and_backpropagates():

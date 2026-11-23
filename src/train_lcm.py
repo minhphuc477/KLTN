@@ -1,4 +1,8 @@
 """
+[STATUS: OPTIONAL / EFFICIENCY-EXTENSION ENTRYPOINT — OUTSIDE CENTRAL G-LMDM CLAIM]
+Distills the continuous latent diffusion comparator; excluded from the primary
+5-block discrete G-LMDM pipeline (`PUBLICATION_BLUEPRINT.md` Section 4.8).
+
 Train a graph-aware consistency-LoRA fast sampler from a base diffusion checkpoint.
 
 This trainer is intentionally repo-specific. It is a practical consistency-style
@@ -58,6 +62,7 @@ from src.utils.checkpoint import (
     write_checkpoint_metadata,
 )
 from src.utils.data_loading import dataloader_runtime_kwargs
+from src.utils.loss_utils import spatial_cross_entropy
 from src.utils.optimization import adamw_decay_param_groups_for_modules
 from src.zelda_data.zelda_loader import (
     create_dataloader,
@@ -697,22 +702,22 @@ class ConsistencyLoRATrainer:
                 x_previous,
                 t_previous,
             )
-            teacher_x0 = torch.clamp(teacher_x0, -1.0, 1.0)
+            teacher_x0 = self.teacher._clamp_clean_latent(teacher_x0)
             t0_mask = (t_previous == 0).view(batch_size, *([1] * (z_0.dim() - 1)))
             # Consistency models use the identity boundary f(x, 0) = x.  The
             # relevant state is the teacher's ODE endpoint, not the clean
             # training latent that was unavailable to the student at x_t.
-            teacher_x0 = torch.where(t0_mask, torch.clamp(x_previous, -1.0, 1.0), teacher_x0)
+            teacher_x0 = torch.where(t0_mask, self.ode_teacher._clamp_clean_latent(x_previous), teacher_x0)
 
         student_pred = self.student._predict_noise_cfg(x_t, t, conditioning, graph_data=diffusion_graph_data)
         student_x0, _student_noise = self.student._convert_prediction(student_pred, x_t, t)
-        student_x0 = torch.clamp(student_x0, -1.0, 1.0)
+        student_x0 = self.student._clamp_clean_latent(student_x0)
 
         x0_loss = F.mse_loss(student_x0, teacher_x0)
         # Consistency distillation trains the student to recover an x0/secant
         # target. Matching the teacher's raw local ODE tangent here fights the
         # jump-step objective, especially for velocity/noise parameterizations.
-        pred_loss = F.mse_loss(student_x0, torch.clamp(ode_teacher_x0.detach(), -1.0, 1.0))
+        pred_loss = F.mse_loss(student_x0, self.ode_teacher._clamp_clean_latent(ode_teacher_x0.detach()))
         decode_ce_loss = torch.zeros((), device=self.device, dtype=student_x0.dtype)
         topology_decode_ce_loss = torch.zeros((), device=self.device, dtype=student_x0.dtype)
         puzzle_stage_semantic_loss = torch.zeros((), device=self.device, dtype=student_x0.dtype)
@@ -733,10 +738,10 @@ class ConsistencyLoRATrainer:
             student_logits = self.base_bundle.vqvae.decode(
                 self.base_bundle.diffusion.unscale_first_stage_latent(student_x0)
             )
-            decode_ce_loss = F.cross_entropy(student_logits, target_tiles)
+            decode_ce_loss = spatial_cross_entropy(student_logits, target_tiles)
             focus_map = self._topology_focus_map(graph_list, batch_size, device=target_tiles.device)
             if focus_map is not None and bool((focus_map > 0).any()):
-                ce_map = F.cross_entropy(student_logits, target_tiles, reduction="none")
+                ce_map = spatial_cross_entropy(student_logits, target_tiles, reduction="none")
                 denom = focus_map.sum().clamp(min=1.0)
                 topology_decode_ce_loss = (ce_map * focus_map).sum() / denom
         elif self.config.topology_alignment_weight > 0.0:
@@ -746,7 +751,7 @@ class ConsistencyLoRATrainer:
             )
             focus_map = self._topology_focus_map(graph_list, batch_size, device=target_tiles.device)
             if focus_map is not None and bool((focus_map > 0).any()):
-                ce_map = F.cross_entropy(student_logits, target_tiles, reduction="none")
+                ce_map = spatial_cross_entropy(student_logits, target_tiles, reduction="none")
                 denom = focus_map.sum().clamp(min=1.0)
                 topology_decode_ce_loss = (ce_map * focus_map).sum() / denom
         if student_logits is None and float(getattr(self.config, "puzzle_stage_semantics_loss_weight", 0.0)) > 0.0:
@@ -922,17 +927,17 @@ class ConsistencyLoRATrainer:
             graph_data=diffusion_graph_data,
         )
         teacher_x0, _ = self.teacher._convert_prediction(teacher_pred, x_previous, t_previous)
-        teacher_x0 = torch.clamp(teacher_x0, -1.0, 1.0)
+        teacher_x0 = self.teacher._clamp_clean_latent(teacher_x0)
         t0_mask = (t_previous == 0).view(batch_size, *([1] * (z_0.dim() - 1)))
-        teacher_x0 = torch.where(t0_mask, torch.clamp(x_previous, -1.0, 1.0), teacher_x0)
+        teacher_x0 = torch.where(t0_mask, self.ode_teacher._clamp_clean_latent(x_previous), teacher_x0)
 
         eval_model = self.teacher if bool(getattr(self.config, "validate_ema_target", True)) else self.student
         student_pred = eval_model._predict_noise_cfg(x_t, t, conditioning, graph_data=diffusion_graph_data)
         student_x0, _ = eval_model._convert_prediction(student_pred, x_t, t)
-        student_x0 = torch.clamp(student_x0, -1.0, 1.0)
+        student_x0 = eval_model._clamp_clean_latent(student_x0)
 
         x0_loss = F.mse_loss(student_x0, teacher_x0)
-        pred_loss = F.mse_loss(student_x0, torch.clamp(ode_teacher_x0.detach(), -1.0, 1.0))
+        pred_loss = F.mse_loss(student_x0, self.ode_teacher._clamp_clean_latent(ode_teacher_x0.detach()))
         decode_ce_loss = torch.zeros((), device=self.device, dtype=student_x0.dtype)
         topology_decode_ce_loss = torch.zeros((), device=self.device, dtype=student_x0.dtype)
         puzzle_stage_semantic_loss = torch.zeros((), device=self.device, dtype=student_x0.dtype)
@@ -947,10 +952,10 @@ class ConsistencyLoRATrainer:
             student_logits = self.base_bundle.vqvae.decode(
                 self.base_bundle.diffusion.unscale_first_stage_latent(student_x0)
             )
-            decode_ce_loss = F.cross_entropy(student_logits, target_tiles)
+            decode_ce_loss = spatial_cross_entropy(student_logits, target_tiles)
             focus_map = self._topology_focus_map(graph_list, batch_size, device=target_tiles.device)
             if focus_map is not None and bool((focus_map > 0).any()):
-                ce_map = F.cross_entropy(student_logits, target_tiles, reduction="none")
+                ce_map = spatial_cross_entropy(student_logits, target_tiles, reduction="none")
                 denom = focus_map.sum().clamp(min=1.0)
                 topology_decode_ce_loss = (ce_map * focus_map).sum() / denom
         elif self.config.topology_alignment_weight > 0.0:
@@ -960,7 +965,7 @@ class ConsistencyLoRATrainer:
             )
             focus_map = self._topology_focus_map(graph_list, batch_size, device=target_tiles.device)
             if focus_map is not None and bool((focus_map > 0).any()):
-                ce_map = F.cross_entropy(student_logits, target_tiles, reduction="none")
+                ce_map = spatial_cross_entropy(student_logits, target_tiles, reduction="none")
                 denom = focus_map.sum().clamp(min=1.0)
                 topology_decode_ce_loss = (ce_map * focus_map).sum() / denom
         if student_logits is None and float(getattr(self.config, "puzzle_stage_semantics_loss_weight", 0.0)) > 0.0:

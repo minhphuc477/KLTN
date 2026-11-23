@@ -1,4 +1,4 @@
-﻿"""
+"""
 KLTN Visualization - Core Renderer
 ===================================
 

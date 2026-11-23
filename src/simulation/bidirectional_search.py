@@ -7,7 +7,7 @@ from __future__ import annotations
 from typing import Any
 
 from src.simulation.bidirectional_astar import BidirectionalAStar
-from src.simulation.search_base import GameStateSearchConfig, GameStateSearchResult
+from src.simulation.search_base import GameStateSearchConfig, GameStateSearchResult, apply_rules_profile
 from src.simulation.search_status import oracle_status_from_outcome
 
 
@@ -19,6 +19,7 @@ class BidirectionalAStarGameStateSolver:
         self.config = config
 
     def solve(self) -> GameStateSearchResult:
+        apply_rules_profile(self.env, self.config.rules_profile)
         solver = BidirectionalAStar(
             self.env,
             timeout=int(self.config.timeout),

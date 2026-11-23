@@ -1729,7 +1729,7 @@ class TensionCurveEvaluator:
             logger.debug("Graph sanitize failed during solvability check: %s", e)
         grammar_valid = bool(
             grammar.validate_lock_key_ordering(graph)
-            and grammar.validate_progression_constraints(graph)
+            and grammar.validate_progression_constraints(graph, log_failures=False)
         )
         if not grammar_valid:
             return False

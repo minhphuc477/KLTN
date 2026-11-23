@@ -396,6 +396,9 @@ def test_canonical_yaml_uses_downsized_masked_room_profile():
     assert resolved["masked_room"]["unet_num_heads"] == 4
     assert resolved["masked_room"]["min_mask_ratio"] == pytest.approx(0.0)
     assert resolved["masked_room"]["max_mask_ratio"] == pytest.approx(1.0)
+    assert resolved["masked_room"]["condition_gnn_type"] == "gps"
+    assert resolved["masked_room"]["logic_net_enabled"] is True
+    assert resolved["masked_room"]["alpha_logic"] == pytest.approx(0.1)
     assert resolved["generation"]["guidance_scale"] == pytest.approx(3.0)
     assert resolved["generation"]["logic_guidance_scale"] == pytest.approx(0.0)
     assert resolved["generation"]["symbolic_max_repair_attempts"] == 5
@@ -885,6 +888,10 @@ def test_train_parser_accepts_distributed_cli_flags(tmp_path: Path):
         cfg_path,
         {
             "training": {"stage": "diffusion"},
+            # This parser test exercises distributed diffusion itself.  The
+            # joint dungeon-level LogicNet objective intentionally rejects the
+            # current room-fragmenting distributed sampler.
+            "diffusion": {"logic_net_enabled": False},
         },
     )
 
@@ -913,6 +920,25 @@ def test_train_parser_accepts_distributed_cli_flags(tmp_path: Path):
     assert resolved["distributed"]["nproc_per_node"] == 2
     assert resolved["distributed"]["master_port"] == 29555
     assert resolved["distributed"]["cuda_visible_devices"] == "0,1"
+
+
+def test_room_level_global_logicnet_rejects_fragmenting_batch_modes():
+    with pytest.raises(ValueError, match="dungeon_batch_mode=true"):
+        merge_config(
+            cli_overrides={
+                "dataset": {"room_level": True, "dungeon_batch_mode": False},
+                "diffusion": {"logic_net_enabled": True, "alpha_logic": 0.1},
+            }
+        )
+
+    with pytest.raises(ValueError, match="Distributed room-level global LogicNet"):
+        merge_config(
+            cli_overrides={
+                "dataset": {"room_level": True, "dungeon_batch_mode": True},
+                "diffusion": {"logic_net_enabled": True, "alpha_logic": 0.1},
+                "distributed": {"enabled": True},
+            }
+        )
 
 
 def test_validation_rejects_out_of_bounds_generation_room_coords(tmp_path: Path):
@@ -1775,3 +1801,83 @@ def test_src_train_is_a_compatibility_wrapper(monkeypatch: pytest.MonkeyPatch):
     legacy_train.main(["train", "--config", "configs/zelda_hmolqd.yaml", "--stage", "diffusion"])
 
     assert captured["argv"] == ["train", "--config", "configs/zelda_hmolqd.yaml", "--stage", "diffusion"]
+
+
+def test_all_glmdm_and_ablation_yaml_presets_validate_and_map_to_masked_room():
+    from src.train_masked_room import MaskedRoomTrainingConfig
+
+    presets = {
+        "configs/glmdm_canonical.yaml": {
+            "condition_gnn_type": "gps",
+            "condition_use_rrwp_edge_features": True,
+            "condition_use_reference_room_maps": True,
+            "graph_conditioning_mode": "node_sequence",
+            "logic_net_enabled": True,
+            "alpha_logic": 0.1,
+            "logic_global_reach_weight": 1.0,
+            "logic_global_room_weight": 0.25,
+        },
+        "configs/glmdm_g_l_local_logic.yaml": {
+            "condition_gnn_type": "gps",
+            "condition_use_rrwp_edge_features": True,
+            "condition_use_reference_room_maps": True,
+            "graph_conditioning_mode": "node_sequence",
+            "logic_net_enabled": True,
+            "alpha_logic": 0.1,
+            "logic_global_reach_weight": 0.0,
+            "logic_global_room_weight": 0.0,
+        },
+        "configs/glmdm_g_graph.yaml": {
+            "condition_gnn_type": "gps",
+            "condition_use_rrwp_edge_features": True,
+            "condition_use_reference_room_maps": True,
+            "graph_conditioning_mode": "node_sequence",
+            "logic_net_enabled": False,
+            "alpha_logic": 0.0,
+            "logic_global_reach_weight": 0.0,
+            "logic_global_room_weight": 0.0,
+        },
+        "configs/glmdm_n_local.yaml": {
+            "condition_gnn_type": "gcn",
+            "condition_use_rrwp_edge_features": False,
+            "condition_use_reference_room_maps": False,
+            "graph_conditioning_mode": "pooled",
+            "logic_net_enabled": False,
+            "alpha_logic": 0.0,
+            "logic_global_reach_weight": 0.0,
+            "logic_global_room_weight": 0.0,
+        },
+        "configs/zelda_hmolqd_masked_small.yaml": {
+            "condition_gnn_type": "gps",
+            "condition_use_rrwp_edge_features": True,
+            "condition_use_reference_room_maps": True,
+            "graph_conditioning_mode": "node_sequence",
+            "logic_net_enabled": False,
+            "alpha_logic": 0.0,
+        },
+    }
+
+    for yaml_path, expected in presets.items():
+        resolved = merge_config(yaml_path=yaml_path, cli_overrides=None)
+        assert resolved["training"]["stage"] == "masked_room", yaml_path
+        assert resolved["generation"]["room_generator_mode"] == "discrete_masked", yaml_path
+        kwargs = masked_room_training_kwargs_from_resolved_config(resolved)
+        cfg = MaskedRoomTrainingConfig(**kwargs)
+        for key, value in expected.items():
+            actual = getattr(cfg, key)
+            if isinstance(value, float):
+                assert actual == pytest.approx(value), f"{yaml_path}: {key}"
+            else:
+                assert actual == value, f"{yaml_path}: {key}"
+
+    no_rrwp = merge_config(yaml_path="configs/ablation_no_rrwp.yaml", cli_overrides=None)
+    assert no_rrwp["masked_room"]["condition_use_rrwp_edge_features"] is False
+
+    no_logic = merge_config(yaml_path="configs/ablation_no_logicnet.yaml", cli_overrides=None)
+    assert no_logic["masked_room"]["logic_net_enabled"] is False
+    assert no_logic["masked_room"]["alpha_logic"] == pytest.approx(0.0)
+    assert no_logic["masked_room"]["logic_global_reach_weight"] == pytest.approx(0.0)
+
+    for yaml_file in sorted(Path("configs").glob("*.yaml")):
+        resolved = merge_config(yaml_path=str(yaml_file), cli_overrides=None)
+        assert int(resolved["config_version"]) == CURRENT_CONFIG_VERSION

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import string
 from dataclasses import dataclass, field
+from numbers import Integral
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
 
@@ -64,7 +65,12 @@ class StageResult:
                 f"status={self.status!r} requires exact_valid=None."
             )
         if self.shape is not None:
-            if len(self.shape) != 2 or any(int(value) <= 0 for value in self.shape):
+            if len(self.shape) != 2 or any(
+                isinstance(value, (bool, np.bool_))
+                or not isinstance(value, Integral)
+                or value <= 0
+                for value in self.shape
+            ):
                 raise ValueError(f"shape must contain two positive dimensions; got {self.shape}.")
         if self.status in GRID_PRESENT_STATUSES:
             if not str(self.grid_path or "").strip():
@@ -89,7 +95,7 @@ class StageResult:
             "status": self.status,
             "grid_path": self.grid_path,
             "grid_sha256": self.grid_sha256,
-            "shape": list(self.shape) if self.shape is not None else None,
+            "shape": [int(value) for value in self.shape] if self.shape is not None else None,
             "exact_valid": self.exact_valid,
             "validation": dict(self.validation),
         }
@@ -101,7 +107,7 @@ class StageResult:
         if raw_shape is not None:
             if not isinstance(raw_shape, Sequence) or isinstance(raw_shape, (str, bytes)):
                 raise ValueError("Stage shape must be a two-item sequence or null.")
-            shape = tuple(int(value) for value in raw_shape)
+            shape = tuple(raw_shape)
         return cls(
             stage=str(payload["stage"]),
             status=str(payload["status"]),
@@ -160,8 +166,13 @@ class PublicationResultRecord:
         ):
             if not str(value).strip():
                 raise ValueError(f"{name} must be non-empty.")
-        if int(self.train_seed) < 0 or int(self.sampling_seed) < 0:
-            raise ValueError("train_seed and sampling_seed must be non-negative.")
+        if any(
+            isinstance(seed, (bool, np.bool_))
+            or not isinstance(seed, Integral)
+            or seed < 0
+            for seed in (self.train_seed, self.sampling_seed)
+        ):
+            raise ValueError("train_seed and sampling_seed must be non-negative integers.")
         for name, value in (
             ("config_sha256", self.config_sha256),
             ("dataset_manifest_sha256", self.dataset_manifest_sha256),
@@ -196,7 +207,10 @@ class PublicationResultRecord:
             )
         if (
             self.generation_status == "completed"
-            and normalized["raw"].status not in GRID_PRESENT_STATUSES
+            and (
+                not str(normalized["raw"].grid_path or "").strip()
+                or normalized["raw"].status in {"not_run", "not_applicable"}
+            )
         ):
             raise ValueError("Completed generation requires an emitted raw grid stage.")
         if self.generation_status == "completed":
@@ -267,8 +281,8 @@ class PublicationResultRecord:
             dataset_manifest_sha256=str(payload["dataset_manifest_sha256"]),
             protocol_sha256=str(payload["protocol_sha256"]),
             outer_fold=str(payload["outer_fold"]),
-            train_seed=int(payload["train_seed"]),
-            sampling_seed=int(payload["sampling_seed"]),
+            train_seed=payload["train_seed"],
+            sampling_seed=payload["sampling_seed"],
             mission_graph_id=str(payload["mission_graph_id"]),
             model_id=str(payload["model_id"]),
             inference_variant=str(payload["inference_variant"]),
@@ -285,14 +299,14 @@ class PublicationResultRecord:
         )
 
     def to_json(self) -> str:
-        return json.dumps(self.to_dict(), ensure_ascii=False, sort_keys=True)
+        return json.dumps(self.to_dict(), ensure_ascii=False, sort_keys=True, allow_nan=False)
 
     def write_json(self, path: str | Path) -> None:
         output_path = Path(path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         temporary = output_path.with_name(f"{output_path.name}.tmp")
         temporary.write_text(
-            json.dumps(self.to_dict(), ensure_ascii=False, indent=2, sort_keys=True),
+            json.dumps(self.to_dict(), ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False),
             encoding="utf-8",
         )
         temporary.replace(output_path)

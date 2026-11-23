@@ -5,6 +5,7 @@ Training pipeline for the graph-conditioned discrete masked room model.
 from __future__ import annotations
 
 import argparse
+import copy
 import logging
 import math
 from dataclasses import dataclass
@@ -18,7 +19,12 @@ from torch.utils.data import DataLoader
 
 from src.config_system import merge_config, seed_everything
 from src.core.condition_encoder import DualStreamConditionEncoder, create_condition_encoder
-from src.core.definitions import GRAPH_EDGE_FEATURE_DIM, GRAPH_NODE_FEATURE_DIM, ROOM_TOPOLOGY_CHANNEL_COUNT
+from src.core.definitions import (
+    GRAPH_EDGE_FEATURE_DIM,
+    GRAPH_NODE_FEATURE_DIM,
+    GRAPH_TPE_DIM,
+    ROOM_TOPOLOGY_CHANNEL_COUNT,
+)
 from src.core.discrete_masked_model import (
     DiscreteMaskedRoomModel,
     create_discrete_masked_model,
@@ -45,6 +51,7 @@ from src.pipeline.graph_features import (
     align_nodewise_tensor,
     build_default_node_positions,
     compute_current_node_distance_features,
+    compute_rrwp_edge_features,
     compute_rwse_features,
 )
 from src.utils.checkpoint import (
@@ -90,6 +97,7 @@ class MaskedRoomTrainingConfig:
         shuffle_train: bool = True,
         shuffle_val: bool = False,
         normalize: bool = False,
+        grid_augmentation: bool = False,
         train_dungeon_ids: Optional[List[int]] = None,
         test_dungeon_ids: Optional[List[int]] = None,
         variants: Optional[List[int]] = None,
@@ -109,6 +117,7 @@ class MaskedRoomTrainingConfig:
         condition_reference_tile_vocab_size: int = 44,
         condition_reference_embedding_dim: int = 32,
         condition_reference_hidden_dim: int = 64,
+        condition_use_rrwp_edge_features: bool = True,
         condition_strict_schema: bool = True,
         graph_conditioning_mode: str = "node_sequence",
         use_current_node_distance_features: bool = True,
@@ -134,6 +143,8 @@ class MaskedRoomTrainingConfig:
         topology_marker_weight: float = 2.0,
         topology_trace_weight: float = 0.75,
         topology_focus_dilation: int = 1,
+        rare_tile_weight: float = 1.0,
+        focal_gamma: float = 0.0,
         logic_net_enabled: bool = False,
         logic_net_trainable: bool = False,
         alpha_logic: float = 0.0,
@@ -191,6 +202,7 @@ class MaskedRoomTrainingConfig:
         self.shuffle_train = bool(shuffle_train)
         self.shuffle_val = bool(shuffle_val)
         self.normalize = bool(normalize)
+        self.grid_augmentation = bool(grid_augmentation)
         train_ids, test_ids = validate_disjoint_dungeon_splits(
             train_dungeon_ids if train_dungeon_ids is not None else range(1, 9),
             test_dungeon_ids if test_dungeon_ids is not None else (9,),
@@ -214,6 +226,9 @@ class MaskedRoomTrainingConfig:
         self.condition_reference_tile_vocab_size = int(max(2, condition_reference_tile_vocab_size))
         self.condition_reference_embedding_dim = int(max(4, condition_reference_embedding_dim))
         self.condition_reference_hidden_dim = int(max(4, condition_reference_hidden_dim))
+        self.condition_use_rrwp_edge_features = bool(condition_use_rrwp_edge_features) and (
+            self.condition_gnn_type in {"gat", "gps"}
+        )
         self.condition_strict_schema = bool(condition_strict_schema)
         self.graph_conditioning_mode = str(graph_conditioning_mode).strip().lower()
         self.use_current_node_distance_features = bool(use_current_node_distance_features)
@@ -280,6 +295,18 @@ class MaskedRoomTrainingConfig:
         self.topology_marker_weight = float(max(0.0, topology_marker_weight))
         self.topology_trace_weight = float(max(0.0, topology_trace_weight))
         self.topology_focus_dilation = int(max(0, topology_focus_dilation))
+        rare_tile_weight_val = float(rare_tile_weight)
+        if not math.isfinite(rare_tile_weight_val) or rare_tile_weight_val < 1.0:
+            raise ValueError(
+                f"rare_tile_weight must be a finite float >= 1.0, got {rare_tile_weight!r}."
+            )
+        focal_gamma_val = float(focal_gamma)
+        if not math.isfinite(focal_gamma_val) or focal_gamma_val < 0.0:
+            raise ValueError(
+                f"focal_gamma must be a finite float >= 0.0, got {focal_gamma!r}."
+            )
+        self.rare_tile_weight = rare_tile_weight_val
+        self.focal_gamma = focal_gamma_val
         self.logic_net_enabled = bool(logic_net_enabled)
         self.logic_net_trainable = bool(logic_net_trainable) if self.logic_net_enabled else False
         self.alpha_logic = float(max(0.0, alpha_logic)) if self.logic_net_enabled else 0.0
@@ -435,6 +462,7 @@ def masked_room_training_kwargs_from_resolved_config(config: Dict[str, Any]) -> 
         # This model consumes categorical token IDs. Normalization would alter
         # the embedding vocabulary, so it is intentionally not configurable.
         "normalize": False,
+        "grid_augmentation": bool(dataset.get("grid_augmentation", False)),
         "train_dungeon_ids": dataset.get("train_dungeons", list(range(1, 9))),
         "test_dungeon_ids": dataset.get("test_dungeons", [9]),
         "variants": dataset.get("variants", [1, 2]),
@@ -454,6 +482,7 @@ def masked_room_training_kwargs_from_resolved_config(config: Dict[str, Any]) -> 
         "condition_reference_tile_vocab_size": stage["condition_reference_tile_vocab_size"],
         "condition_reference_embedding_dim": stage["condition_reference_embedding_dim"],
         "condition_reference_hidden_dim": stage["condition_reference_hidden_dim"],
+        "condition_use_rrwp_edge_features": stage.get("condition_use_rrwp_edge_features", True),
         "condition_strict_schema": stage.get("condition_strict_schema", True),
         "graph_conditioning_mode": stage["graph_conditioning_mode"],
         "use_current_node_distance_features": stage["use_current_node_distance_features"],
@@ -479,6 +508,8 @@ def masked_room_training_kwargs_from_resolved_config(config: Dict[str, Any]) -> 
         "topology_marker_weight": stage.get("topology_marker_weight", 2.0),
         "topology_trace_weight": stage.get("topology_trace_weight", 0.75),
         "topology_focus_dilation": stage.get("topology_focus_dilation", 1),
+        "rare_tile_weight": float(stage.get("rare_tile_weight", 1.0)),
+        "focal_gamma": float(stage.get("focal_gamma", 0.0)),
         "logic_net_enabled": stage.get("logic_net_enabled", False),
         "logic_net_trainable": stage.get("logic_net_trainable", False),
         "alpha_logic": stage.get("alpha_logic", 0.0),
@@ -548,6 +579,7 @@ def _legacy_masked_room_overrides_from_args(args: argparse.Namespace) -> Dict[st
 
     _set("data_dir", getattr(args, "data_dir", None))
     _set("batch_size", getattr(args, "batch_size", None))
+    _set("grid_augmentation", getattr(args, "grid_augmentation", None))
     _set("train_dungeon_ids", getattr(args, "train_dungeon_ids", None))
     _set("test_dungeon_ids", getattr(args, "test_dungeon_ids", None))
     _set("variants", getattr(args, "variants", None))
@@ -565,6 +597,7 @@ def _legacy_masked_room_overrides_from_args(args: argparse.Namespace) -> Dict[st
     _set("condition_reference_tile_vocab_size", getattr(args, "condition_reference_tile_vocab_size", None))
     _set("condition_reference_embedding_dim", getattr(args, "condition_reference_embedding_dim", None))
     _set("condition_reference_hidden_dim", getattr(args, "condition_reference_hidden_dim", None))
+    _set("condition_use_rrwp_edge_features", getattr(args, "condition_use_rrwp_edge_features", None))
     _set("condition_strict_schema", getattr(args, "condition_strict_schema", None))
     _set("graph_conditioning_mode", getattr(args, "graph_conditioning_mode", None))
     _set("use_current_node_distance_features", getattr(args, "use_current_node_distance_features", None))
@@ -590,6 +623,8 @@ def _legacy_masked_room_overrides_from_args(args: argparse.Namespace) -> Dict[st
     _set("topology_marker_weight", getattr(args, "topology_marker_weight", None))
     _set("topology_trace_weight", getattr(args, "topology_trace_weight", None))
     _set("topology_focus_dilation", getattr(args, "topology_focus_dilation", None))
+    _set("rare_tile_weight", getattr(args, "rare_tile_weight", None))
+    _set("focal_gamma", getattr(args, "focal_gamma", None))
     _set("logic_net_enabled", getattr(args, "logic_net_enabled", None))
     _set("logic_net_trainable", getattr(args, "logic_net_trainable", None))
     _set("alpha_logic", getattr(args, "alpha_logic", None))
@@ -684,8 +719,17 @@ def _create_masked_room_dataloaders(
         seed=config.seed,
         require_group_metadata=True,
     )
-    eval_source = val_dataset if val_dataset is not None else train_dataset
+    eval_source = val_dataset if val_dataset is not None else dataset
     eval_split_name = "val" if val_dataset is not None else "train"
+    if bool(getattr(config, "grid_augmentation", False)):
+        if isinstance(train_dataset, torch.utils.data.Subset):
+            aug_dataset = copy.copy(train_dataset.dataset)
+            aug_dataset.augment = True
+            train_dataset = torch.utils.data.Subset(aug_dataset, list(train_dataset.indices))
+        else:
+            aug_dataset = copy.copy(train_dataset)
+            aug_dataset.augment = True
+            train_dataset = aug_dataset
     use_dungeon_batches = bool(getattr(config, "logic_net_enabled", False)) and float(
         getattr(config, "alpha_logic", 0.0)
     ) > 0.0
@@ -774,6 +818,8 @@ class MaskedRoomTrainer:
             unet_num_heads=config.unet_num_heads,
             unet_dropout=config.unet_dropout,
             room_topology_channels=config.room_topology_channels,
+            rare_tile_weight=float(getattr(config, "rare_tile_weight", 1.0)),
+            focal_gamma=float(getattr(config, "focal_gamma", 0.0)),
         )).to(self.device)
         self.condition_encoder = (condition_encoder or create_condition_encoder(
             latent_dim=config.latent_dim,
@@ -790,6 +836,7 @@ class MaskedRoomTrainer:
             reference_num_tile_types=config.condition_reference_tile_vocab_size,
             reference_embedding_dim=config.condition_reference_embedding_dim,
             reference_hidden_dim=config.condition_reference_hidden_dim,
+            use_rrwp_edge_features=bool(getattr(config, "condition_use_rrwp_edge_features", False)),
             strict_schema=bool(getattr(config, "condition_strict_schema", True)),
         )).to(self.device)
         self.puzzle_stage_semantics_head: Optional[PuzzleStageSemanticsHead] = None
@@ -884,7 +931,7 @@ class MaskedRoomTrainer:
         normalized_ids = (maps * float(num_classes - 1)).round()
         raw_ids = maps.round()
         tile_ids = torch.where(raw_categorical, raw_ids, normalized_ids).long()
-        return tile_ids.clamp_(0, num_classes - 1)
+        return tile_ids.clamp(0, num_classes - 1)
 
     @staticmethod
     def _encode_edge_features(graph_dict: dict, device: torch.device) -> Optional[torch.Tensor]:
@@ -928,6 +975,16 @@ class MaskedRoomTrainer:
         node_features = graph_dict["node_features"].to(self.device)
         edge_index = graph_dict["edge_index"].to(self.device)
         edge_features = self._encode_edge_features(graph_dict, self.device)
+        edge_rrwp = graph_dict.get("edge_rrwp")
+        if bool(getattr(self.config, "condition_use_rrwp_edge_features", False)):
+            if not isinstance(edge_rrwp, torch.Tensor) or edge_rrwp.numel() == 0:
+                edge_rrwp = compute_rrwp_edge_features(
+                    edge_index,
+                    num_nodes=int(node_features.shape[0]),
+                    steps=int(GRAPH_TPE_DIM),
+                    device=self.device,
+                    dtype=torch.float32,
+                )
         tpe = align_nodewise_tensor(
             graph_dict.get("tpe"),
             num_nodes=int(node_features.shape[0]),
@@ -989,7 +1046,7 @@ class MaskedRoomTrainer:
                 node_features=node_features,
                 edge_index=edge_index,
                 edge_features=edge_features,
-                edge_rrwp=graph_dict.get("edge_rrwp"),
+                edge_rrwp=edge_rrwp,
                 tpe=tpe,
                 current_node_distance=current_node_distance,
                 node_mask=graph_dict.get("node_mask"),
@@ -1032,7 +1089,7 @@ class MaskedRoomTrainer:
             node_features,
             edge_index,
             edge_features=edge_features,
-            edge_rrwp=graph_dict.get("edge_rrwp"),
+            edge_rrwp=edge_rrwp,
             tpe=tpe,
             current_node_distance=current_node_distance,
             node_mask=graph_dict.get("node_mask"),
@@ -1135,6 +1192,19 @@ class MaskedRoomTrainer:
         if edge_attr.numel() < num_edges:
             edge_attr = F.pad(edge_attr, (0, num_edges - int(edge_attr.numel())), value=0)
         edge_attr = edge_attr[:num_edges]
+
+        edge_rrwp = graph_dict.get("edge_rrwp")
+        if bool(getattr(self.config, "condition_use_rrwp_edge_features", False)):
+            if not isinstance(edge_rrwp, torch.Tensor) or edge_rrwp.numel() == 0:
+                edge_rrwp = compute_rrwp_edge_features(
+                    edge_index,
+                    num_nodes=num_nodes,
+                    steps=int(GRAPH_TPE_DIM),
+                    device=self.device,
+                    dtype=torch.float32,
+                )
+            else:
+                edge_rrwp = edge_rrwp.to(self.device, dtype=torch.float32)
 
         tpe = align_nodewise_tensor(
             graph_dict.get("tpe"),
@@ -1243,6 +1313,13 @@ class MaskedRoomTrainer:
                 isinstance(graph_dict.get("boundary_constraints"), torch.Tensor)
                 and isinstance(graph_dict.get("room_position"), torch.Tensor)
             ),
+            **(
+                {"edge_rrwp": edge_rrwp}
+                if (
+                    isinstance(edge_rrwp, torch.Tensor)
+                )
+                else {}
+            ),
             **({"boundary_constraints": boundary_constraints} if isinstance(boundary_constraints, torch.Tensor) else {}),
             **({"room_topology_map": room_topology_map} if isinstance(room_topology_map, torch.Tensor) else {}),
             **logic_masks,
@@ -1323,6 +1400,7 @@ class MaskedRoomTrainer:
                 for sample in samples
             ],
             "graph_scope": "room_batch",
+            "graph_conditioning_mode": str(self.config.graph_conditioning_mode),
             "has_room_anchor": bool(self.config.graph_conditioning_mode == "node_sequence") or bool(samples[0].get("has_room_anchor", False)),
         }
         if len(topo_maps) == len(samples):
@@ -1397,6 +1475,7 @@ class MaskedRoomTrainer:
             "target_idx": torch.tensor(int(sample.get("target_idx", -1)), device=self.device, dtype=torch.long),
             "key_lock_pairs": list(sample.get("key_lock_pairs", []) or []),
             "graph_scope": "dungeon",
+            "graph_conditioning_mode": str(self.config.graph_conditioning_mode),
             "has_room_anchor": bool(self.config.graph_conditioning_mode == "node_sequence") or bool(sample.get("has_room_anchor", False)),
         }
         if len(topo_by_node) == len(graph_list):
@@ -1537,11 +1616,22 @@ class MaskedRoomTrainer:
         logic_loss = torch.zeros((), device=self.device, dtype=loss.dtype)
         logic_info: Dict[str, Any] = {}
         solvability_proxy = torch.zeros((), device=self.device, dtype=loss.dtype)
+        low_mask_gate = torch.tensor(1.0, device=self.device, dtype=loss.dtype)
         if need_logic_supervision and isinstance(aux.get("logits"), torch.Tensor):
+            mask_ratio_per_sample = aux.get("mask_ratio_per_sample")
+            if isinstance(mask_ratio_per_sample, torch.Tensor):
+                # Attenuate LogicNet gradients at high mask ratios (noisy softmax
+                # probabilities before interior layout has formed) while keeping
+                # dungeon-batch alignment intact.
+                low_mask_gate = (1.0 - mask_ratio_per_sample.clamp(0.0, 1.0)).pow(2).mean().to(
+                    device=self.device,
+                    dtype=loss.dtype,
+                )
             logic_loss, logic_info = self.logic_net(aux["logits"], graph_data=graph_batch)
             if isinstance(logic_loss, torch.Tensor) and logic_loss.numel() != 1:
                 logic_loss = logic_loss.mean()
             if self._tensor_is_finite(logic_loss):
+                logic_loss = logic_loss * low_mask_gate
                 solvability_proxy = self._logic_loss_to_solvability_proxy(logic_loss).to(device=self.device, dtype=loss.dtype)
             else:
                 logic_info = dict(logic_info)
@@ -1718,6 +1808,7 @@ class MaskedRoomTrainer:
                 "attention_mode": str(self.config.attention_mode),
                 "context_attention_mode": str(getattr(self.config, "context_attention_mode", "concat_encoder")),
                 "topology_conditioning_mode": str(self.config.topology_conditioning_mode),
+                "condition_use_rrwp_edge_features": bool(getattr(self.config, "condition_use_rrwp_edge_features", False)),
                 "hedgehog_feature_dim": int(self.config.hedgehog_feature_dim),
                 "graph_auto_linear_attention_nodes": int(self.config.graph_auto_linear_attention_nodes),
                 "spatial_graph_gate_init": float(self.config.spatial_graph_gate_init),
@@ -1734,6 +1825,9 @@ class MaskedRoomTrainer:
                 "topology_marker_weight": float(self.config.topology_marker_weight),
                 "topology_trace_weight": float(self.config.topology_trace_weight),
                 "topology_focus_dilation": int(self.config.topology_focus_dilation),
+                "grid_augmentation": bool(getattr(self.config, "grid_augmentation", False)),
+                "rare_tile_weight": float(getattr(self.config, "rare_tile_weight", 1.0)),
+                "focal_gamma": float(getattr(self.config, "focal_gamma", 0.0)),
                 "logic_net_enabled": bool(getattr(self.config, "logic_net_enabled", False)),
                 "logic_net_trainable": bool(getattr(self.config, "logic_net_trainable", False)),
                 "alpha_logic": float(getattr(self.config, "alpha_logic", 0.0)),
@@ -2072,6 +2166,7 @@ def main() -> None:
     )
     parser.add_argument("--data-dir", type=str, default=None)
     parser.add_argument("--batch-size", type=int, default=None)
+    parser.add_argument("--grid-augmentation", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--epochs", type=int, default=None)
     parser.add_argument("--lr", type=float, default=None)
     parser.add_argument("--num-classes", type=int, default=None)
@@ -2086,6 +2181,7 @@ def main() -> None:
     parser.add_argument("--condition-reference-tile-vocab-size", type=int, default=None)
     parser.add_argument("--condition-reference-embedding-dim", type=int, default=None)
     parser.add_argument("--condition-reference-hidden-dim", type=int, default=None)
+    parser.add_argument("--condition-use-rrwp-edge-features", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument(
         "--condition-strict-schema",
         action=argparse.BooleanOptionalAction,
@@ -2121,6 +2217,8 @@ def main() -> None:
     parser.add_argument("--topology-marker-weight", type=float, default=None)
     parser.add_argument("--topology-trace-weight", type=float, default=None)
     parser.add_argument("--topology-focus-dilation", type=int, default=None)
+    parser.add_argument("--rare-tile-weight", type=float, default=None)
+    parser.add_argument("--focal-gamma", type=float, default=None)
     parser.add_argument("--logic-net-enabled", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--logic-net-trainable", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--alpha-logic", type=float, default=None)

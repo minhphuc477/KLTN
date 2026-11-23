@@ -28,6 +28,7 @@ Architecture:
 
 """
 
+from contextlib import nullcontext
 import math
 import logging
 import os
@@ -370,12 +371,15 @@ class CrossAttention(nn.Module):
         self.graphormer_edge_bias = nn.Embedding(edge_types, self.num_heads)
         self.graphormer_in_degree = nn.Embedding(self.graphormer_max_degree + 1, self._topology_context_dim)
         self.graphormer_out_degree = nn.Embedding(self.graphormer_max_degree + 1, self._topology_context_dim)
+        target_device = self.q.weight.device
+        target_dtype = self.q.weight.dtype
         for module in (
             self.graphormer_spatial_bias,
             self.graphormer_edge_bias,
             self.graphormer_in_degree,
             self.graphormer_out_degree,
         ):
+            module.to(device=target_device, dtype=target_dtype)
             nn.init.normal_(module.weight, mean=0.0, std=0.02)
     
     @staticmethod
@@ -1136,6 +1140,8 @@ class CrossAttention(nn.Module):
         # Handle 2D context
         if context.dim() == 2:
             context = context.unsqueeze(1)
+        if int(context.shape[1]) == 0:
+            return torch.zeros_like(x)
         context = self._refine_context_topology(context, edge_index=edge_index, edge_attr=edge_attr, node_mask=node_mask)
         context = self.norm_context(context)
         
@@ -1989,15 +1995,24 @@ class DiTBlock(nn.Module):
         else:
             attn_out, _ = self.attn(attn_in, attn_in, attn_in, need_weights=False)
         x = x + gate_msa.unsqueeze(1) * attn_out
-        if context_tokens is not None:
+        if context_tokens is not None and int(context_tokens.shape[1]) > 0:
             cross_in = self._modulate(self.norm_cross(x), shift_cross, scale_cross)
+            safe_kpm = context_key_padding_mask
+            valid_rows: Optional[Tensor] = None
+            if safe_kpm is not None:
+                valid_rows = ~safe_kpm.all(dim=1)
+                if not bool(valid_rows.all().item()):
+                    safe_kpm = safe_kpm.clone()
+                    safe_kpm[~valid_rows, 0] = False
             cross_out, _ = self.cross_attn(
                 cross_in,
                 context_tokens,
                 context_tokens,
-                key_padding_mask=context_key_padding_mask,
+                key_padding_mask=safe_kpm,
                 need_weights=False,
             )
+            if valid_rows is not None and not bool(valid_rows.all().item()):
+                cross_out = cross_out * valid_rows[:, None, None].to(dtype=cross_out.dtype)
             x = x + gate_cross.unsqueeze(1) * cross_out
         mlp_in = self._modulate(self.norm2(x), shift_mlp, scale_mlp)
         x = x + gate_mlp.unsqueeze(1) * self.mlp(mlp_in)
@@ -2159,6 +2174,7 @@ class DiTDenoiser(nn.Module):
         d_model = self.model_channels
         d_half = d_model // 2
         num_freq = max(1, d_half // 2)
+        axis_dim = 2 * num_freq
 
         # Log-spaced frequencies: omega_i = 1 / (10000 ^ (2i / d_half))
         freq_exponents = torch.arange(num_freq, device=device, dtype=torch.float64)
@@ -2171,11 +2187,11 @@ class DiTDenoiser(nn.Module):
         y_enc = y.unsqueeze(1) * frequencies.unsqueeze(0)  # [H, num_freq]
         x_enc = x.unsqueeze(1) * frequencies.unsqueeze(0)  # [W, num_freq]
 
-        y_pe = torch.stack([torch.sin(y_enc), torch.cos(y_enc)], dim=-1).reshape(height, d_half)
-        x_pe = torch.stack([torch.sin(x_enc), torch.cos(x_enc)], dim=-1).reshape(width, d_half)
+        y_pe = torch.stack([torch.sin(y_enc), torch.cos(y_enc)], dim=-1).reshape(height, axis_dim)
+        x_pe = torch.stack([torch.sin(x_enc), torch.cos(x_enc)], dim=-1).reshape(width, axis_dim)
 
-        y_grid = y_pe.unsqueeze(1).expand(height, width, d_half)  # [H, W, d_half]
-        x_grid = x_pe.unsqueeze(0).expand(height, width, d_half)  # [H, W, d_half]
+        y_grid = y_pe.unsqueeze(1).expand(height, width, axis_dim)  # [H, W, axis_dim]
+        x_grid = x_pe.unsqueeze(0).expand(height, width, axis_dim)  # [H, W, axis_dim]
         pos = torch.cat([y_grid, x_grid], dim=-1)  # [H, W, d_model]
 
         # Handle odd model_channels: pad or trim to exactly d_model channels
@@ -2978,6 +2994,7 @@ class LatentDiffusionModel(nn.Module):
         dit_activation_type: str = "gelu",
         dit_norm_type: str = "layer",
         latent_scale_factor: float = 1.0,
+        latent_clip_bound: Optional[float] = 5.0,
     ):
         super().__init__()
         
@@ -2988,6 +3005,15 @@ class LatentDiffusionModel(nn.Module):
                 "latent_scale_factor must be a finite positive value, "
                 f"got {latent_scale_factor!r}."
             )
+        if latent_clip_bound is None:
+            self.latent_clip_bound = None
+        else:
+            self.latent_clip_bound = float(latent_clip_bound)
+            if not math.isfinite(self.latent_clip_bound) or self.latent_clip_bound <= 0.0:
+                raise ValueError(
+                    "latent_clip_bound must be None or a finite positive value, "
+                    f"got {latent_clip_bound!r}."
+                )
         self.context_dim = context_dim
         self.num_timesteps = num_timesteps
         self.cfg_dropout_prob = cfg_dropout_prob
@@ -3108,6 +3134,21 @@ class LatentDiffusionModel(nn.Module):
     def unscale_first_stage_latent(self, latent: torch.Tensor) -> torch.Tensor:
         """Map a diffusion-space latent back to the frozen VQ-VAE decoder space."""
         return latent / self.latent_scale_factor
+
+    def get_latent_clamp_range(self) -> Optional[Tuple[float, float]]:
+        """Return symmetric clean-latent clamp range matching diffusion latent scale."""
+        bound = getattr(self, "latent_clip_bound", None)
+        if bound is None:
+            return None
+        val = float(bound)
+        return (-val, val)
+
+    def _clamp_clean_latent(self, pred_x0: Tensor) -> Tensor:
+        """Clamp predicted clean latents using calibrated bounds when enabled."""
+        clamp_range = self.get_latent_clamp_range()
+        if clamp_range is None:
+            return pred_x0
+        return torch.clamp(pred_x0, clamp_range[0], clamp_range[1])
 
     def compile_for_inference(self, *, mode: str = "reduce-overhead") -> bool:
         """
@@ -3272,8 +3313,30 @@ class LatentDiffusionModel(nn.Module):
         """Whether a validated fast-sampling adapter is currently configured."""
         return self.fast_sampler is not None
 
+    def has_active_adapters(self) -> bool:
+        """Whether any injected LoRA adapters are currently enabled on the denoiser."""
+        from src.optimization.lcm_lora import LoRALinear
+
+        return any(
+            isinstance(module, LoRALinear) and bool(getattr(module, "enabled", True))
+            for module in self.denoiser.modules()
+        )
+
+    def disable_adapters(self) -> int:
+        """Disable any injected LoRA adapters so clean base weights execute."""
+        from src.optimization.lcm_lora import set_lora_enabled
+
+        return set_lora_enabled(self.denoiser, False)
+
+    def enable_adapters(self) -> int:
+        """Re-enable any injected LoRA adapters on the denoiser."""
+        from src.optimization.lcm_lora import set_lora_enabled
+
+        return set_lora_enabled(self.denoiser, True)
+
     def disable_fast_sampling(self) -> None:
         """Disable the optional fast-sampling adapter."""
+        self.disable_adapters()
         self.fast_sampler = None
         self.fast_sampler_checkpoint = None
 
@@ -3298,6 +3361,7 @@ class LatentDiffusionModel(nn.Module):
             strict=strict,
         )
         self.fast_sampler_checkpoint = str(adapter_checkpoint)
+        self.enable_adapters()
 
     @torch.no_grad()
     def fast_sample(
@@ -3411,17 +3475,18 @@ class LatentDiffusionModel(nn.Module):
                 raise ValueError(
                     f"context sequence length {seq_len} is smaller than required graph token length {required_seq_len}."
                 )
-            if has_room_anchor:
+        if has_room_anchor:
+            if adjusted is not None:
                 adjusted = adjusted + 1
-                if node_mask is not None:
-                    anchor = torch.ones(node_mask.shape[0], 1, device=node_mask.device, dtype=node_mask.dtype)
-                    node_mask = torch.cat([anchor, node_mask], dim=1)
-            elif node_mask is not None and int(node_mask.shape[1]) != seq_len:
-                if int(node_mask.shape[1]) > seq_len:
-                    raise ValueError(
-                        f"node_mask length {int(node_mask.shape[1])} exceeds context sequence length {seq_len}."
-                    )
-                node_mask = F.pad(node_mask, (0, seq_len - int(node_mask.shape[1])), value=1)
+            if node_mask is not None and int(node_mask.shape[1]) < seq_len:
+                anchor = torch.ones(node_mask.shape[0], 1, device=node_mask.device, dtype=node_mask.dtype)
+                node_mask = torch.cat([anchor, node_mask], dim=1)
+        if node_mask is not None and int(node_mask.shape[1]) != seq_len:
+            if int(node_mask.shape[1]) > seq_len:
+                raise ValueError(
+                    f"node_mask length {int(node_mask.shape[1])} exceeds context sequence length {seq_len}."
+                )
+            node_mask = F.pad(node_mask, (0, seq_len - int(node_mask.shape[1])), value=1)
 
         return adjusted, edge_attr, node_mask
 
@@ -3676,16 +3741,29 @@ class LatentDiffusionModel(nn.Module):
         )
 
         cfg_scale = self._cfg_scale_for_timestep(t).to(device=x_t.device, dtype=x_t.dtype)
-        pred_cond = self.denoiser(
-            x_t,
-            t,
-            context,
-            context_edge_index=context_edge_index,
-            context_edge_attr=context_edge_attr,
-            context_node_mask=context_node_mask,
-            spatial_graph_data=spatial_graph_data,
+        use_cuda_autocast = (
+            not torch.is_grad_enabled()
+            and x_t.is_cuda
+            and x_t.dtype == torch.float32
+            and bool(getattr(self, "enable_cuda_autocast", True))
         )
-        
+        amp_ctx = (
+            torch.amp.autocast(device_type="cuda", dtype=torch.float16, enabled=True)
+            if use_cuda_autocast
+            else nullcontext()
+        )
+        with amp_ctx:
+            pred_cond = self.denoiser(
+                x_t,
+                t,
+                context,
+                context_edge_index=context_edge_index,
+                context_edge_attr=context_edge_attr,
+                context_node_mask=context_node_mask,
+                spatial_graph_data=spatial_graph_data,
+            )
+        pred_cond = pred_cond.to(dtype=x_t.dtype)
+
         if torch.any(cfg_scale > (1.0 + 1e-6)):
             # Unconditional prediction (zero context with matching spatial structure)
             uncond_spatial_graph = None
@@ -3694,15 +3772,17 @@ class LatentDiffusionModel(nn.Module):
                     k: torch.zeros_like(v) if isinstance(v, torch.Tensor) else v
                     for k, v in spatial_graph_data.items()
                 }
-            pred_uncond = self.denoiser(
-                x_t,
-                t,
-                torch.zeros_like(context),
-                context_edge_index=context_edge_index,
-                context_edge_attr=context_edge_attr,
-                context_node_mask=context_node_mask,
-                spatial_graph_data=uncond_spatial_graph,
-            )
+            with amp_ctx:
+                pred_uncond = self.denoiser(
+                    x_t,
+                    t,
+                    torch.zeros_like(context),
+                    context_edge_index=context_edge_index,
+                    context_edge_attr=context_edge_attr,
+                    context_node_mask=context_node_mask,
+                    spatial_graph_data=uncond_spatial_graph,
+                )
+            pred_uncond = pred_uncond.to(dtype=x_t.dtype)
             # CFG interpolation
             prediction = pred_uncond + cfg_scale[:, None, None, None] * (pred_cond - pred_uncond)
         else:
@@ -3713,15 +3793,17 @@ class LatentDiffusionModel(nn.Module):
             updated = self.set_self_attention_perturbation("identity")
             if updated > 0:
                 try:
-                    pred_perturbed = self.denoiser(
-                        x_t,
-                        t,
-                        context,
-                        context_edge_index=context_edge_index,
-                        context_edge_attr=context_edge_attr,
-                        context_node_mask=context_node_mask,
-                        spatial_graph_data=spatial_graph_data,
-                    )
+                    with amp_ctx:
+                        pred_perturbed = self.denoiser(
+                            x_t,
+                            t,
+                            context,
+                            context_edge_index=context_edge_index,
+                            context_edge_attr=context_edge_attr,
+                            context_node_mask=context_node_mask,
+                            spatial_graph_data=spatial_graph_data,
+                        )
+                    pred_perturbed = pred_perturbed.to(dtype=x_t.dtype)
                 finally:
                     self.set_self_attention_perturbation("none")
                 prediction = prediction + pag_scale * (pred_cond - pred_perturbed)
@@ -3787,7 +3869,7 @@ class LatentDiffusionModel(nn.Module):
         )
         sqrt_alpha_t = self.sqrt_alphas_cumprod[t]
         sqrt_one_minus_alpha_t = self.sqrt_one_minus_alphas_cumprod[t]
-        pred_x0 = torch.clamp(pred_x0 - guidance_grad, -1.0, 1.0)
+        pred_x0 = self._clamp_clean_latent(pred_x0 - guidance_grad)
         if float(sqrt_one_minus_alpha_t.detach().abs().item()) > 1e-8:
             pred_noise = (x_t - sqrt_alpha_t * pred_x0) / torch.clamp(sqrt_one_minus_alpha_t, min=1e-8)
         return pred_x0, pred_noise
@@ -3856,7 +3938,7 @@ class LatentDiffusionModel(nn.Module):
         pred_x0, _pred_noise = self._convert_prediction(prediction, x_t, t)
         
         if clip_denoised:
-            pred_x0 = torch.clamp(pred_x0, -1.0, 1.0)
+            pred_x0 = self._clamp_clean_latent(pred_x0)
         
         return self._q_posterior_from_pred_x0(pred_x0, x_t, t)
     
@@ -3886,7 +3968,7 @@ class LatentDiffusionModel(nn.Module):
             cached_spatial=cached_spatial,
         )
         pred_x0, pred_noise = self._convert_prediction(prediction, x_t, t_tensor)
-        pred_x0 = torch.clamp(pred_x0, -1.0, 1.0)
+        pred_x0 = self._clamp_clean_latent(pred_x0)
         pred_x0, _pred_noise = self._apply_logic_guidance_to_prediction(
             x_t=x_t,
             pred_x0=pred_x0,
@@ -3902,7 +3984,7 @@ class LatentDiffusionModel(nn.Module):
         # Add noise (except at t=0)
         noise = torch.randn_like(x_t) if t > 0 else torch.zeros_like(x_t)
         
-        return mean + torch.sqrt(variance) * noise
+        return (mean + torch.sqrt(variance) * noise).to(dtype=x_t.dtype)
     
     @torch.no_grad()
     def sample(
@@ -3992,7 +4074,7 @@ class LatentDiffusionModel(nn.Module):
         t_view = t_cont.to(device=x_t.device, dtype=x_t.dtype).view(
             (int(x_t.shape[0]),) + (1,) * max(0, x_t.dim() - 1)
         )
-        pred_x0 = torch.clamp(x_t - t_view * velocity, -1.0, 1.0)
+        pred_x0 = self._clamp_clean_latent(x_t - t_view * velocity)
         pred_x0_guided, _ = self._apply_logic_guidance_to_prediction(
             x_t=x_t,
             pred_x0=pred_x0,
@@ -4074,7 +4156,7 @@ class LatentDiffusionModel(nn.Module):
             x_next = self._sanitize_sampling_tensor(
                 x_next,
                 fallback=x_t.to(dtype=work_dtype),
-                clamp_range=(-1.0, 1.0),
+                clamp_range=None,
             )
             x_t = x_next.to(dtype=sample_dtype)
             if return_intermediates:
@@ -4228,7 +4310,7 @@ class LatentDiffusionModel(nn.Module):
             pred_x0 = self._sanitize_sampling_tensor(
                 pred_x0,
                 fallback=x_t,
-                clamp_range=(-1.0, 1.0),
+                clamp_range=self.get_latent_clamp_range(),
             )
             pred_noise = self._sanitize_sampling_tensor(
                 pred_noise,
@@ -4247,7 +4329,7 @@ class LatentDiffusionModel(nn.Module):
             pred_x0 = self._sanitize_sampling_tensor(
                 pred_x0,
                 fallback=x_t,
-                clamp_range=(-1.0, 1.0),
+                clamp_range=self.get_latent_clamp_range(),
             )
             pred_noise = self._sanitize_sampling_tensor(
                 pred_noise,
@@ -4285,7 +4367,7 @@ class LatentDiffusionModel(nn.Module):
             x_next = self._sanitize_sampling_tensor(
                 x_next,
                 fallback=pred_x0_work,
-                clamp_range=(-1.0, 1.0),
+                clamp_range=None,
             )
 
             x_t = x_next.to(dtype=sample_dtype)
@@ -4322,8 +4404,12 @@ class LatentDiffusionModel(nn.Module):
 
         device = x_0.device
         B = int(x_0.shape[0])
+        sample_dtype = self._sampling_dtype()
+        work_dtype = torch.float32 if sample_dtype in {torch.float16, torch.bfloat16} else sample_dtype
+        x_0_sample = x_0.to(device=device, dtype=sample_dtype)
+        context_sample = self._cast_tensor_for_sampling(context, device=device, dtype=sample_dtype)
 
-        edit_mask = mask.to(device=device, dtype=x_0.dtype)
+        edit_mask = mask.to(device=device, dtype=work_dtype)
         if edit_mask.dim() == 3:
             edit_mask = edit_mask.unsqueeze(1)
         if edit_mask.shape[1] == 1 and x_0.shape[1] > 1:
@@ -4336,16 +4422,67 @@ class LatentDiffusionModel(nn.Module):
         # SDEdit (Meng et al. 2021): 30-50% strength is optimal for partial edits.
         # Decoupled from num_steps so callers can control both independently.
         noise_strength = max(0.01, min(1.0, float(noise_strength)))
-        start_t = max(1, min(self.num_timesteps - 1, int(self.num_timesteps * noise_strength)))
-
-        t_schedule = self._build_reverse_t_schedule(start_t, num_steps)
-        t_start = torch.full((B,), t_schedule[0], device=device, dtype=torch.long)
-        x_t = self.q_sample(x_0, t_start)
 
         # Cache graph-conditioned context just once; the topology is static through
         # the reverse trajectory.
-        cached_topology = self._extract_context_topology(context, graph_data)
-        cached_spatial = self._extract_spatial_graph_context(context, graph_data)
+        cached_topology = self._extract_context_topology(context_sample, graph_data)
+        cached_spatial = self._extract_spatial_graph_context(context_sample, graph_data)
+
+        if self.training_objective == "flow_matching":
+            steps = max(2, int(num_steps))
+            schedule = torch.linspace(noise_strength, 0.0, steps + 1, device=device, dtype=work_dtype)
+            t0_cont = float(schedule[0].item())
+            x_0_work = x_0_sample.to(dtype=work_dtype)
+            init_noise = torch.randn(x_0_work.shape, device=device, dtype=work_dtype)
+            x_t = ((1.0 - t0_cont) * x_0_work + t0_cont * init_noise).to(dtype=sample_dtype)
+
+            for step_idx in range(steps):
+                t_now = schedule[step_idx]
+                t_next = schedule[step_idx + 1]
+                dt = t_now - t_next
+                t_cont = torch.full((B,), float(t_now.item()), device=device, dtype=work_dtype)
+                t_model = t_cont * float(max(1, self.num_timesteps - 1))
+                t_index = max(0, min(int(self.num_timesteps) - 1, int(round(float(t_model[0].detach().item())))))
+
+                velocity = self._predict_noise_cfg(
+                    x_t,
+                    t_model.to(dtype=x_t.dtype),
+                    context_sample,
+                    graph_data=graph_data,
+                    cached_topology=cached_topology,
+                    cached_spatial=cached_spatial,
+                )
+                velocity = self._sanitize_sampling_tensor(velocity, fallback=torch.zeros_like(velocity))
+                velocity = self._apply_logic_guidance_to_flow_velocity(
+                    x_t=x_t,
+                    velocity=velocity,
+                    t_cont=t_cont,
+                    t_index=t_index,
+                    graph_data=graph_data,
+                )
+                velocity = self._sanitize_sampling_tensor(velocity, fallback=torch.zeros_like(velocity))
+                x_prev = x_t.to(dtype=work_dtype) - dt * velocity.to(dtype=work_dtype)
+                x_prev = self._sanitize_sampling_tensor(
+                    x_prev,
+                    fallback=x_t.to(dtype=work_dtype),
+                    clamp_range=None,
+                )
+
+                t_next_scalar = float(t_next.item())
+                if t_next_scalar > 1e-6:
+                    step_noise = torch.randn(x_0_work.shape, device=device, dtype=work_dtype)
+                    known_prev = (1.0 - t_next_scalar) * x_0_work + t_next_scalar * step_noise
+                else:
+                    known_prev = x_0_work
+
+                x_t = (edit_mask * x_prev + preserve_mask * known_prev).to(dtype=sample_dtype)
+
+            return x_t
+
+        start_t = max(1, min(self.num_timesteps - 1, int(self.num_timesteps * noise_strength)))
+        t_schedule = self._build_reverse_t_schedule(start_t, num_steps)
+        t_start = torch.full((B,), t_schedule[0], device=device, dtype=torch.long)
+        x_t = self.q_sample(x_0_sample.to(dtype=work_dtype), t_start).to(dtype=sample_dtype)
 
         for i, t in enumerate(t_schedule):
             t_tensor = torch.full((B,), t, device=device, dtype=torch.long)
@@ -4353,13 +4490,19 @@ class LatentDiffusionModel(nn.Module):
             prediction = self._predict_noise_cfg(
                 x_t,
                 t_tensor,
-                context,
+                context_sample,
                 graph_data=graph_data,
                 cached_topology=cached_topology,
                 cached_spatial=cached_spatial,
             )
+            prediction = self._sanitize_sampling_tensor(prediction, fallback=torch.zeros_like(prediction))
             pred_x0, pred_noise = self._convert_prediction(prediction, x_t, t_tensor)
-            pred_x0 = torch.clamp(pred_x0, -1.0, 1.0)
+            pred_x0 = self._sanitize_sampling_tensor(
+                pred_x0,
+                fallback=x_t,
+                clamp_range=self.get_latent_clamp_range(),
+            )
+            pred_noise = self._sanitize_sampling_tensor(pred_noise, fallback=torch.zeros_like(pred_noise))
 
             pred_x0, pred_noise = self._apply_logic_guidance_to_prediction(
                 x_t=x_t,
@@ -4368,20 +4511,30 @@ class LatentDiffusionModel(nn.Module):
                 t=int(t),
                 graph_data=graph_data,
             )
+            pred_x0 = self._sanitize_sampling_tensor(
+                pred_x0,
+                fallback=x_t,
+                clamp_range=self.get_latent_clamp_range(),
+            )
+            pred_noise = self._sanitize_sampling_tensor(pred_noise, fallback=torch.zeros_like(pred_noise))
 
             if i + 1 < len(t_schedule):
                 t_prev = int(t_schedule[i + 1])
-                alpha_prev = self.alphas_cumprod[t_prev]
+                alpha_prev = self.alphas_cumprod[t_prev].to(device=device, dtype=work_dtype)
                 t_prev_tensor = torch.full((B,), t_prev, device=device, dtype=torch.long)
-                known_prev = self.q_sample(x_0, t_prev_tensor)
+                known_prev = self.q_sample(x_0_sample.to(dtype=work_dtype), t_prev_tensor)
             else:
-                t_prev = -1
-                alpha_prev = torch.tensor(1.0, device=device, dtype=x_t.dtype)
-                known_prev = x_0
+                alpha_prev = torch.tensor(1.0, device=device, dtype=work_dtype)
+                known_prev = x_0_sample.to(dtype=work_dtype)
 
-            pred_dir = torch.sqrt(torch.clamp(1.0 - alpha_prev, min=0.0)) * pred_noise
-            x_prev = torch.sqrt(alpha_prev) * pred_x0 + pred_dir
-            x_t = edit_mask * x_prev + preserve_mask * known_prev
+            pred_dir = torch.sqrt(torch.clamp(1.0 - alpha_prev, min=0.0)) * pred_noise.to(dtype=work_dtype)
+            x_prev = torch.sqrt(torch.clamp(alpha_prev, min=0.0)) * pred_x0.to(dtype=work_dtype) + pred_dir
+            x_prev = self._sanitize_sampling_tensor(
+                x_prev,
+                fallback=pred_x0.to(dtype=work_dtype),
+                clamp_range=None,
+            )
+            x_t = (edit_mask * x_prev + preserve_mask * known_prev).to(dtype=sample_dtype)
 
         return x_t
     

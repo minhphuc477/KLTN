@@ -10,6 +10,32 @@ from typing import Any, Callable, Dict, Optional, Tuple
 import networkx as nx
 
 
+def bind_source_physical_doors(graph: nx.DiGraph) -> None:
+    """Bind reciprocal VGLC door arcs to one persistent physical lock.
+
+    Apply only at corpus ingestion: arbitrary authored directed gates retain
+    independent state. Require identical attributes, including every typed or
+    counted requirement, and preserve both original arcs and their labels.
+    """
+    from src.simulation.edge_logic import edge_constraints_from_data
+
+    for source, target, data in graph.edges(data=True):
+        if source == target or not graph.has_edge(target, source):
+            continue
+        reverse = graph.edges[target, source]
+        if data != reverse:
+            continue
+        if not set(edge_constraints_from_data(data)) & {'key_locked', 'bombable'}:
+            continue
+        owner = min((source, target), key=lambda value: (type(value).__name__, str(value)))
+        for attributes in (data, reverse):
+            attributes['metadata'] = {
+                **dict(attributes.get('metadata', {})),
+                'shared_physical_door': True,
+                'physical_door_owner': owner,
+            }
+
+
 def load_dungeon(
     data_root: Path,
     vglc_parser: Any,
@@ -34,6 +60,7 @@ def load_dungeon(
 
     rooms = vglc_parser.parse(str(vglc_path))
     graph = dot_parser.parse(str(dot_path))
+    bind_source_physical_doors(graph)
 
     dungeon = matcher.match(rooms, graph)
     dungeon.dungeon_id = f"D{dungeon_num}"
@@ -57,6 +84,7 @@ def layout_from_graph(
         dot_path = data_root / "Graph Processed" / f"LoZ_{dungeon_num}.dot"
 
     graph = dot_parser.parse(str(dot_path))
+    bind_source_physical_doors(graph)
     engine = hybrid_layout_engine_cls(**sa_kwargs)
     return engine.layout(graph)
 

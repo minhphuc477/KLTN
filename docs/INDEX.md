@@ -1,115 +1,89 @@
 # KLTN Documentation Index
 
-Last updated: 2026-07-13
+Last updated: 2026-11-12
 
 This is the canonical navigation page for `docs/`. Top-level files should be
-current references, executable protocols, or stable thesis/report materials.
-Superseded notes belong under `docs/archive/`.
+current references, executable protocols, or domain guides.
 
 ## Start Here
 
 1. [`../README.md`](../README.md)
-2. [`PUBLICATION_GUIDANCE_AND_CARDS.md`](PUBLICATION_GUIDANCE_AND_CARDS.md)
-3. [`architecture_audit_research_notes.md`](architecture_audit_research_notes.md)
-4. [`CURRENT_ARCHITECTURE.md`](CURRENT_ARCHITECTURE.md)
-5. [`TRACEABILITY_AND_CLAIM_VALIDATION.md`](TRACEABILITY_AND_CLAIM_VALIDATION.md)
-6. [`LOCAL_RESEARCH_EVIDENCE_RUNBOOK.md`](LOCAL_RESEARCH_EVIDENCE_RUNBOOK.md)
+2. [`SOTA_COMPARISON_AND_BENCHMARKS.md`](SOTA_COMPARISON_AND_BENCHMARKS.md) (external literature baseline table, `B1–B4 / A0–A4` Q1 matrix, $d_{\text{NN}}$ audit & `RG1–RG4`)
+3. [`PUBLICATION_GUIDANCE_AND_CARDS.md`](PUBLICATION_GUIDANCE_AND_CARDS.md) (`RG1–RG4`, `PS1–PS4`, `RO1–RO4`, `RQ1–RQ4`, `H1–H4`)
+4. [`../PUBLICATION_BLUEPRINT.md`](../PUBLICATION_BLUEPRINT.md) (operational confirmatory protocol & Section 13/28 claim gates)
+5. [`../refine-logs/EXPERIMENT_PLAN.md`](../refine-logs/EXPERIMENT_PLAN.md) & [`../refine-logs/EXPERIMENT_TRACKER.md`](../refine-logs/EXPERIMENT_TRACKER.md) (`B1–B5`, `M0–M4`, `R001–R017`)
+6. [`TRACEABILITY_AND_CLAIM_VALIDATION.md`](TRACEABILITY_AND_CLAIM_VALIDATION.md) (end-to-end `RG -> PS -> RO -> RQ -> H -> Block -> Config -> Metric` matrix)
+7. [`CURRENT_ARCHITECTURE.md`](CURRENT_ARCHITECTURE.md) & [`architecture_audit_research_notes.md`](architecture_audit_research_notes.md)
+8. [`LOCAL_RESEARCH_EVIDENCE_RUNBOOK.md`](LOCAL_RESEARCH_EVIDENCE_RUNBOOK.md)
 
 ## Publication Contract
 
-- Canonical research question, system boundary, claim language, data card,
-  artifact card, metric contract, baseline taxonomy, failure taxonomy,
-  reproducibility checklist, and IP note:
+- Canonical scientific framing (`RG1–RG4`, `PS1–PS4`, `RO1–RO4`, `RQ1–RQ4`, `H1–H4`),
+  system boundary, claim language, data card, artifact card, metric contract,
+  baseline taxonomy, failure taxonomy, reproducibility checklist, and IP note:
   [`PUBLICATION_GUIDANCE_AND_CARDS.md`](PUBLICATION_GUIDANCE_AND_CARDS.md)
 - Machine-readable publication card:
   [`publication_guidance_card.json`](publication_guidance_card.json)
+- Operational confirmatory evaluation & statistical design:
+  [`../PUBLICATION_BLUEPRINT.md`](../PUBLICATION_BLUEPRINT.md)
 - Validator:
   [`../scripts/validate_publication_readiness.py`](../scripts/validate_publication_readiness.py)
 
-## Current Protocols
+## Current Protocols And Runbooks
 
 - Canonical dependency-ordered training commands:
   [`TRAINING_COMMANDS_IN_ORDER.md`](TRAINING_COMMANDS_IN_ORDER.md)
-- Designer controllability and compute/sample-efficiency:
-  [`DESIGNER_CONTROLLABILITY_AND_COMPUTE_PROTOCOL.md`](DESIGNER_CONTROLLABILITY_AND_COMPUTE_PROTOCOL.md)
-- VQ-VAE-2, conditioning, LogicNet, repair, and P-CBS ablation protocol:
-  [`VQVAE2_LOGICNET_REPAIR_ABLATION_PROTOCOL_2026_05_23.md`](VQVAE2_LOGICNET_REPAIR_ABLATION_PROTOCOL_2026_05_23.md)
-- Kaggle full training suite for VQ-VAE/VQ-VAE-2 and downstream stages:
-  [`KAGGLE_T4_X2_TRAINING.md`](KAGGLE_T4_X2_TRAINING.md)
-- Kaggle research evidence runbook:
-  [`KAGGLE_RESEARCH_EVIDENCE_RUNBOOK.md`](KAGGLE_RESEARCH_EVIDENCE_RUNBOOK.md)
 - Local research evidence runbook:
   [`LOCAL_RESEARCH_EVIDENCE_RUNBOOK.md`](LOCAL_RESEARCH_EVIDENCE_RUNBOOK.md)
-- Full training, ablation, and evaluation reference:
-  [`FULL_TRAINING_ABLATION_AND_EVAL_COMMAND_BOOK_2026_04_18.md`](FULL_TRAINING_ABLATION_AND_EVAL_COMMAND_BOOK_2026_04_18.md)
-- Thesis hyperparameter evidence and protocol justification:
-  [`THESIS_HYPERPARAMETER_SEARCH_AND_PROTOCOL_JUSTIFICATION_2026_04_19.md`](THESIS_HYPERPARAMETER_SEARCH_AND_PROTOCOL_JUSTIFICATION_2026_04_19.md)
-- Matched-budget benchmark:
-  [`MATCHED_BUDGET_BENCHMARK_PROTOCOL.md`](MATCHED_BUDGET_BENCHMARK_PROTOCOL.md)
-- OOD scaling and blinded evaluation:
-  [`OOD_SCALING_AND_BLINDED_EVAL_PROTOCOL.md`](OOD_SCALING_AND_BLINDED_EVAL_PROTOCOL.md)
-- PCG benchmark and external comparison. This is a benchmark protocol, not
-  current proof of state-of-the-art superiority:
+- Kaggle notebook suite README:
+  [`../kaggle/README.md`](../kaggle/README.md) & [`../kaggle/hmolqd_training_suite/README.md`](../kaggle/hmolqd_training_suite/README.md)
+- PCG benchmark, literature gaps (`RG1–RG4`), and external comparison protocol:
   [`SOTA_COMPARISON_AND_BENCHMARKS.md`](SOTA_COMPARISON_AND_BENCHMARKS.md)
-- CNN versus Bellman-Ford LogicNet ablation:
-  [`pathfinder_ablation_protocol.md`](pathfinder_ablation_protocol.md)
-- Human playtest provenance, synthetic structural OOD, and QD archive heatmaps:
-  [`HUMAN_PLAYTEST_AND_OOD_QD_PROTOCOL.md`](HUMAN_PLAYTEST_AND_OOD_QD_PROTOCOL.md)
 - Topology-QD archive generation and exact final-map materialization commands:
   [`TOPOLOGY_COMMANDS.md`](TOPOLOGY_COMMANDS.md)
 
 ## Architecture And Rationale
 
-- Current non-GUI audit ledger and publication boundary:
-  [`architecture_audit_research_notes.md`](architecture_audit_research_notes.md)
-- Live block map:
+- Live block map and canonical config/backbone summary:
   [`CURRENT_ARCHITECTURE.md`](CURRENT_ARCHITECTURE.md)
-- Report-writing rationale, ablations, and complexity:
+- Report-writing rationale, ablations, and complexity analysis:
   [`CANONICAL_MODEL_RATIONALE_ABLATION_AND_COMPLEXITY_GUIDE.md`](CANONICAL_MODEL_RATIONALE_ABLATION_AND_COMPLEXITY_GUIDE.md)
-- Latest block-by-block gap audit:
-  [`BLOCK_ARCHITECTURE_GAP_AUDIT_2026_05_23.md`](BLOCK_ARCHITECTURE_GAP_AUDIT_2026_05_23.md)
-- Repo structure and cleanup audit:
-  [`REPO_STRUCTURE_AND_CLEANUP_AUDIT_2026_05_24.md`](REPO_STRUCTURE_AND_CLEANUP_AUDIT_2026_05_24.md)
-
-## Block References
-
-- Block I topology commands:
-  [`TOPOLOGY_COMMANDS.md`](TOPOLOGY_COMMANDS.md)
-- VQ-VAE audit:
-  [`VQVAE_RESEARCH_AUDIT_2026_04_10.md`](VQVAE_RESEARCH_AUDIT_2026_04_10.md)
-- Learned staged-puzzle semantics:
-  [`LEARNED_STAGE_PUZZLE_SEMANTICS_UPGRADE_2026_04_18.md`](LEARNED_STAGE_PUZZLE_SEMANTICS_UPGRADE_2026_04_18.md)
-- Search algorithm audit:
-  [`SEARCH_ALGORITHM_AUDIT_AND_RECOMMENDATION_2026_04_18.md`](SEARCH_ALGORITHM_AUDIT_AND_RECOMMENDATION_2026_04_18.md)
-- P-CBS novelty and component notes:
-  [`PCBS_RESEARCH_AND_PUBLICATION_GAP_AUDIT_2026_05_24.md`](PCBS_RESEARCH_AND_PUBLICATION_GAP_AUDIT_2026_05_24.md)
+- Current non-GUI audit ledger and publication claim boundary:
+  [`architecture_audit_research_notes.md`](architecture_audit_research_notes.md)
 
 ## Reference Docs
 
 - [`BLOCK_IO_REFERENCE.md`](BLOCK_IO_REFERENCE.md)
-- [`experiment_tracking.md`](experiment_tracking.md)
-- [`gpu_validation.md`](gpu_validation.md)
-- [`reproducibility_versioning.md`](reproducibility_versioning.md)
 - [`GRAMMAR_REFERENCE.md`](GRAMMAR_REFERENCE.md)
 - [`SOLVERS_AND_GUI_REFERENCE.md`](SOLVERS_AND_GUI_REFERENCE.md)
 - [`VGLC_COMPLIANCE_GUIDE.md`](VGLC_COMPLIANCE_GUIDE.md)
-- [`ZELDA_SOLVER_DOCUMENTATION.md`](ZELDA_SOLVER_DOCUMENTATION.md)
+- [`experiment_tracking.md`](experiment_tracking.md)
+- [`gpu_validation.md`](gpu_validation.md)
+- [`reproducibility_versioning.md`](reproducibility_versioning.md)
 
-## Status
+## Active Scripts By Role
 
-- Artifact/checkpoint status:
-  [`ARTIFACT_AND_CHECKPOINT_STATUS_2026_04_18.md`](ARTIFACT_AND_CHECKPOINT_STATUS_2026_04_18.md)
-- Current audit and evidence boundary:
-  [`architecture_audit_research_notes.md`](architecture_audit_research_notes.md)
+- **Preflight & Publication Validation**:
+  [`../scripts/check_training_hyperparameters.py`](../scripts/check_training_hyperparameters.py),
+  [`../scripts/validate_publication_readiness.py`](../scripts/validate_publication_readiness.py),
+  [`../scripts/validate_training_setup.py`](../scripts/validate_training_setup.py),
+  [`../scripts/validate_all_features.py`](../scripts/validate_all_features.py),
+  [`../scripts/audit_block0_data.py`](../scripts/audit_block0_data.py)
+- **Latent Calibration & Split Locking (`RO1` / `B1–B3`)**:
+  [`../scripts/calibrate_vqvae_latent_scale.py`](../scripts/calibrate_vqvae_latent_scale.py),
+  [`../scripts/lock_dataset_split.py`](../scripts/lock_dataset_split.py),
+  [`../scripts/train_logicnet_tile_classifier.py`](../scripts/train_logicnet_tile_classifier.py)
+- **Causal Conditioning, LogicNet & Four-Stage Ablations (`RO2–RO3` / `B4`)**:
+  [`../scripts/run_ablation_study.py`](../scripts/run_ablation_study.py),
+  [`../scripts/run_conditioning_logicnet_repair_ablation.py`](../scripts/run_conditioning_logicnet_repair_ablation.py),
+  [`../scripts/compare_logic_loss_ab.py`](../scripts/compare_logic_loss_ab.py),
+  [`../scripts/run_fast_sampler_visual_audit.py`](../scripts/run_fast_sampler_visual_audit.py)
+- **Held-Out Generalization, Topology Bounds & Oracle Separation (`RO4` / `B5` & Block I/VII)**:
+  [`../scripts/run_dungeon9_holdout_protocol.py`](../scripts/run_dungeon9_holdout_protocol.py),
+  [`../scripts/run_matched_budget_topology_benchmark.py`](../scripts/run_matched_budget_topology_benchmark.py),
+  [`../scripts/run_ood_scaling_and_blinded_eval.py`](../scripts/run_ood_scaling_and_blinded_eval.py),
+  [`../scripts/evaluate_pcbs_vs_astar.py`](../scripts/evaluate_pcbs_vs_astar.py),
+  [`../scripts/statistical_validation_and_analysis.py`](../scripts/statistical_validation_and_analysis.py),
+  [`../scripts/run_priority_research_suite.py`](../scripts/run_priority_research_suite.py)
 
-## Archive
-
-- [`archive/README.md`](archive/README.md)
-- [`archive/2026-q1/README.md`](archive/2026-q1/README.md)
-- [`archive/2026-q2/README.md`](archive/2026-q2/README.md)
-
-Cleanup note: test-like scripts now live in `tests/` as pytest coverage or in
-`scripts/validate_*.py` as manual validation tools. One-off debug probes and
-stale queue wrappers have been removed from `scripts/`.
-The structure details are tracked in
-[`REPO_STRUCTURE_AND_CLEANUP_AUDIT_2026_05_24.md`](REPO_STRUCTURE_AND_CLEANUP_AUDIT_2026_05_24.md).
+Note: validation helpers live under `scripts/validate_*.py` and pytest tests under `tests/`.

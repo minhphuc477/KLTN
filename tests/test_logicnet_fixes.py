@@ -792,7 +792,7 @@ def test_logicnet_skips_dungeon_scope_graph_loss_without_full_node_passability()
     assert total.item() == pytest.approx(0.0)
     assert reach.item() == pytest.approx(0.0)
     assert lock.item() == pytest.approx(0.0)
-    assert info["global_graph_skipped"] == "dungeon_scope_requires_full_room_passability"
+    assert info["global_graph_skipped"] == "missing_node_passability_mapping"
 
 
 def test_graph_feature_roles_include_type_fields():
@@ -840,6 +840,38 @@ def test_graph_floor_feature_is_opt_in_and_uses_mission_z_coordinate():
     assert tuple(baseline.shape) == (14,)
     assert tuple(floor_conditioned.shape) == (15,)
     assert float(floor_conditioned[GRAPH_NODE_FLOOR_FEATURE_INDEX]) == pytest.approx(3.0 / 5.0)
+
+
+def test_logicnet_vglc_two_tile_border_interior_anchors():
+    """Ground-truth 2-tile-walled VGLC rooms must not suffer false outer-wall anchor penalties."""
+    import torch.nn.functional as F
+
+    net = LogicNet(num_classes=44, num_iterations=30)
+    grid = torch.full((1, 16, 11), int(SEMANTIC_PALETTE["WALL"]), dtype=torch.long)
+    grid[:, 2:-2, 2:-2] = int(SEMANTIC_PALETTE["FLOOR"])
+    grid[:, 14, 4:7] = int(SEMANTIC_PALETTE["DOOR_OPEN"])
+    # Place interior BLOCK obstacles not blocking the path from N apron (2,5) to S apron (13,5)
+    grid[:, 6:9, 3] = int(SEMANTIC_PALETTE["BLOCK"])
+
+    onehot = F.one_hot(grid, num_classes=44).permute(0, 3, 1, 2).float()
+    gt_logits = onehot * 10.0 - (1.0 - onehot) * 10.0
+
+    topo = torch.zeros(1, 54, 16, 11, dtype=torch.float32)
+    from src.pipeline.room_topology_conditioning import ROOM_TOPOLOGY_CHANNELS
+    topo[0, ROOM_TOPOLOGY_CHANNELS["door_n"], 0, 4:7] = 1.0
+    topo[0, ROOM_TOPOLOGY_CHANNELS["door_s"], 15, 4:7] = 1.0
+    topo[0, ROOM_TOPOLOGY_CHANNELS["start"], 2, 5] = 1.0
+    topo[0, ROOM_TOPOLOGY_CHANNELS["goal"], 13, 5] = 1.0
+    topo[0, ROOM_TOPOLOGY_CHANNELS["traversability"], 0:16, 5] = 1.0
+
+    with torch.no_grad():
+        loss, info = net(gt_logits, graph_data={"room_topology_map": topo})
+
+    assert torch.isfinite(loss)
+    assert float(info["topology_anchor_loss"]) < 0.05
+    assert float(info["topology_trace_loss"]) < 0.05
+    assert float(info["grid_reach_loss"]) < 0.25
+    assert float(info["grid_reachability"]) > 0.75
 
 
 if __name__ == "__main__":
