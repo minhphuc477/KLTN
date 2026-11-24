@@ -92,6 +92,7 @@ class SamplerConfig:
     default_masked_room_sampling_temperature: float = 1.0
     default_masked_room_sampling_schedule: str = "cosine"
     default_masked_room_sampling_stochastic: bool = True
+    default_masked_room_unmask_order: str = "confidence"
     default_masked_room_corrector_steps: int = 1
     default_masked_room_corrector_mask_ratio: float = 0.1
 

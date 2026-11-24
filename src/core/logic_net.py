@@ -2963,6 +2963,7 @@ class LogicNet(nn.Module):
         z: Tensor,
         graph_data: Optional[Any] = None,
         goal_mask: Optional[Tensor] = None,
+        sample_weights: Optional[Tensor] = None,
     ) -> Any:
         """
         Compute solvability loss for latent codes.
@@ -3087,7 +3088,19 @@ class LogicNet(nn.Module):
         )
         info['grid_reachability'] = grid_reach_scores.mean()
 
-        topology_trace_loss = torch.tensor(0.0, device=device)
+        sw: Optional[Tensor] = None
+        if sample_weights is not None:
+            sw = sample_weights.to(device=device, dtype=walkability.dtype).reshape(-1)
+            if sw.numel() == 1 and B > 1:
+                sw = sw.expand(B)
+            elif sw.numel() != B:
+                raise ValueError(
+                    f"sample_weights must have length B={B} or 1, got shape {tuple(sample_weights.shape)}."
+                )
+            sw = sw.clamp(0.0, 1.0)
+            grid_reach_loss = ((1.0 - grid_reach_scores.reshape(B)).clamp_min(0.0) * sw).mean()
+
+        topology_trace_loss = torch.tensor(0.0, device=device, dtype=walkability.dtype)
         trace_target = room_logic_targets.get("trace_target")
         if trace_target is not None:
             eff_trace_target = trace_target
@@ -3102,15 +3115,22 @@ class LogicNet(nn.Module):
                     ((1.0 - walkability) * eff_trace_target).sum(dim=(1, 2, 3))
                     / trace_mass.clamp_min(1e-6)
                 )
-                topology_trace_loss = per_sample_trace[valid_trace].mean()
+                if sw is not None:
+                    topology_trace_loss = (per_sample_trace[valid_trace] * sw[valid_trace]).mean()
+                else:
+                    topology_trace_loss = per_sample_trace[valid_trace].mean()
 
-        topology_anchor_loss = torch.tensor(0.0, device=device)
+        topology_anchor_loss = torch.tensor(0.0, device=device, dtype=walkability.dtype)
         anchor_target = room_logic_targets.get("anchor_target")
         if anchor_target is not None:
             anchor_mass = anchor_target.sum(dim=(1, 2, 3)).clamp_min(1e-6)
-            topology_anchor_loss = (
+            per_sample_anchor = (
                 ((1.0 - walkability) * anchor_target).sum(dim=(1, 2, 3)) / anchor_mass
-            ).mean()
+            )
+            if sw is not None:
+                topology_anchor_loss = (per_sample_anchor * sw).mean()
+            else:
+                topology_anchor_loss = per_sample_anchor.mean()
         
         # 4. Graph-level pathfinding. Room predictions are lifted to node
         # passability, then used as differentiable entry costs on the mission
@@ -3128,6 +3148,11 @@ class LogicNet(nn.Module):
             device=device,
             dtype=walkability.dtype,
         )
+        if sw is not None:
+            sw_mean = sw.mean()
+            graph_total_loss = graph_total_loss * sw_mean
+            graph_reach_loss = graph_reach_loss * sw_mean
+            lock_loss = lock_loss * sw_mean
 
         # 5. Combine losses
         loss = (

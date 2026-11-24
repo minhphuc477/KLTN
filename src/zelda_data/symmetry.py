@@ -229,6 +229,63 @@ def _transform_puzzle_stage_condition(
     return out
 
 
+def _reflect_position_values(
+    value: Any,
+    *,
+    anchor_r: float,
+    anchor_c: float,
+    has_anchor_r: bool,
+    has_anchor_c: bool,
+    flip_h: bool,
+    flip_v: bool,
+) -> Any:
+    """Reflect `(..., 2)` `(row, col)` coordinates under room flips."""
+    if value is None or (not flip_h and not flip_v):
+        return value
+    if isinstance(value, torch.Tensor):
+        out = value.clone()
+        if out.numel() > 0 and out.shape[-1] >= 2:
+            if flip_v:
+                out[..., 0] = (anchor_r - out[..., 0]) if has_anchor_r else -out[..., 0]
+            if flip_h:
+                out[..., 1] = (anchor_c - out[..., 1]) if has_anchor_c else -out[..., 1]
+        return out
+    if isinstance(value, np.ndarray):
+        out = value.copy()
+        if out.size > 0 and out.shape[-1] >= 2:
+            if flip_v:
+                out[..., 0] = (anchor_r - out[..., 0]) if has_anchor_r else -out[..., 0]
+            if flip_h:
+                out[..., 1] = (anchor_c - out[..., 1]) if has_anchor_c else -out[..., 1]
+        return out
+    if isinstance(value, (list, tuple)) and len(value) >= 2:
+        r_val = float(value[0])
+        c_val = float(value[1])
+        if flip_v:
+            r_val = (anchor_r - r_val) if has_anchor_r else -r_val
+        if flip_h:
+            c_val = (anchor_c - c_val) if has_anchor_c else -c_val
+        rest = list(value[2:])
+        converted = [r_val, c_val, *rest]
+        return tuple(converted) if isinstance(value, tuple) else converted
+    return value
+
+
+def _compute_position_reflection_anchors(node_positions: Any) -> Tuple[float, float, bool, bool]:
+    """Return `(min_r + max_r, min_c + max_c)` anchors when `node_positions` is non-empty."""
+    if isinstance(node_positions, torch.Tensor) and node_positions.numel() > 0 and node_positions.dim() >= 2 and node_positions.shape[-1] >= 2:
+        coords = node_positions.reshape(-1, node_positions.shape[-1])
+        anchor_r = float((coords[:, 0].min() + coords[:, 0].max()).item())
+        anchor_c = float((coords[:, 1].min() + coords[:, 1].max()).item())
+        return anchor_r, anchor_c, True, True
+    if isinstance(node_positions, np.ndarray) and node_positions.size > 0 and node_positions.ndim >= 2 and node_positions.shape[-1] >= 2:
+        coords = node_positions.reshape(-1, node_positions.shape[-1])
+        anchor_r = float(np.min(coords[:, 0]) + np.max(coords[:, 0]))
+        anchor_c = float(np.min(coords[:, 1]) + np.max(coords[:, 1]))
+        return anchor_r, anchor_c, True, True
+    return 0.0, 0.0, False, False
+
+
 def apply_room_symmetry_transform(
     room_tensor: torch.Tensor,
     graph_dict: Optional[Dict[str, Any]] = None,
@@ -318,5 +375,30 @@ def apply_room_symmetry_transform(
             flip_h=flip_h,
             flip_v=flip_v,
         )
+
+    if flip_h or flip_v:
+        anchor_r, anchor_c, has_anchor_r, has_anchor_c = _compute_position_reflection_anchors(
+            out_graph.get("node_positions")
+        )
+        if "node_positions" in out_graph and out_graph["node_positions"] is not None:
+            out_graph["node_positions"] = _reflect_position_values(
+                out_graph["node_positions"],
+                anchor_r=anchor_r,
+                anchor_c=anchor_c,
+                has_anchor_r=has_anchor_r,
+                has_anchor_c=has_anchor_c,
+                flip_h=flip_h,
+                flip_v=flip_v,
+            )
+        if "room_position" in out_graph and out_graph["room_position"] is not None:
+            out_graph["room_position"] = _reflect_position_values(
+                out_graph["room_position"],
+                anchor_r=anchor_r,
+                anchor_c=anchor_c,
+                has_anchor_r=has_anchor_r,
+                has_anchor_c=has_anchor_c,
+                flip_h=flip_h,
+                flip_v=flip_v,
+            )
 
     return out_room, out_graph

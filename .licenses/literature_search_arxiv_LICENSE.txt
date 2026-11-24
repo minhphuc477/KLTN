@@ -1,0 +1,10 @@
+arXiv API Terms of Use Notification
+=====================================
+Skill: literature-search-arxiv
+Timestamp: 2026-11-24T06:32:00+07:00
+Terms URL: https://info.arxiv.org/help/api/index.html
+
+Notice:
+Users must review the arXiv API Terms of Use at https://info.arxiv.org/help/api/index.html
+and always check the individual license terms attached to any arXiv preprints retrieved
+via this skill for redistribution or reuse restrictions.

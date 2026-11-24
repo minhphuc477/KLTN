@@ -414,10 +414,14 @@ class DiscreteMaskedRoomModel(nn.Module):
         self.vocab_size = int(max(self.mask_token_id + 1, self.num_classes + 1))
 
         self.token_embedding = nn.Embedding(self.vocab_size, self.hidden_dim)
-        self.position_embedding = nn.Parameter(
-            torch.zeros(1, self.hidden_dim, ROOM_HEIGHT, ROOM_WIDTH)
+        self.row_embedding = nn.Parameter(
+            torch.zeros(1, self.hidden_dim, ROOM_HEIGHT, 1)
         )
-        nn.init.normal_(self.position_embedding, mean=0.0, std=0.02)
+        self.col_embedding = nn.Parameter(
+            torch.zeros(1, self.hidden_dim, 1, ROOM_WIDTH)
+        )
+        nn.init.normal_(self.row_embedding, mean=0.0, std=0.02)
+        nn.init.normal_(self.col_embedding, mean=0.0, std=0.02)
 
         ignored_legacy_args = {
             "model_channels": (model_channels, 64),
@@ -783,6 +787,7 @@ class DiscreteMaskedRoomModel(nn.Module):
         stochastic: bool,
         generator: Optional[torch.Generator],
         initial_logits: Optional[Tensor] = None,
+        unmask_order: str = "confidence",
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Dict[str, float]]:
         batch_size = int(tokens.shape[0])
         device = tokens.device
@@ -832,7 +837,13 @@ class DiscreteMaskedRoomModel(nn.Module):
                 stochastic=stochastic,
                 generator=generator,
             )
-            if bool(stochastic):
+            if bool(stochastic) and unmask_order == "random":
+                ranking_scores = torch.rand(
+                    confidence.shape,
+                    device=device,
+                    generator=generator,
+                )
+            elif bool(stochastic):
                 cell_confidence = probs.max(dim=1).values
                 gumbel_scale = float(temperature) * max(0.0, 1.0 - progress)
                 ranking_scores = torch.log(cell_confidence.clamp_min(1e-9)) + (
@@ -1125,7 +1136,7 @@ class DiscreteMaskedRoomModel(nn.Module):
     def _embed_tokens(self, tokens: Tensor) -> Tensor:
         x = self.token_embedding(tokens.long())  # [B,H,W,C]
         x = x.permute(0, 3, 1, 2).contiguous()
-        return x + self.position_embedding
+        return x + self.row_embedding + self.col_embedding
 
     def forward(
         self,
@@ -1347,6 +1358,7 @@ class DiscreteMaskedRoomModel(nn.Module):
         return_sampling_metrics: bool = False,
         edge_bias_strength: float = 4.0,
         pin_rare_tiles_in_corrector: bool = True,
+        unmask_order: str = "confidence",
     ) -> Any:
         batch_size = int(context.shape[0])
         device = context.device
@@ -1356,6 +1368,11 @@ class DiscreteMaskedRoomModel(nn.Module):
         schedule_mode = str(schedule_mode or "cosine").strip().lower()
         if schedule_mode not in {"cosine", "linear"}:
             raise ValueError(f"schedule_mode must be 'cosine' or 'linear', got {schedule_mode!r}.")
+        normalized_unmask_order = str(unmask_order or "confidence").strip().lower()
+        if normalized_unmask_order not in {"confidence", "random"}:
+            raise ValueError(
+                f"unmask_order must be 'confidence' or 'random', got {unmask_order!r}."
+            )
         corrector_steps = int(max(0, corrector_steps))
         corrector_mask_ratio = float(max(0.0, min(1.0, corrector_mask_ratio)))
         fixed_tokens, fixed_mask = self._normalize_fixed_layout(
@@ -1392,6 +1409,7 @@ class DiscreteMaskedRoomModel(nn.Module):
             schedule_mode=schedule_mode,
             stochastic=bool(stochastic),
             generator=generator,
+            unmask_order=normalized_unmask_order,
         )
 
         corrector_rounds_executed = 0
@@ -1458,6 +1476,7 @@ class DiscreteMaskedRoomModel(nn.Module):
                     stochastic=bool(stochastic),
                     generator=generator,
                     initial_logits=logits,
+                    unmask_order=normalized_unmask_order,
                 )
                 corrector_fill_steps += float(correction_metrics["steps_executed"])
                 corrector_tokens_committed += float(correction_metrics["mean_tokens_committed"])
@@ -1478,6 +1497,7 @@ class DiscreteMaskedRoomModel(nn.Module):
             "masked_final_unresolved_tokens": float((~committed).flatten(1).sum(dim=1).float().mean().item()),
             "masked_schedule_is_cosine": float(schedule_mode == "cosine"),
             "masked_sampling_is_stochastic": float(bool(stochastic)),
+            "masked_unmask_order_is_random": float(normalized_unmask_order == "random"),
         }
         if return_sampling_metrics:
             return tokens, logits, hidden, sampling_metrics

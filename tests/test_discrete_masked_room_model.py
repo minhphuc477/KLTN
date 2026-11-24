@@ -1702,3 +1702,99 @@ def test_block_in_rare_tiles_and_mask_ratio_aux_and_stochastic_sample():
     assert tuple(sampled.shape) == (2, ROOM_HEIGHT, ROOM_WIDTH)
     assert torch.isfinite(logits).all()
     assert smetrics["masked_final_unresolved_tokens"] == 0.0
+    assert smetrics["masked_unmask_order_is_random"] == 0.0
+
+    sampled_rand, logits_rand, _, smetrics_rand = model.sample(
+        context=context,
+        num_steps=4,
+        temperature=1.0,
+        stochastic=True,
+        unmask_order="random",
+        seed=123,
+        return_sampling_metrics=True,
+    )
+    assert tuple(sampled_rand.shape) == (2, ROOM_HEIGHT, ROOM_WIDTH)
+    assert torch.isfinite(logits_rand).all()
+    assert smetrics_rand["masked_unmask_order_is_random"] == 1.0
+    assert smetrics_rand["masked_final_unresolved_tokens"] == 0.0
+
+    with pytest.raises(ValueError, match="unmask_order"):
+        model.sample(context=context, unmask_order="invalid_mode")
+
+
+def test_masked_room_dataloader_uses_dungeon_batch_mode_and_kfold_with_augmentation():
+    from src.train_masked_room import (
+        MaskedRoomTrainingConfig,
+        _create_masked_room_dataloaders,
+    )
+    from src.zelda_data.zelda_loader import DungeonBatchSampler
+
+    cfg = MaskedRoomTrainingConfig(
+        data_dir="Data/The Legend of Zelda",
+        batch_size=4,
+        num_workers=0,
+        pin_memory=False,
+        logic_net_enabled=False,
+        dungeon_batch_mode=True,
+        grid_augmentation=True,
+        num_folds=4,
+        fold_index=0,
+    )
+    assert cfg.val_dungeon_ids is not None
+    assert set(cfg.train_dungeon_ids).isdisjoint(cfg.val_dungeon_ids)
+    assert set(cfg.test_dungeon_ids).isdisjoint(cfg.val_dungeon_ids)
+
+    train_loader, val_loader, split_name, train_n, val_n = _create_masked_room_dataloaders(cfg)
+    assert split_name == "val"
+    assert train_n > 0 and val_n > 0
+    assert isinstance(train_loader.batch_sampler, DungeonBatchSampler)
+    assert isinstance(val_loader.batch_sampler, DungeonBatchSampler)
+    real_maps, graph_list = next(iter(train_loader))
+    assert real_maps.shape[0] == len(graph_list) > 0
+
+
+def test_discrete_masked_model_factorized_2d_embeddings_and_4layer_budget():
+    model = create_discrete_masked_model(
+        num_classes=44,
+        hidden_dim=32,
+        context_dim=96,
+        num_steps=8,
+        unet_channel_mult=(1, 2),
+        unet_num_res_blocks=2,
+        unet_num_heads=4,
+    )
+    assert not hasattr(model, "position_embedding")
+    assert tuple(model.row_embedding.shape) == (1, 32, ROOM_HEIGHT, 1)
+    assert tuple(model.col_embedding.shape) == (1, 32, 1, ROOM_WIDTH)
+    assert len(model.backbone.encoder.layers) == 4
+    total_params = sum(p.numel() for p in model.parameters())
+    assert total_params < 100_000
+
+
+def test_logic_net_per_sample_weights_zeroes_masked_sample_gradient():
+    from src.core.logic_net import LogicNet
+
+    logic_net = LogicNet(
+        latent_dim=44,
+        num_classes=44,
+        num_iterations=6,
+        global_reach_weight=0.0,
+        global_room_weight=0.0,
+        topology_trace_weight=0.1,
+        topology_anchor_weight=0.1,
+    )
+    z = torch.randn(2, 44, ROOM_HEIGHT, ROOM_WIDTH, requires_grad=True)
+    src = torch.zeros(2, 1, ROOM_HEIGHT, ROOM_WIDTH)
+    dst = torch.zeros(2, 1, ROOM_HEIGHT, ROOM_WIDTH)
+    src[:, 0, 2, 5] = 1.0
+    dst[:, 0, ROOM_HEIGHT - 3, 5] = 1.0
+
+    loss, _ = logic_net(
+        z,
+        graph_data={"logic_source_mask": src, "logic_target_mask": dst},
+        sample_weights=torch.tensor([0.0, 1.0]),
+    )
+    loss.backward()
+    assert z.grad is not None
+    assert z.grad[0].abs().max().item() == pytest.approx(0.0, abs=1e-7)
+    assert z.grad[1].abs().max().item() > 0.0

@@ -151,6 +151,7 @@ def _initialize_pipeline_from_flat_kwargs(
     default_masked_room_sampling_temperature: float = 1.0,
     default_masked_room_sampling_schedule: str = "cosine",
     default_masked_room_sampling_stochastic: bool = True,
+    default_masked_room_unmask_order: str = "confidence",
     default_masked_room_corrector_steps: int = 1,
     default_masked_room_corrector_mask_ratio: float = 0.1,
     condition_encoder_fallback_config: Optional[Dict[str, Any]] = None,
@@ -376,6 +377,12 @@ def _initialize_pipeline_from_flat_kwargs(
         masked_room_schedule = "cosine"
     pipeline.default_masked_room_sampling_schedule = masked_room_schedule
     pipeline.default_masked_room_sampling_stochastic = bool(default_masked_room_sampling_stochastic)
+    masked_room_unmask_order = str(default_masked_room_unmask_order or "confidence").strip().lower()
+    if masked_room_unmask_order not in {"confidence", "random"}:
+        raise ValueError(
+            f"default_masked_room_unmask_order must be 'confidence' or 'random', got {default_masked_room_unmask_order!r}."
+        )
+    pipeline.default_masked_room_unmask_order = masked_room_unmask_order
     pipeline.default_masked_room_corrector_steps = int(max(0, min(4, int(default_masked_room_corrector_steps))))
     pipeline.default_masked_room_corrector_mask_ratio = float(
         max(0.0, min(1.0, float(default_masked_room_corrector_mask_ratio)))

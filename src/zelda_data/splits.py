@@ -69,6 +69,31 @@ def validate_disjoint_dungeon_splits(
     return normalized_train, normalized_test
 
 
+def build_dungeon_kfold_splits(
+    train_dungeons: Optional[Iterable[int]],
+    *,
+    num_folds: int,
+    fold_index: int,
+) -> Tuple[Tuple[int, ...], Tuple[int, ...]]:
+    """Deterministically split training dungeons into disjoint train and validation folds."""
+    dungeons = normalize_dungeon_ids(train_dungeons)
+    if dungeons is None:
+        dungeons = DEFAULT_TRAIN_DUNGEONS
+    folds = int(num_folds)
+    fold = int(fold_index)
+    if folds < 2 or folds > len(dungeons):
+        raise ValueError(
+            f"num_folds must be in [2, {len(dungeons)}] for dungeons {dungeons}, got {num_folds}."
+        )
+    if fold < 0 or fold >= folds:
+        raise ValueError(f"fold_index must be in [0, {folds - 1}], got {fold_index}.")
+    val_dungeons = tuple(d for idx, d in enumerate(dungeons) if idx % folds == fold)
+    fold_train_dungeons = tuple(d for d in dungeons if d not in val_dungeons)
+    if not val_dungeons or not fold_train_dungeons:
+        raise ValueError("K-fold split produced an empty train or validation dungeon split.")
+    return fold_train_dungeons, val_dungeons
+
+
 def split_summary(
     *,
     train_dungeons: Sequence[int] = DEFAULT_TRAIN_DUNGEONS,

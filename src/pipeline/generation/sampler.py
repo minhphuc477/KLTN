@@ -638,6 +638,7 @@ def generate_room_batch(
             corrector_mask_ratio=float(pipeline.default_masked_room_corrector_mask_ratio),
             seed=seed,
             return_sampling_metrics=True,
+            unmask_order=str(getattr(pipeline, "default_masked_room_unmask_order", "confidence")),
         )
         tokens_batch, logits_batch, z_batch, masked_sampling_metrics = _unpack_masked_sample(masked_sample_output)
         _record_stage_time(batch_stage_times, "batch_masked_sample_time_sec", sampler_started_at)
@@ -1074,6 +1075,7 @@ def generate_room(
             corrector_mask_ratio=float(pipeline.default_masked_room_corrector_mask_ratio),
             seed=seed,
             return_sampling_metrics=True,
+            unmask_order=str(getattr(pipeline, "default_masked_room_unmask_order", "confidence")),
         )
         sampled_tokens, logits, z_latent, masked_sampling_metrics = _unpack_masked_sample(masked_sample_output)
         _record_stage_time(stage_times, "masked_sample_time_sec", sampler_started_at)

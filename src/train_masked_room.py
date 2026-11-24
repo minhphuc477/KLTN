@@ -73,7 +73,11 @@ from src.zelda_data.zelda_loader import (
     graph_collate_fn,
     validate_floor_conditioning_signal,
 )
-from src.zelda_data.splits import validate_disjoint_dungeon_splits
+from src.zelda_data.splits import (
+    build_dungeon_kfold_splits,
+    normalize_dungeon_ids,
+    validate_disjoint_dungeon_splits,
+)
 from src.train_vqvae import split_dataset_for_vqvae_validation
 
 logger = logging.getLogger(__name__)
@@ -98,8 +102,12 @@ class MaskedRoomTrainingConfig:
         shuffle_val: bool = False,
         normalize: bool = False,
         grid_augmentation: bool = False,
+        dungeon_batch_mode: bool = False,
         train_dungeon_ids: Optional[List[int]] = None,
+        val_dungeon_ids: Optional[List[int]] = None,
         test_dungeon_ids: Optional[List[int]] = None,
+        num_folds: int = 0,
+        fold_index: int = 0,
         variants: Optional[List[int]] = None,
         num_classes: int = 44,
         latent_dim: int = 64,
@@ -203,11 +211,33 @@ class MaskedRoomTrainingConfig:
         self.shuffle_val = bool(shuffle_val)
         self.normalize = bool(normalize)
         self.grid_augmentation = bool(grid_augmentation)
+        self.dungeon_batch_mode = bool(dungeon_batch_mode)
+        self.num_folds = int(max(0, num_folds))
+        self.fold_index = int(fold_index)
         train_ids, test_ids = validate_disjoint_dungeon_splits(
             train_dungeon_ids if train_dungeon_ids is not None else range(1, 9),
             test_dungeon_ids if test_dungeon_ids is not None else (9,),
         )
+        val_ids: Optional[Tuple[int, ...]] = None
+        if val_dungeon_ids is not None:
+            val_ids = normalize_dungeon_ids(val_dungeon_ids)
+        elif self.num_folds >= 2:
+            train_ids, val_ids = build_dungeon_kfold_splits(
+                train_ids,
+                num_folds=self.num_folds,
+                fold_index=self.fold_index,
+            )
+        if val_ids is not None:
+            if not set(val_ids).isdisjoint(train_ids):
+                raise ValueError(
+                    f"Validation dungeons {val_ids} overlap training dungeons {train_ids}."
+                )
+            if not set(val_ids).isdisjoint(test_ids):
+                raise ValueError(
+                    f"Validation dungeons {val_ids} overlap test dungeons {test_ids}."
+                )
         self.train_dungeon_ids = list(train_ids)
+        self.val_dungeon_ids = list(val_ids) if val_ids is not None else None
         self.test_dungeon_ids = list(test_ids)
         self.variants = [int(v) for v in (variants if variants is not None else [1, 2])]
         self.num_classes = int(max(1, num_classes))
@@ -463,7 +493,9 @@ def masked_room_training_kwargs_from_resolved_config(config: Dict[str, Any]) -> 
         # the embedding vocabulary, so it is intentionally not configurable.
         "normalize": False,
         "grid_augmentation": bool(dataset.get("grid_augmentation", False)),
+        "dungeon_batch_mode": bool(dataset.get("dungeon_batch_mode", False)),
         "train_dungeon_ids": dataset.get("train_dungeons", list(range(1, 9))),
+        "val_dungeon_ids": dataset.get("val_dungeons", None),
         "test_dungeon_ids": dataset.get("test_dungeons", [9]),
         "variants": dataset.get("variants", [1, 2]),
         "num_classes": dataset["num_classes"],
@@ -580,8 +612,12 @@ def _legacy_masked_room_overrides_from_args(args: argparse.Namespace) -> Dict[st
     _set("data_dir", getattr(args, "data_dir", None))
     _set("batch_size", getattr(args, "batch_size", None))
     _set("grid_augmentation", getattr(args, "grid_augmentation", None))
+    _set("dungeon_batch_mode", getattr(args, "dungeon_batch_mode", None))
     _set("train_dungeon_ids", getattr(args, "train_dungeon_ids", None))
+    _set("val_dungeon_ids", getattr(args, "val_dungeons", None))
     _set("test_dungeon_ids", getattr(args, "test_dungeon_ids", None))
+    _set("num_folds", getattr(args, "num_folds", None))
+    _set("fold_index", getattr(args, "fold_index", None))
     _set("variants", getattr(args, "variants", None))
     _set("epochs", getattr(args, "epochs", None))
     _set("learning_rate", getattr(args, "lr", None))
@@ -713,12 +749,42 @@ def _create_masked_room_dataloaders(
         dataset,
         node_feature_dim=config.node_feature_dim,
     )
-    train_dataset, val_dataset = split_dataset_for_vqvae_validation(
-        dataset,
-        validation_fraction=config.validation_fraction,
-        seed=config.seed,
-        require_group_metadata=True,
-    )
+    if getattr(config, "val_dungeon_ids", None) is not None:
+        train_dataset = dataset
+        val_base_loader = create_dataloader(
+            config.data_dir,
+            batch_size=config.batch_size,
+            shuffle=False,
+            num_workers=config.num_workers,
+            pin_memory=config.pin_memory,
+            drop_last=False,
+            use_vglc=True,
+            normalize=config.normalize,
+            categorical_tokens=True,
+            room_level=True,
+            load_graphs=True,
+            node_feature_dim=config.node_feature_dim,
+            edge_feature_dim=config.edge_feature_dim,
+            topology_supervision_mode=config.topology_supervision_mode,
+            semantic_role_prior_strength=config.semantic_role_prior_strength,
+            semantic_puzzle_offset=config.semantic_puzzle_offset,
+            puzzle_stage_topology_enabled=config.puzzle_stage_topology_enabled,
+            puzzle_stage_trace_decay=config.puzzle_stage_trace_decay,
+            dungeon_ids=config.val_dungeon_ids,
+            variants=config.variants,
+        )
+        val_dataset = val_base_loader.dataset
+        validate_floor_conditioning_signal(
+            val_dataset,
+            node_feature_dim=config.node_feature_dim,
+        )
+    else:
+        train_dataset, val_dataset = split_dataset_for_vqvae_validation(
+            dataset,
+            validation_fraction=config.validation_fraction,
+            seed=config.seed,
+            require_group_metadata=True,
+        )
     eval_source = val_dataset if val_dataset is not None else dataset
     eval_split_name = "val" if val_dataset is not None else "train"
     if bool(getattr(config, "grid_augmentation", False)):
@@ -730,9 +796,10 @@ def _create_masked_room_dataloaders(
             aug_dataset = copy.copy(train_dataset)
             aug_dataset.augment = True
             train_dataset = aug_dataset
-    use_dungeon_batches = bool(getattr(config, "logic_net_enabled", False)) and float(
-        getattr(config, "alpha_logic", 0.0)
-    ) > 0.0
+    use_dungeon_batches = bool(getattr(config, "dungeon_batch_mode", False)) or (
+        bool(getattr(config, "logic_net_enabled", False))
+        and float(getattr(config, "alpha_logic", 0.0)) > 0.0
+    )
     runtime_kwargs = dataloader_runtime_kwargs(num_workers=config.num_workers, pin_memory=config.pin_memory)
     if use_dungeon_batches:
         train_sampler = DungeonBatchSampler.from_dataset(
@@ -1616,22 +1683,27 @@ class MaskedRoomTrainer:
         logic_loss = torch.zeros((), device=self.device, dtype=loss.dtype)
         logic_info: Dict[str, Any] = {}
         solvability_proxy = torch.zeros((), device=self.device, dtype=loss.dtype)
-        low_mask_gate = torch.tensor(1.0, device=self.device, dtype=loss.dtype)
         if need_logic_supervision and isinstance(aux.get("logits"), torch.Tensor):
             mask_ratio_per_sample = aux.get("mask_ratio_per_sample")
+            low_mask_weights: Optional[torch.Tensor] = None
             if isinstance(mask_ratio_per_sample, torch.Tensor):
-                # Attenuate LogicNet gradients at high mask ratios (noisy softmax
-                # probabilities before interior layout has formed) while keeping
+                # Attenuate LogicNet gradients per room at high mask ratios (noisy
+                # softmax probabilities before interior layout has formed) while keeping
                 # dungeon-batch alignment intact.
-                low_mask_gate = (1.0 - mask_ratio_per_sample.clamp(0.0, 1.0)).pow(2).mean().to(
+                low_mask_weights = (1.0 - mask_ratio_per_sample.clamp(0.0, 1.0)).pow(2).to(
                     device=self.device,
                     dtype=loss.dtype,
                 )
-            logic_loss, logic_info = self.logic_net(aux["logits"], graph_data=graph_batch)
+            logic_kwargs: Dict[str, Any] = {"graph_data": graph_batch}
+            if low_mask_weights is not None:
+                logic_kwargs["sample_weights"] = low_mask_weights
+            logic_loss, logic_info = self.logic_net(
+                aux["logits"],
+                **logic_kwargs,
+            )
             if isinstance(logic_loss, torch.Tensor) and logic_loss.numel() != 1:
                 logic_loss = logic_loss.mean()
             if self._tensor_is_finite(logic_loss):
-                logic_loss = logic_loss * low_mask_gate
                 solvability_proxy = self._logic_loss_to_solvability_proxy(logic_loss).to(device=self.device, dtype=loss.dtype)
             else:
                 logic_info = dict(logic_info)
@@ -1826,6 +1898,15 @@ class MaskedRoomTrainer:
                 "topology_trace_weight": float(self.config.topology_trace_weight),
                 "topology_focus_dilation": int(self.config.topology_focus_dilation),
                 "grid_augmentation": bool(getattr(self.config, "grid_augmentation", False)),
+                "dungeon_batch_mode": bool(getattr(self.config, "dungeon_batch_mode", False)),
+                "train_dungeon_ids": list(getattr(self.config, "train_dungeon_ids", [])),
+                "val_dungeon_ids": (
+                    list(self.config.val_dungeon_ids)
+                    if getattr(self.config, "val_dungeon_ids", None) is not None
+                    else None
+                ),
+                "num_folds": int(getattr(self.config, "num_folds", 0)),
+                "fold_index": int(getattr(self.config, "fold_index", 0)),
                 "rare_tile_weight": float(getattr(self.config, "rare_tile_weight", 1.0)),
                 "focal_gamma": float(getattr(self.config, "focal_gamma", 0.0)),
                 "logic_net_enabled": bool(getattr(self.config, "logic_net_enabled", False)),
@@ -1977,6 +2058,7 @@ def train_masked_room(config: MaskedRoomTrainingConfig) -> MaskedRoomTrainer:
     if config.best_checkpoint_metric == "train_loss":
         best_metric_name = "train_loss"
     best_metric_value = float("inf")
+    best_val_rare_tile_recall = -1.0
     epoch_metrics: Dict[str, Any] = {}
     logger.info(
         "Masked-room split: train=%d rooms | %s=%d rooms | final_test_dungeons=%s | best_metric=%s",
@@ -2010,6 +2092,9 @@ def train_masked_room(config: MaskedRoomTrainingConfig) -> MaskedRoomTrainer:
                 best_metric_name = str(latest_metrics.get("best_metric_name", best_metric_name))
                 best_metric_value = float(
                     latest_metrics.get("best_metric_value", latest_metrics.get("best_val_loss", best_metric_value))
+                )
+                best_val_rare_tile_recall = float(
+                    latest_metrics.get("best_val_rare_tile_recall", best_val_rare_tile_recall)
                 )
             logger.info("Auto-resumed masked-room training from %s", resume_path)
 
@@ -2124,9 +2209,20 @@ def train_masked_room(config: MaskedRoomTrainingConfig) -> MaskedRoomTrainer:
             best_metric_value = current_metric_value
             trainer.save_checkpoint(str(checkpoint_dir / "masked_room_best.pth"), epoch_metrics, include_optimizer=False)
 
+        val_rare_recall = epoch_metrics.get("val_rare_tile_recall")
+        if val_rare_recall is not None and math.isfinite(float(val_rare_recall)):
+            if float(val_rare_recall) > best_val_rare_tile_recall:
+                best_val_rare_tile_recall = float(val_rare_recall)
+                trainer.save_checkpoint(
+                    str(checkpoint_dir / "masked_room_best_rare_recall.pth"),
+                    epoch_metrics,
+                    include_optimizer=False,
+                )
+
         latest_metrics = dict(epoch_metrics)
         latest_metrics["best_metric_name"] = str(best_metric_name)
         latest_metrics["best_metric_value"] = float(best_metric_value)
+        latest_metrics["best_val_rare_tile_recall"] = float(best_val_rare_tile_recall)
         _prev_best_val = float(getattr(trainer, "_historical_best_val_loss", float("inf")))
         _curr_epoch_val = float(epoch_metrics.get("val_loss", _prev_best_val))
         _new_best_val = min(_prev_best_val, _curr_epoch_val)
@@ -2167,6 +2263,10 @@ def main() -> None:
     parser.add_argument("--data-dir", type=str, default=None)
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--grid-augmentation", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--dungeon-batch-mode", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--val-dungeons", type=int, nargs="+", default=None)
+    parser.add_argument("--num-folds", type=int, default=None)
+    parser.add_argument("--fold-index", type=int, default=None)
     parser.add_argument("--epochs", type=int, default=None)
     parser.add_argument("--lr", type=float, default=None)
     parser.add_argument("--num-classes", type=int, default=None)

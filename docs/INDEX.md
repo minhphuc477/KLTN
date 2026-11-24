@@ -8,13 +8,15 @@ current references, executable protocols, or domain guides.
 ## Start Here
 
 1. [`../README.md`](../README.md)
-2. [`SOTA_COMPARISON_AND_BENCHMARKS.md`](SOTA_COMPARISON_AND_BENCHMARKS.md) (external literature baseline table, `B1–B4 / A0–A4` Q1 matrix, $d_{\text{NN}}$ audit & `RG1–RG4`)
-3. [`PUBLICATION_GUIDANCE_AND_CARDS.md`](PUBLICATION_GUIDANCE_AND_CARDS.md) (`RG1–RG4`, `PS1–PS4`, `RO1–RO4`, `RQ1–RQ4`, `H1–H4`)
-4. [`../PUBLICATION_BLUEPRINT.md`](../PUBLICATION_BLUEPRINT.md) (operational confirmatory protocol & Section 13/28 claim gates)
-5. [`../refine-logs/EXPERIMENT_PLAN.md`](../refine-logs/EXPERIMENT_PLAN.md) & [`../refine-logs/EXPERIMENT_TRACKER.md`](../refine-logs/EXPERIMENT_TRACKER.md) (`B1–B5`, `M0–M4`, `R001–R017`)
-6. [`TRACEABILITY_AND_CLAIM_VALIDATION.md`](TRACEABILITY_AND_CLAIM_VALIDATION.md) (end-to-end `RG -> PS -> RO -> RQ -> H -> Block -> Config -> Metric` matrix)
-7. [`CURRENT_ARCHITECTURE.md`](CURRENT_ARCHITECTURE.md) & [`architecture_audit_research_notes.md`](architecture_audit_research_notes.md)
-8. [`LOCAL_RESEARCH_EVIDENCE_RUNBOOK.md`](LOCAL_RESEARCH_EVIDENCE_RUNBOOK.md)
+2. [`LITERATURE_REVIEW_SYNTHESIS.md`](LITERATURE_REVIEW_SYNTHESIS.md) & [`literature_review_corpus.csv`](literature_review_corpus.csv) (45 verified works across 6 themes)
+3. [`RESEARCH_FRAMING_GAPS_RQ_RO.md`](RESEARCH_FRAMING_GAPS_RQ_RO.md) (bias-audited Problem Statement, `G1–G4`, falsifiable `RQ1–RQ4` / `RO1–RO4`, honest novelty & threats)
+4. [`SOTA_COMPARISON_AND_BENCHMARKS.md`](SOTA_COMPARISON_AND_BENCHMARKS.md) (external literature baseline table, `B1–B4 / A0–A4` Q1 matrix, $d_{\text{NN}}$ audit & `RG1–RG4`)
+5. [`PUBLICATION_GUIDANCE_AND_CARDS.md`](PUBLICATION_GUIDANCE_AND_CARDS.md) (`RG1–RG4`, `PS1–PS4`, `RO1–RO4`, `RQ1–RQ4`, `H1–H4`)
+6. [`../PUBLICATION_BLUEPRINT.md`](../PUBLICATION_BLUEPRINT.md) (operational confirmatory protocol & Section 13/28 claim gates)
+7. [`../refine-logs/EXPERIMENT_PLAN.md`](../refine-logs/EXPERIMENT_PLAN.md) & [`../refine-logs/EXPERIMENT_TRACKER.md`](../refine-logs/EXPERIMENT_TRACKER.md) (`B1–B5`, `M0–M4`, `R001–R017`)
+8. [`TRACEABILITY_AND_CLAIM_VALIDATION.md`](TRACEABILITY_AND_CLAIM_VALIDATION.md) (end-to-end `RG -> PS -> RO -> RQ -> H -> Block -> Config -> Metric` matrix)
+9. [`CURRENT_ARCHITECTURE.md`](CURRENT_ARCHITECTURE.md) & [`architecture_audit_research_notes.md`](architecture_audit_research_notes.md)
+10. [`LOCAL_RESEARCH_EVIDENCE_RUNBOOK.md`](LOCAL_RESEARCH_EVIDENCE_RUNBOOK.md)
 
 ## Publication Contract
 

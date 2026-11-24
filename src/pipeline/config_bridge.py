@@ -230,6 +230,10 @@ def generation_runtime_kwargs_from_resolved_config(config: Dict[str, Any]) -> Di
             "masked_room_sampling_stochastic",
             True,
         ),
+        "default_masked_room_unmask_order": stage.get(
+            "masked_room_unmask_order",
+            "confidence",
+        ),
         "default_masked_room_corrector_steps": stage.get(
             "masked_room_corrector_steps",
             1,

@@ -397,6 +397,7 @@ CONFIG_FIELDS: List[ConfigField] = [
     ConfigField("generation.masked_room_sampling_temperature", float, 1.0, "Masked-room runtime sampling temperature. 1.0 keeps categorical sampling calibrated; lower sharpens, higher diversifies.", min_value=1e-6),
     ConfigField("generation.masked_room_sampling_schedule", str, "cosine", "Remaining-mask schedule for masked-room iterative decode.", choices=("cosine", "linear")),
     ConfigField("generation.masked_room_sampling_stochastic", bool, True, "Use stochastic categorical masked-room token sampling instead of greedy argmax-only decode."),
+    ConfigField("generation.masked_room_unmask_order", str, "confidence", "Token unmasking order for masked-room iterative decode ('confidence' or 'random').", choices=("confidence", "random")),
     ConfigField("generation.masked_room_corrector_steps", int, 1, "Number of low-confidence masked-room correction rounds after the main decode pass.", min_value=0, max_value=4),
     ConfigField("generation.masked_room_corrector_mask_ratio", float, 0.1, "Fraction of lowest-confidence editable masked-room tokens re-masked in each correction round.", min_value=0.0, max_value=1.0),
     ConfigField("fast_sampler.checkpoint_dir", str, "", "Directory for fast-sampler checkpoints. Empty means output_dir/checkpoints/fast_sampler."),

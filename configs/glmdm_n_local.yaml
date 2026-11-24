@@ -24,6 +24,7 @@ dataset:
   normalize: true
   room_level: true
   dungeon_batch_mode: true
+  grid_augmentation: true
   load_graphs: true
   train_dungeons: [1, 2, 3, 4, 5, 6, 7, 8]
   test_dungeons: [9]
@@ -42,9 +43,9 @@ masked_room:
   validation_max_batches: 16
   best_checkpoint_metric: val_loss
   model_channels: 64
-  hidden_dim: 48
+  hidden_dim: 32
   unet_channel_mult: [1, 2]
-  unet_num_res_blocks: 1
+  unet_num_res_blocks: 2
   unet_attention_resolutions: [0, 1]
   unet_num_heads: 4
   unet_dropout: 0.1
@@ -88,8 +89,11 @@ masked_room:
 generation:
   room_generator_mode: discrete_masked
   num_diffusion_steps: 8
-  guidance_scale: 3.0
+  guidance_scale: 1.0
   logic_guidance_scale: 0.0
+  masked_room_unmask_order: random
+  masked_room_corrector_steps: 0
+  masked_room_corrector_mask_ratio: 0.0
   apply_repair: true
   puzzle_room_scaffold_enabled: false
   enable_map_elites: false

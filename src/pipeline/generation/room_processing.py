@@ -425,7 +425,9 @@ def _strip_structural_room_artifacts(
     if invalid_door_tiles_removed > 0:
         out[invalid_door_mask] = floor_id
 
-    wall_like_mask = np.isin(out, np.array([int(TileID.WALL), int(TileID.BLOCK)], dtype=np.int32))
+    # Only treat isolated small WALL islands as interior decode noise (VGLC interiors
+    # have 0% WALL, whereas authentic Zelda BLOCK pillars are 1x1..2x2 <= 4 tiles).
+    wall_like_mask = (out == int(TileID.WALL))
     visited = np.zeros_like(wall_like_mask, dtype=bool)
     interior_obstacle_tiles_removed = 0
     interior_obstacle_components_removed = 0
